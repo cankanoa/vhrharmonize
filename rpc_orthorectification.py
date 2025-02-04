@@ -117,7 +117,7 @@ def MAIN_gcp_refined_rpc_orthorectification(
     output_epsg,
     output_nodata_value=None,
     dtype=None,
-    external_rpc_image_path=None
+    # external_rpc_image_path=None
 ):
     import orthority as oty
 
@@ -127,14 +127,15 @@ def MAIN_gcp_refined_rpc_orthorectification(
         os.makedirs(output_image_dir)
 
     # Step 1: Refine the RPC model with Orthority
-    if external_rpc_image_path:
-        cameras = oty.RpcCameras.from_images([external_rpc_image_path])
-    else:
-        cameras = oty.RpcCameras.from_images([input_image_path])
+    cameras = oty.RpcCameras.from_images([input_image_path])
+    # if external_rpc_image_path:
+    #     cameras = oty.RpcCameras.from_images([external_rpc_image_path])
+    # else:
+    #     cameras = oty.RpcCameras.from_images([input_image_path])
 
 
     cameras.refine(gcp_geojson_file_path)
-    camera = cameras.get(external_rpc_image_path)
+    camera = cameras.get(input_image_path)
     camera = camera._rpc  # Extract the refined RPC camera
 
     # Step 2: Create a temporary file for the modified input image
