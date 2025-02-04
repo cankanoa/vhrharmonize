@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from osgeo import gdal
 
-from SatelliteProcess.replace_band_continuous_value import replace_band_continuous_values_in_largest_segment
+# from SatelliteProcess.replace_band_continuous_value import replace_band_continuous_values_in_largest_segment
 from rpc_orthorectification import qgis_gcps_to_csv, qgis_gcps_to_geojson, MAIN_gcp_refined_rpc_orthorectification
 from test_flaash_params import create_test_flaash_params
 from translate_gcp_image_to_origin import MAIN_translate_gcp_image_to_origin
@@ -114,27 +114,10 @@ def main_process_imagery(input_folders_array):
                 # -------------------- Set any custom resources per image (array must match legth of found_default_files)
                 print('Setting custom variables')
                 if count == 0:
-                    ortho_from_oab_reference_imagery = [
-                        # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010/FLAASH/17DEC08211758-M1BS-016445319010_01_P003_FLAASH.dat',
-                        # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010/FLAASH/17DEC08211800-M1BS-016445319010_01_P004_FLAASH.dat',
-                        # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010/FLAASH/17DEC08211801-M1BS-016445319010_01_P005_FLAASH.dat',
-                        # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445318010/20171208_36cm_WV03_BAB_016445318010_FLAASH/17DEC08211840-M1BS-016445318010_01_P015_FLAASH.dat',
-                        # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445318010/20171208_36cm_WV03_BAB_016445318010_FLAASH/17DEC08211841-M1BS-016445318010_01_P016_FLAASH.dat',
-                    ]
-                    reference_image_path = [
-                        '/mnt/x/PROJECTS_2/Big_Island/LandCover/Input/satellite/20171019_36cm_WV03_OAB_Georef/20171019_36cm_WV03_OAB_Pansharp_Quac_Georef.tif',
-                        '/mnt/x/PROJECTS_2/Big_Island/LandCover/Input/satellite/20171019_36cm_WV03_OAB_Georef/20171019_36cm_WV03_OAB_Pansharp_Quac_Georef.tif',
-                        '/mnt/x/PROJECTS_2/Big_Island/LandCover/Input/satellite/20171019_36cm_WV03_OAB_Georef/20171019_36cm_WV03_OAB_Pansharp_Quac_Georef.tif',
-                        '/mnt/x/PROJECTS_2/Big_Island/LandCover/Input/satellite/20171208_36cm_WV03_OAB_Georef/20171208_36cm_WV03_OAB_Pansharp_Quac_Georef.tif',
-                        '/mnt/x/PROJECTS_2/Big_Island/LandCover/Input/satellite/20171208_36cm_WV03_OAB_Georef/20171208_36cm_WV03_OAB_Pansharp_Quac_Georef.tif'
-                    ]
-
                     # DEM file needs to be in WGS84 elipsoidal height
-                    # dem_file_path = '/mnt/x/Imagery/Lidar/Big_Island/2018_PuuWaawaa/DEM/2018_2020_bigIsland_DEM_J970216_000_000.tif'#'/mnt/x/Imagery/Lidar/Big_Island/2018_PuuWaawaa/DEM/2018_2020_bigIsland_DEM_J970216_000_000.tif'
-                    dem_file_path = '/mnt/d/demlast.tif'
-                    # dem_file_path = '/mnt/d/dem_WGS84_Elipsoid.tif'
-                    # dem_file_path = '/mnt/d/srtm_05_09/srtm_05_09.tif'
-                    # dem_file_path = '/mnt/x/Imagery/Elevation/rasters_SRTMGL1Ellip/output_SRTMGL1Ellip.tif'
+                    dem_file_path = '/mnt/d/demlast.tif' # or on the server: "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
+                    # dem_file_path = '/mnt/x/Imagery/Lidar/Big_Island/2018_PuuWaawaa/DEM/2018_2020_bigIsland_DEM_J970216_000_000.tif'
+
 
 
 
@@ -196,7 +179,7 @@ def main_process_imagery(input_folders_array):
                 radiance_gain = 0.130354235325
                 radiance_offset = 5.505
 
-                convert_dn_to_radiance(pan_tif_file, pan_radiance_path, radiance_gain, radiance_offset)
+                convert_dn_to_radiance(pan_tif_file, pan_radiance_path, radiance_gain, radiance_offset, dtype)
                 # convert_dn_to_radiance_with_envi(wsl_to_windows_path(pan_tif_file), wsl_to_windows_path(pan_radiance_path), envi_engine, pan_radiance_path)
 
 
@@ -801,23 +784,33 @@ from osgeo import gdal, gdal_array
 from osgeo import gdal
 import os
 
-def convert_dn_to_radiance(input_image_path, output_image_path, gain, offset):
+def convert_dn_to_radiance(input_image_path, output_image_path, gain, offset, dtype=None):
     ds = gdal.Open(input_image_path, gdal.GA_ReadOnly)
     if not ds:
         raise RuntimeError(f"Failed to open {input_image_path}")
 
     os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
 
+    if dtype is None:
+        dtype = ds.GetRasterBand(1).DataType  # Get the datatype from the first band
+    else:
+        gdal_dtype = gdal.GetDataTypeByName(dtype)
+        if gdal_dtype is None:
+            raise ValueError(f"Unsupported GDAL data type: {dtype}")
+        dtype = gdal_dtype  # Convert dtype to GDAL data type
+
     driver = gdal.GetDriverByName("GTiff")
-    out_ds = driver.Create(output_image_path, ds.RasterXSize, ds.RasterYSize, ds.RasterCount, gdal.GDT_Float32)
-    out_ds.SetGeoTransform(ds.GetGeoTransform())
-    out_ds.SetProjection(ds.GetProjection())
+    out_ds = driver.Create(output_image_path, ds.RasterXSize, ds.RasterYSize, ds.RasterCount, dtype)
     out_ds.SetMetadata(ds.GetMetadata())
 
     # Copy RPC metadata
     rpc_metadata = ds.GetMetadata("RPC")
     if rpc_metadata:
         out_ds.SetMetadata(rpc_metadata, "RPC")
+
+    gcps = ds.GetGCPs()
+    if gcps:
+        out_ds.SetGCPs(gcps, ds.GetGCPProjection())
 
     for band in range(1, ds.RasterCount + 1):
         src_band = ds.GetRasterBand(band)
