@@ -117,7 +117,7 @@ orthorectify_with_gcps(image_path, output_path, gcp_path, dem_path, 4326)
 # from osgeo import gdal
 # import os
 # from tempfile import NamedTemporaryFile
-# def MAIN_rpc_orthorectification(input_image_path, output_image_path, gcp_geojson_file_path, dem_image_path, output_epsg):
+# def rpc_orthorectification(input_image_path, output_image_path, gcp_geojson_file_path, dem_image_path, output_epsg):
 #     import orthority as oty
 #
 #     output_image_dir = os.path.dirname(output_image_path)
@@ -198,4 +198,4 @@ orthorectify_with_gcps(image_path, output_path, gcp_path, dem_path, 4326)
 #
 #     print(f"Orthorectified image saved to {output_image_path}")
 #
-# MAIN_rpc_orthorectification(image_path, output_path, gcp_path, dem_path, 4326)
+# rpc_orthorectification(image_path, output_path, gcp_path, dem_path, 4326)
