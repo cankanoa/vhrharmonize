@@ -27,10 +27,11 @@ import os
 from envipyengine import Engine
 from pprint import pprint
 import envipyengine.config
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import re
 from tqdm import tqdm
 import json
-from get_image_largest_value import get_image_largest_value
+from helper_functions import get_image_largest_value
 # Start the ENVI engine
 envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
 envi_engine = Engine('ENVI')
@@ -135,7 +136,7 @@ def create_flaash_params(input_image_path, output_image_path, output_params_path
 
 
 
-def MAIN_run_flaash(flaash_params, output_params_path, envi_engine, output_image_path_to_delete=None):
+def run_flaash(flaash_params, output_params_path, envi_engine, output_image_path_to_delete=None):
     print('Processing photo with params:', flaash_params)
     if output_image_path_to_delete:
         try:
@@ -154,57 +155,35 @@ def MAIN_run_flaash(flaash_params, output_params_path, envi_engine, output_image
     except Exception as e:
         print(f"Error processing: {flaash_params}: {e}")
 
-
-
-def convert_dn_to_radiance_with_envi(pan_tif_file, pan_radiance_path, envi_engine, output_image_path_to_delete=None):
+def run_flaash_wrapper(args):
     """
-    Convert DN to radiance using ENVI's RadiometricCalibration tool.
-    Copies RPC data from input image to output image using GDAL.
-    Deletes output_image_path_to_delete if provided and exists.
+    Wrapper function (needed because executors only picklable callables).
+    Returns the 'OUTPUT_RASTER_URI' so we can collect it later.
     """
-    import os
-    from osgeo import gdal
+    test_params, test_output_params_path, envi_engine = args
+    # Call your original function
+    run_flaash(test_params, test_output_params_path, envi_engine)
+    return test_params["OUTPUT_RASTER_URI"]
 
-    if output_image_path_to_delete:
-        try:
-            if os.path.exists(output_image_path_to_delete):
-                os.remove(output_image_path_to_delete)
-                print(f"Deleted existing output image: {output_image_path_to_delete}")
-        except Exception as e:
-            print(f"Error deleting output image {output_image_path_to_delete}: {e}")
+def parallel_flaash(test_flaash_params_array, envi_engine, max_workers=4):
+    """
+    Executes run_flaash in parallel on the items in test_flaash_params_array.
+    """
+    all_output_paths = []
 
-    # Define parameters for Radiometric Calibration
-    radiometric_params = {
-        'INPUT_RASTER': {
-            'url': pan_tif_file,
-            'factory': 'URLRaster'
-        },
-        'OUTPUT_RASTER_URI': pan_radiance_path
-    }
+    # Prepare the arguments for each parallel call
+    tasks = [
+        (test_params, test_output_params_path, envi_engine)
+        for test_params, test_output_params_path in test_flaash_params_array
+    ]
 
-    try:
-        print(f"Starting Radiometric Calibration for: {pan_tif_file}")
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(run_flaash_wrapper, task) for task in tasks]
 
-        # Access the radiometric calibration task
-        task = envi_engine.task("RadiometricCalibration")
+        # Use tqdm to display progress
+        for future in tqdm(as_completed(futures), total=len(futures), desc="FLAASH"):
+            # Get the result (the OUTPUT_RASTER_URI)
+            output_uri = future.result()
+            all_output_paths.append(output_uri)
 
-        # Execute the calibration task with the defined parameters
-        task.execute(radiometric_params)
-
-        print(f"Radiometric calibration complete. Output saved to: {pan_radiance_path}")
-
-        # Copy RPC metadata from input image to output image using GDAL
-        src_ds = gdal.Open(pan_tif_file, gdal.GA_ReadOnly)
-        dst_ds = gdal.Open(pan_radiance_path, gdal.GA_Update)
-        if src_ds and dst_ds:
-            rpc_metadata = src_ds.GetMetadata("RPC")
-            if rpc_metadata:
-                dst_ds.SetMetadata(rpc_metadata, "RPC")
-                dst_ds.FlushCache()
-                print("RPC metadata copied successfully.")
-            dst_ds = None
-        src_ds = None
-
-    except Exception as e:
-        print(f"Error during radiometric calibration: {e}")
-
+    return all_output_paths

@@ -14,13 +14,13 @@ gdal.UseExceptions()
 
 def get_image_metadata(input_image_path):
     """
-Get metadata of a TIFF image, including transform, projection, nodata, and bounds.
+    Get metadata of a TIFF image, including transform, projection, nodata, and bounds.
 
-Args:
-input_image_path (str): Path to the input image file.
+    Args:
+    input_image_path (str): Path to the input image file.
 
-Returns:
-tuple: A tuple containing (transform, projection, nodata, bounds).
+    Returns:
+    tuple: A tuple containing (transform, projection, nodata, bounds).
     """
     try:
         dataset = gdal.Open(input_image_path, gdal.GA_ReadOnly)

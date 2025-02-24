@@ -6,29 +6,29 @@ matplotlib.use('Agg')
 
 def plot_pixel_distribution(input_image_path, bands=None, bins=256, save_plot_path=None):
     """
-Plots the distribution (histogram) of pixel values for specified bands
-in a raster file as line plots. Optionally saves the plot to a file.
+    Plots the distribution (histogram) of pixel values for specified bands
+    in a raster file as line plots. Optionally saves the plot to a file.
 
-Parameters
-----------
-input_image_path : str
-Path to the raster image (e.g., GeoTIFF).
+    Parameters
+    ----------
+    input_image_path : str
+    Path to the raster image (e.g., GeoTIFF).
 
-bands : set or list of int, optional
-A collection of band indices (1-based) to plot. If not provided or None,
-the function will plot all available bands in the image.
-Example: {5, 3, 2}
+    bands : set or list of int, optional
+    A collection of band indices (1-based) to plot. If not provided or None,
+    the function will plot all available bands in the image.
+    Example: {5, 3, 2}
 
-bins : int, optional
-Number of bins to use for the histogram. Default is 256.
+    bins : int, optional
+    Number of bins to use for the histogram. Default is 256.
 
-save_plot_path : str, optional
-Path to save the plot as an image file. If provided, the plot will
-be saved to this path and not displayed.
+    save_plot_path : str, optional
+    Path to save the plot as an image file. If provided, the plot will
+    be saved to this path and not displayed.
 
-Returns
--------
-None (displays or saves a matplotlib figure).
+    Returns
+    -------
+    None (displays or saves a matplotlib figure).
     """
     # Open the raster
     with rasterio.open(input_image_path) as src:

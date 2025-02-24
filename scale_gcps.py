@@ -15,8 +15,6 @@ def scale_gcps_geojson(current_gcp_image, desired_scale_image, input_geojson_pat
     Returns:
     None
     """
-    import json
-    from osgeo import gdal
 
     # Open the current and desired images
     current_dataset = gdal.Open(current_gcp_image)
