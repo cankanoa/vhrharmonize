@@ -1,7 +1,7 @@
 from osgeo import gdal
 import os
 
-def MAIN_translate_gcp_image_to_origin(input_image_path, output_image_path):
+def translate_gcp_image_to_origin(input_image_path, output_image_path):
     """
 Replace all existing GCPs in the input dataset with four GCPs that
 place the top-left corner at (0,0), top-right at (width,0), bottom-left
