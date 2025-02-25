@@ -1,5 +1,9 @@
 import os
 
+from osgeo import gdal
+
+from helper_functions import windows_to_wsl_path
+
 
 def orthorectify_image_with_envi(input_image_path, output_image_path, dem_path, envi_engine, output_image_path_to_delete=None):
 
@@ -126,10 +130,6 @@ Deletes output_image_path_to_delete if provided and exists.
 
     except Exception as e:
         print(f"Error during radiometric calibration: {e}")
-
-
-
-
 
 def get_nodata_mask(dataset):
     band = dataset.GetRasterBand(1)
