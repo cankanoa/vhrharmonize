@@ -6,24 +6,6 @@ from osgeo import gdal
 import orthority as oty
 import re
 
-def rpc_orthorectification(input_image_path, output_image_path, dem_image_path, output_epsg):
-    # Step 4: Perform orthorectification using GDAL
-    warp_options = gdal.WarpOptions(
-        format="GTiff",
-        dstSRS=f"EPSG:{output_epsg}",
-        rpc=True,
-        transformerOptions=[f"RPC_DEM={dem_image_path}"],
-        resampleAlg="cubic",
-        copyMetadata=True,  # Copy metadata excluding original RPC
-    )
-
-    # Perform the warp
-    gdal.Warp(
-        destNameOrDestDS=output_image_path,
-        srcDSOrSrcDSTab=input_image_path,
-        options=warp_options,
-    )
-
 def wsl_to_windows_path(path):
     wsl_pattern = r"^/mnt/([a-zA-Z])/(.*)$"
     windows_path = re.sub(wsl_pattern, r"\1:\\\2", path).replace("/", "\\")
