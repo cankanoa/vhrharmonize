@@ -3,21 +3,19 @@ import os
 from find_files import find_files, find_roots, find_subfolder_files, get_metadata_from_files
 from tqdm import tqdm
 from osgeo import gdal
-from helper_functions import wsl_to_windows_path, shp_to_gpkg
+from helper_functions import wsl_to_windows_path, shp_to_gpkg, get_image_largest_value
 # from SatelliteProcess.replace_band_continuous_value import replace_band_continuous_values_in_largest_segment
 from rpc_orthorectification import qgis_gcps_to_csv, qgis_gcps_to_geojson, gcp_refined_rpc_orthorectification
-from test_flaash_params import create_test_flaash_params
-from translate_gcp_image_to_origin import translate_gcp_image_to_origin
-from rpc_orthorectification import rpc_orthorectification
+from flaash import create_test_flaash_params
+from helper_functions import translate_gcp_image_to_origin
 from pansharpen import pansharpen_image
-from flaash import create_flaash_params, run_flaash, run_flaash_wrapper, parallel_flaash
+from flaash import run_flaash, run_flaash_wrapper, parallel_flaash
 from pyproj import Transformer
 from envipyengine import Engine
 from global_match import process_global_histogram_matching
 from local_match import process_local_histogram_matching
-from scale_gcps import scale_gcps_geojson
 import envipyengine.config
-from plot_pixel_distribution import plot_pixel_distribution
+from calculate_statistics import plot_pixel_distribution
 
 envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
 envi_engine = Engine('ENVI')
@@ -142,11 +140,105 @@ def run_automated_image_preprocessing(input_folders_array):
                 mul_flaash_params_path = os.path.join(root_folder_path,'Mul_FLAASH', f"{mul_photo_basename}_FLAASH_Params.txt")
 
                 # Create flaash params
-                flaash_params, output_params_path = create_flaash_params(wsl_to_windows_path(mul_tif_file), wsl_to_windows_path(mul_flaash_image_path), mul_flaash_params_path, params_overrides_scene, mul_params_overrides_photo, mul_imd_data, mul_shp_path, dem_file_path)
-                # print(flaash_params, output_params_path)
+                # Resources to find currect parameters:
+                # Reference ENVI GUI for better understanding of settings
+                # https://www.nv5geospatialsoftware.com/docs/Flaash.html
+                # https://www.nv5geospatialsoftware.com/Support/Self-Help-Tools/Help-Articles/Help-Articles-Detail/ArtMID/10220/ArticleID/24080/Atmospheric-correction-FLAASH-vs-QUAC-which-one-should-I-use
+                # http://essay.utwente.nl/83442/1/davaadorj.pdf
+                # https://www.nv5geospatialsoftware.com/docs/Flaash.html
+                # https://www.nv5geospatialsoftware.com/portals/0/pdfs/envi/Flaash_Module.pdf
+                # https://www.sciencedirect.com/science/article/pii/S0924271621000095
+                # https://dg-cms-uploads-production.s3.amazonaws.com/uploads/document/file/106/ISD_External.pdf
+                # https://www.mdpi.com/1424-8220/16/10/1624
+                # worldview.earthdata.nasa.gov (product: 'MOD05_L2' (Water Vapor))
+                # https://github.com/dawhite/MCTK (MODIS Conversion Toolkit (MCTK))
+                # https://www.wunderground.com/history
+
+                def create_flaash_params(input_image_path, output_image_path, params_overrides_scene, params_overrides_photo, imd_data, mask=None, dem_file=None):
+                    """
+                    Create FLAASH parameters based on the provided inputs.
+
+                    Args:
+                    input_image_path (str): Path to the input image.
+                    output_image_path (str): Path to the output image.
+                    params_overrides_scene (dict): Scene-specific overrides.
+                    params_overrides_photo (dict): Photo-specific overrides.
+                    imd_data (dict): Metadata extracted from the IMD file.
+
+                    Returns:
+                    dict: Final FLAASH parameters.
+                    str: Path to the output parameters file.
+                    """
+
+                    largest_elevation = get_image_largest_value(dem_file, mask, override_mask_crs_epsg=4326)/1000
+                    flaash_params = {
+                        'INPUT_RASTER': {
+                            'url': input_image_path,
+                            'factory': 'URLRaster'
+                        },
+                        'SENSOR_TYPE': None,
+                        'INPUT_SCALE': None,
+                        'OUTPUT_SCALE': None,
+                        'CALIBRATION_FILE': None,
+                        'CALIBRATION_FORMAT': None,
+                        'CALIBRATION_UNITS': None,
+                        'LAT_LONG': None,
+                        'SENSOR_ALTITUDE': None,
+                        'DATE_TIME': None,
+                        'USE_ADJACENCY': None,
+                        'DEFAULT_VISIBILITY': None,
+                        'USE_POLISHING': None,
+                        'POLISHING_RESOLUTION': None,
+                        'SENSOR_AUTOCALIBRATION': None,
+                        'SENSOR_CAL_PRECISION': None,
+                        'SENSOR_CAL_FEATURE_LIST': None,
+                        'GROUND_ELEVATION': largest_elevation,
+                        'SOLAR_AZIMUTH': imd_data.get("SOLAR_AZIMUTH"),
+                        'SOLAR_ZENITH': imd_data.get("SOLAR_ZENITH"),
+                        'LOS_AZIMUTH': imd_data.get("LOS_AZIMUTH"),
+                        'LOS_ZENITH': imd_data.get("LOS_ZENITH"),
+                        'IFOV': None,
+                        'MODTRAN_ATM': 'Mid-Latitude Summer',
+                        'MODTRAN_AER': 'Maritime',
+                        'MODTRAN_RES': 5.0,
+                        'MODTRAN_MSCAT': "DISORT",
+                        'CO2_MIXING': None,
+                        'WATER_ABS_CHOICE': None,
+                        'WATER_MULT': None,
+                        'WATER_VAPOR_PRESET': None,
+                        'USE_AEROSOL': 'Disabled',
+                        'AEROSOL_SCALE_HT': None,
+                        'AER_BAND_RATIO': 0.5,
+                        'AER_BAND_WAVL': None,
+                        'AER_REFERENCE_VALUE': None,
+                        'AER_REFERENCE_PIXEL': None,
+                        'AER_BANDLOW_WAVL': 425,
+                        'AER_BANDLOW_MAXREFL': None,
+                        'AER_BANDHIGH_WAVL': 660,
+                        'AER_BANDHIGH_MAXREFL': 0.2,
+                        'CLOUD_RASTER_URI': None,
+                        'WATER_RASTER_URI': None,
+                        'OUTPUT_RASTER_URI': output_image_path,
+                        'CLOUD_RASTER': None,
+                        'WATER_RASTER': None,
+                        'OUTPUT_RASTER': None,
+                    }
+
+                    for key, value in params_overrides_scene.items():
+                        flaash_params[key] = value
+                    for key, value in params_overrides_photo.items():
+                        flaash_params[key] = value
+                    final_flaash_params = {key: value for key, value in flaash_params.items() if value is not None}
+                    return final_flaash_params
+
+                flaash_params = create_flaash_params(wsl_to_windows_path(mul_tif_file), wsl_to_windows_path(mul_flaash_image_path), params_overrides_scene, mul_params_overrides_photo, mul_imd_data, mul_shp_path, dem_file_path)
+
+
+
+                # print(flaash_params)
 
                 # Normal run flaash
-                run_flaash(flaash_params, output_params_path, envi_engine, mul_flaash_image_path) # -------------------- RUN
+                run_flaash(flaash_params, mul_flaash_params_path, envi_engine, mul_flaash_image_path) # -------------------- RUN
                 # convert_dat_to_tif(input_image_path=mul_flaash_dat_path, output_image_path=mul_flaash_path, mask=mul_gpkg_path, nodata_value=-9999, delete_dat_file=False)
 
                 # Test flaash
