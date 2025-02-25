@@ -510,6 +510,7 @@ def process_global_histogram_matching(input_image_paths_array, output_image_fold
         # adjusted_bands_array = np.stack(adjusted_bands, axis=0)
         input_filename = os.path.basename(input_image_paths_array[img_idx])
         output_filename = os.path.splitext(input_filename)[0] + output_global_basename + ".tif"
+        os.makedirs(os.path.join(output_image_folder, 'images'), exist_ok=True)
         output_path = os.path.join(output_image_folder, 'images', output_filename)
         output_path_array.append(output_path)
 

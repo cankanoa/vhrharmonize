@@ -208,3 +208,25 @@ def create_test_flaash_params(flaash_params, output_params_path):
 
     return result_list
     
+
+
+
+
+
+    # Test flaash (not done)
+    # test_multiple_flaash_params():
+    #     all_output_paths= []
+    #     # Create test flaash params (optional)
+    #     test_flaash_params_array = create_test_flaash_params(flaash_params, output_params_path)
+    #     # print(test_flaash_params_array)
+    #
+    #     # Run test flaash (optional)
+    #     for (test_params, test_output_params_path) in tqdm(test_flaash_params_array, desc="FLAASH"):
+    #         print(test_params, test_output_params_path)
+    #         run_flaash(test_params, test_output_params_path, envi_engine)
+    #         all_output_paths.append(test_params['OUTPUT_RASTER_URI'])
+    #     # Or
+    #     all_output_paths = parallel_flaash(test_flaash_params_array, envi_engine, max_workers=6)
+    #
+    #     for output_path in all_output_paths:
+    #         plot_pixel_distribution(windows_to_wsl_path(output_path), save_plot_path=windows_to_wsl_path(os.path.splitext(output_path)[0] + '_plot.jpeg'))
