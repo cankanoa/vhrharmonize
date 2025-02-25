@@ -22,14 +22,14 @@ def find_roots(input_folder):
 
 def find_files(root_folder_path, root_file_path, filter_basenames):
     """
-Find files with specific extensions and add their details to a JSON file.
+    Find files with specific extensions and add their details to a JSON file.
 
-Parameters:
-root_folder_path (str): The root folder to search for files.
-root_file_path (str): Path to a JSON file where found files will be added.
+    Parameters:
+    root_folder_path (str): The root folder to search for files.
+    root_file_path (str): Path to a JSON file where found files will be added.
 
-Returns:
-list: A list of found files with their details.
+    Returns:
+    list: A list of found files with their details.
     """
     pattern = r'^(\d{2}[A-Z]{3}\d{2})(\d{6})-[A-Z0-9]+-(\d{12}).*$'
     replacement = r'\1_\2_\3'

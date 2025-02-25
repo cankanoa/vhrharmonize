@@ -154,110 +154,67 @@ def run_automated_image_preprocessing(input_folders_array):
                 # https://github.com/dawhite/MCTK (MODIS Conversion Toolkit (MCTK))
                 # https://www.wunderground.com/history
 
-                def create_flaash_params(input_image_path, output_image_path, params_overrides_scene, params_overrides_photo, imd_data, mask=None, dem_file=None):
-                    """
-                    Create FLAASH parameters based on the provided inputs.
+                flaash_params = {
+                    'INPUT_RASTER': {
+                        'url': mul_tif_file,
+                        'factory': 'URLRaster'
+                    },
+                    'SENSOR_TYPE': None,
+                    'INPUT_SCALE': None,
+                    'OUTPUT_SCALE': None,
+                    'CALIBRATION_FILE': None,
+                    'CALIBRATION_FORMAT': None,
+                    'CALIBRATION_UNITS': None,
+                    'LAT_LONG': None,
+                    'SENSOR_ALTITUDE': None,
+                    'DATE_TIME': None,
+                    'USE_ADJACENCY': None,
+                    'DEFAULT_VISIBILITY': None,
+                    'USE_POLISHING': None,
+                    'POLISHING_RESOLUTION': None,
+                    'SENSOR_AUTOCALIBRATION': None,
+                    'SENSOR_CAL_PRECISION': None,
+                    'SENSOR_CAL_FEATURE_LIST': None,
+                    'GROUND_ELEVATION': get_image_largest_value(dem_file_path, mul_shp_path, override_mask_crs_epsg=4326)/1000,
+                    'SOLAR_AZIMUTH': mul_imd_data.get("SOLAR_AZIMUTH"),
+                    'SOLAR_ZENITH': mul_imd_data.get("SOLAR_ZENITH"),
+                    'LOS_AZIMUTH': mul_imd_data.get("LOS_AZIMUTH"),
+                    'LOS_ZENITH': mul_imd_data.get("LOS_ZENITH"),
+                    'IFOV': None,
+                    'MODTRAN_ATM': 'Mid-Latitude Summer',
+                    'MODTRAN_AER': 'Maritime',
+                    'MODTRAN_RES': 5.0,
+                    'MODTRAN_MSCAT': "DISORT",
+                    'CO2_MIXING': None,
+                    'WATER_ABS_CHOICE': None,
+                    'WATER_MULT': None,
+                    'WATER_VAPOR_PRESET': None,
+                    'USE_AEROSOL': 'Disabled',
+                    'AEROSOL_SCALE_HT': None,
+                    'AER_BAND_RATIO': 0.5,
+                    'AER_BAND_WAVL': None,
+                    'AER_REFERENCE_VALUE': None,
+                    'AER_REFERENCE_PIXEL': None,
+                    'AER_BANDLOW_WAVL': 425,
+                    'AER_BANDLOW_MAXREFL': None,
+                    'AER_BANDHIGH_WAVL': 660,
+                    'AER_BANDHIGH_MAXREFL': 0.2,
+                    'CLOUD_RASTER_URI': None,
+                    'WATER_RASTER_URI': None,
+                    'OUTPUT_RASTER_URI': mul_flaash_image_path,
+                    'CLOUD_RASTER': None,
+                    'WATER_RASTER': None,
+                    'OUTPUT_RASTER': None,
+                }
 
-                    Args:
-                    input_image_path (str): Path to the input image.
-                    output_image_path (str): Path to the output image.
-                    params_overrides_scene (dict): Scene-specific overrides.
-                    params_overrides_photo (dict): Photo-specific overrides.
-                    imd_data (dict): Metadata extracted from the IMD file.
-
-                    Returns:
-                    dict: Final FLAASH parameters.
-                    str: Path to the output parameters file.
-                    """
-
-                    largest_elevation = get_image_largest_value(dem_file, mask, override_mask_crs_epsg=4326)/1000
-                    flaash_params = {
-                        'INPUT_RASTER': {
-                            'url': input_image_path,
-                            'factory': 'URLRaster'
-                        },
-                        'SENSOR_TYPE': None,
-                        'INPUT_SCALE': None,
-                        'OUTPUT_SCALE': None,
-                        'CALIBRATION_FILE': None,
-                        'CALIBRATION_FORMAT': None,
-                        'CALIBRATION_UNITS': None,
-                        'LAT_LONG': None,
-                        'SENSOR_ALTITUDE': None,
-                        'DATE_TIME': None,
-                        'USE_ADJACENCY': None,
-                        'DEFAULT_VISIBILITY': None,
-                        'USE_POLISHING': None,
-                        'POLISHING_RESOLUTION': None,
-                        'SENSOR_AUTOCALIBRATION': None,
-                        'SENSOR_CAL_PRECISION': None,
-                        'SENSOR_CAL_FEATURE_LIST': None,
-                        'GROUND_ELEVATION': largest_elevation,
-                        'SOLAR_AZIMUTH': imd_data.get("SOLAR_AZIMUTH"),
-                        'SOLAR_ZENITH': imd_data.get("SOLAR_ZENITH"),
-                        'LOS_AZIMUTH': imd_data.get("LOS_AZIMUTH"),
-                        'LOS_ZENITH': imd_data.get("LOS_ZENITH"),
-                        'IFOV': None,
-                        'MODTRAN_ATM': 'Mid-Latitude Summer',
-                        'MODTRAN_AER': 'Maritime',
-                        'MODTRAN_RES': 5.0,
-                        'MODTRAN_MSCAT': "DISORT",
-                        'CO2_MIXING': None,
-                        'WATER_ABS_CHOICE': None,
-                        'WATER_MULT': None,
-                        'WATER_VAPOR_PRESET': None,
-                        'USE_AEROSOL': 'Disabled',
-                        'AEROSOL_SCALE_HT': None,
-                        'AER_BAND_RATIO': 0.5,
-                        'AER_BAND_WAVL': None,
-                        'AER_REFERENCE_VALUE': None,
-                        'AER_REFERENCE_PIXEL': None,
-                        'AER_BANDLOW_WAVL': 425,
-                        'AER_BANDLOW_MAXREFL': None,
-                        'AER_BANDHIGH_WAVL': 660,
-                        'AER_BANDHIGH_MAXREFL': 0.2,
-                        'CLOUD_RASTER_URI': None,
-                        'WATER_RASTER_URI': None,
-                        'OUTPUT_RASTER_URI': output_image_path,
-                        'CLOUD_RASTER': None,
-                        'WATER_RASTER': None,
-                        'OUTPUT_RASTER': None,
-                    }
-
-                    for key, value in params_overrides_scene.items():
-                        flaash_params[key] = value
-                    for key, value in params_overrides_photo.items():
-                        flaash_params[key] = value
-                    final_flaash_params = {key: value for key, value in flaash_params.items() if value is not None}
-                    return final_flaash_params
-
-                flaash_params = create_flaash_params(wsl_to_windows_path(mul_tif_file), wsl_to_windows_path(mul_flaash_image_path), params_overrides_scene, mul_params_overrides_photo, mul_imd_data, mul_shp_path, dem_file_path)
-
-
-
+                for key, value in params_overrides_scene.items():
+                    flaash_params[key] = value
+                for key, value in mul_params_overrides_photo.items():
+                    flaash_params[key] = value
                 # print(flaash_params)
-
-                # Normal run flaash
+                
                 run_flaash(flaash_params, mul_flaash_params_path, envi_engine, mul_flaash_image_path) # -------------------- RUN
                 # convert_dat_to_tif(input_image_path=mul_flaash_dat_path, output_image_path=mul_flaash_path, mask=mul_gpkg_path, nodata_value=-9999, delete_dat_file=False)
-
-                # Test flaash
-                # if True:
-                #     all_output_paths= []
-                #     # Create test flaash params (optional)
-                #     test_flaash_params_array = create_test_flaash_params(flaash_params, output_params_path)
-                #     # print(test_flaash_params_array)
-                #
-                #     # Run test flaash (optional)
-                #     for (test_params, test_output_params_path) in tqdm(test_flaash_params_array, desc="FLAASH"):
-                #         print(test_params, test_output_params_path)
-                #         run_flaash(test_params, test_output_params_path, envi_engine)
-                #         all_output_paths.append(test_params['OUTPUT_RASTER_URI'])
-                #     # Or
-                #     all_output_paths = parallel_flaash(test_flaash_params_array, envi_engine, max_workers=6)
-                #
-                #     for output_path in all_output_paths:
-                #         plot_pixel_distribution(windows_to_wsl_path(output_path), save_plot_path=windows_to_wsl_path(os.path.splitext(output_path)[0] + '_plot.jpeg'))
 
 
 
