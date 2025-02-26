@@ -33,9 +33,9 @@ from tqdm import tqdm
 import json
 from helper_functions import get_image_largest_value
 # Start the ENVI engine
-envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
-envi_engine = Engine('ENVI')
-envi_engine.tasks()
+# envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
+# envi_engine = Engine('ENVI')
+# envi_engine.tasks()
 
 
 
