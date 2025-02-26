@@ -1,9 +1,12 @@
 import os
 import numpy as np
-from PIL.ImageChops import offset
+import math
+import rasterio
+
 from osgeo import gdal
-from math import log, floor
 from typing import Tuple, List, Optional
+from scipy.ndimage import map_coordinates, gaussian_filter
+
 
 def merge_rasters(input_array, output_image_folder, output_file_name="merge.tif"):
     output_path = os.path.join(output_image_folder, output_file_name)
@@ -62,7 +65,6 @@ that covers all input images.
 
     return (min(x_mins), min(y_mins), max(x_maxs), max(y_maxs))
 
-from typing import List, Tuple
 
 def compute_mosaic_coefficient_of_variation(
         image_paths: List[str],
@@ -112,153 +114,6 @@ def compute_mosaic_coefficient_of_variation(
 
     return M, N
 
-# def compute_block_means(block_map, bounding_rect, image_paths, band_index=1, nodata_value=None, valid_pixel_threshold=0.001):
-#     """
-#     Compute block-level means for a specific band with a threshold for valid pixels.
-#
-#     Parameters:
-#     block_map (np.ndarray): Existing block map for computation.
-#     bounding_rect (tuple): Bounding rectangle (x_min, y_min, x_max, y_max).
-#     image_paths (list): List of image paths.
-#     band_index (int): Band index to process (1-based indexing for GDAL).
-#     nodata_value (float): Value representing NoData.
-#     valid_pixel_threshold (float): Minimum proportion of valid pixels for a block to be included.
-#
-#     Returns:
-#     np.ndarray: Updated block map.
-#     """
-#     x_min, y_min, x_max, y_max = bounding_rect
-#     M, N = block_map.shape
-#
-#     # Initialize sum and count arrays for weighted aggregation
-#     sum_map = np.zeros((M, N))
-#     count_map = np.zeros((M, N))
-#
-#     block_width = (x_max - x_min) / N
-#     block_height = (y_max - y_min) / M
-#
-#     for path in image_paths:
-#         ds = gdal.Open(path, gdal.GA_ReadOnly)
-#         if ds is None:
-#             continue
-#
-#         gt = ds.GetGeoTransform()
-#         raster_x_size, raster_y_size = ds.RasterXSize, ds.RasterYSize
-#
-#         col_indices = np.arange(raster_x_size) + 0.5
-#         row_indices = np.arange(raster_y_size) + 0.5
-#
-#         X_geo = gt[0] + col_indices * gt[1]
-#         Y_geo = gt[3] + row_indices * gt[5]
-#         X_geo_2d, Y_geo_2d = np.meshgrid(X_geo, Y_geo)
-#
-#         band = ds.GetRasterBand(band_index)
-#         arr = band.ReadAsArray().astype(np.float64)
-#
-#         if nodata_value is not None:
-#             valid_mask = arr != nodata_value
-#         else:
-#             valid_mask = np.ones_like(arr, dtype=bool)
-#
-#         valid_indices = np.where(valid_mask)
-#         pixel_values = arr[valid_indices]
-#         pixel_x = X_geo_2d[valid_indices]
-#         pixel_y = Y_geo_2d[valid_indices]
-#
-#         block_cols = np.clip(((pixel_x - x_min) / block_width).astype(int), 0, N - 1)
-#         block_rows = np.clip(((y_max - pixel_y) / block_height).astype(int), 0, M - 1)
-#
-#         # Accumulate weighted pixel values and counts
-#         np.add.at(sum_map, (block_rows, block_cols), pixel_values)
-#         np.add.at(count_map, (block_rows, block_cols), 1)
-#
-#     # Avoid division by zero and calculate block mean
-#     valid_blocks = count_map > (valid_pixel_threshold * block_width * block_height)
-#
-#     block_map[valid_blocks] = sum_map[valid_blocks] / count_map[valid_blocks]
-#     block_map[~valid_blocks] = np.nan  # Assign NoData to blocks with insufficient valid pixels
-#
-#     return block_map, count_map
-
-
-# def compute_distribution_map(
-#         image_paths: List[str],
-#         bounding_rect: Tuple[float, float, float, float],
-#         M: int,
-#         N: int,
-#         num_bands: int,
-#         nodata_value: float = None,
-#         valid_pixel_threshold=0.001,
-# ) -> Tuple[np.ndarray, np.ndarray]:
-#     """
-# Divides the bounding rectangle into (M x N) blocks, computes
-# the average pixel value in each block for each band (across all input images).
-#
-# Returns
-# -------
-# block_map : np.ndarray
-# Shape (M, N, num_bands), containing the average pixel values per block.
-# count_map : np.ndarray
-# Shape (M, N, num_bands), containing the valid-pixel counts per block.
-#     """
-#     # We now build *both* the block_map and count_map as 3D arrays
-#     block_map = np.full((M, N, num_bands), np.nan, dtype=np.float64)
-#     count_map = np.zeros((M, N, num_bands), dtype=np.float64)
-#
-#     x_min, y_min, x_max, y_max = bounding_rect
-#     block_width = (x_max - x_min) / N
-#     block_height = (y_max - y_min) / M
-#
-#     for b in range(num_bands):
-#         # Temporary accumulators (2D) for this band
-#         sum_map_2d = np.zeros((M, N), dtype=np.float64)
-#         count_map_2d = np.zeros((M, N), dtype=np.float64)
-#
-#         for path in image_paths:
-#             ds = gdal.Open(path, gdal.GA_ReadOnly)
-#             if ds is None:
-#                 continue
-#
-#             gt = ds.GetGeoTransform()
-#             raster_x_size, raster_y_size = ds.RasterXSize, ds.RasterYSize
-#
-#             col_indices = np.arange(raster_x_size) + 0.5
-#             row_indices = np.arange(raster_y_size) + 0.5
-#
-#             X_geo = gt[0] + col_indices * gt[1]
-#             Y_geo = gt[3] + row_indices * gt[5]
-#             X_geo_2d, Y_geo_2d = np.meshgrid(X_geo, Y_geo)
-#
-#             band = ds.GetRasterBand(b + 1)
-#             arr = band.ReadAsArray().astype(np.float64)
-#
-#             if nodata_value is not None:
-#                 valid_mask = arr != nodata_value
-#             else:
-#                 valid_mask = np.ones_like(arr, dtype=bool)
-#
-#             valid_indices = np.where(valid_mask)
-#             pixel_values = arr[valid_indices]
-#             pixel_x = X_geo_2d[valid_indices]
-#             pixel_y = Y_geo_2d[valid_indices]
-#
-#             block_cols = np.clip(((pixel_x - x_min) / block_width).astype(int), 0, N - 1)
-#             block_rows = np.clip(((y_max - pixel_y) / block_height).astype(int), 0, M - 1)
-#
-#             # Accumulate pixel values and counts
-#             np.add.at(sum_map_2d, (block_rows, block_cols), pixel_values)
-#             np.add.at(count_map_2d, (block_rows, block_cols), 1)
-#
-#         # Compute means in valid blocks
-#         valid_blocks = count_map_2d > (valid_pixel_threshold * block_width * block_height)
-#         block_map[valid_blocks, b] = sum_map_2d[valid_blocks] / count_map_2d[valid_blocks]
-#         block_map[~valid_blocks, b] = np.nan
-#
-#         # Store the final counts for this band
-#         count_map[:, :, b] = count_map_2d
-#         count_map[..., b][~valid_blocks] = np.nan
-#
-#     return block_map, count_map
 
 def compute_distribution_map(
         image_paths: List[str],
@@ -392,7 +247,6 @@ for each block/band (not used to weight the mean, purely informational).
     return final_block_map, final_count_map
 
 
-from scipy.ndimage import map_coordinates
 def weighted_bilinear_interpolation(C_B, x_frac, y_frac):
     # 1) Create a mask that is 1 where valid (not NaN), 0 where NaN
     mask = ~np.isnan(C_B)
@@ -426,8 +280,6 @@ def weighted_bilinear_interpolation(C_B, x_frac, y_frac):
     return interpolated_values
 
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 def download_block_map(
         block_map: np.ndarray,
         bounding_rect: Tuple[float, float, float, float],
@@ -502,9 +354,6 @@ nodata_value (float): Value to assign to NoData pixels.
     print(f"Block map saved to: {output_image_path}")
 
 
-import math
-import math
-
 def compute_block_size(input_image_array_path, target_blocks_per_image, bounding_rect):
     num_images = len(input_image_array_path)
 
@@ -572,7 +421,7 @@ np.ndarray: Gamma-corrected pixel values (P_res(x, y)).
 
     return arr_out_valid, gammas
 
-import rasterio
+
 def get_lowest_pixel_value(raster_path):
     """
 Get the lowest pixel value in a single raster file.
@@ -628,11 +477,6 @@ and writes the result to a new raster, preserving the original nodata value.
             dst.write(out_data)
 
 
-from scipy.ndimage import gaussian_filter
-
-from scipy.ndimage import gaussian_filter
-import numpy as np
-
 def smooth_array(input_array: np.ndarray, nodata_value: Optional[float] = None, scale_factor: float = 1.0) -> np.ndarray:
     """
 Smooth a NumPy array using Gaussian smoothing while excluding NaN or NoData values.
@@ -669,54 +513,6 @@ np.ndarray: Smoothed array with nodata regions preserved.
         smoothed_normalized = np.where(valid_mask, smoothed_normalized, nodata_value)
 
     return smoothed_normalized
-
-
-# def plot_block_map_3d(block_map, bounding_rect, nodata_value=None, title="Block Map 3D Plot"):
-#     """
-# Plot the block_map in 3D space.
-#
-# Parameters:
-# block_map (np.ndarray): The block map (M x N x num_bands or M x N).
-# bounding_rect (tuple): The bounding rectangle (x_min, y_min, x_max, y_max).
-# nodata_value (float): Value representing NoData.
-# title (str): Title of the plot.
-#     """
-#     x_min, y_min, x_max, y_max = bounding_rect
-#     M, N = block_map.shape[:2]
-#
-#     # Generate grid for x and y coordinates
-#     x = np.linspace(x_min, x_max, N)
-#     y = np.linspace(y_min, y_max, M)
-#     X, Y = np.meshgrid(x, y)
-#
-#     # Select the mean values (if multiple bands, take the first band)
-#     Z = block_map if len(block_map.shape) == 2 else block_map[:, :, 0]
-#
-#     # Mask out NoData values if specified
-#     if nodata_value is not None:
-#         Z = np.ma.masked_equal(Z, nodata_value)
-#
-#     # Create a 3D plot
-#     fig = plt.figure(figsize=(12, 8))
-#     ax = fig.add_subplot(111, projection='3d')
-#     surf = ax.plot_surface(X, Y, Z, cmap='viridis', edgecolor='k')
-#
-#     # Add color bar
-#     cbar = fig.colorbar(surf, shrink=0.5, aspect=10)
-#     cbar.set_label("Mean Value")
-#
-#     # Set labels and title
-#     ax.set_xlabel("X Coordinate")
-#     ax.set_ylabel("Y Coordinate")
-#     ax.set_zlabel("Mean Value")
-#     ax.set_title(title)
-#
-#     # Adjust the camera view to simulate orthogonal projection
-#     ax.view_init(elev=90, azim=-90)  # Top-down view (change elev/azim for other orthogonal views)
-#     ax.dist = 7  # Reduce the distance to simulate orthogonality
-#
-#     plt.show()
-
 
 
 def process_local_histogram_matching(

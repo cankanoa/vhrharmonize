@@ -1,10 +1,7 @@
 # ------------------- Imports
 import os
 from find_files import find_files, find_roots, find_subfolder_files, get_metadata_from_files
-from tqdm import tqdm
-from osgeo import gdal
 from helper_functions import wsl_to_windows_path, shp_to_gpkg, get_image_largest_value
-# from SatelliteProcess.replace_band_continuous_value import replace_band_continuous_values_in_largest_segment
 from rpc_orthorectification import qgis_gcps_to_csv, qgis_gcps_to_geojson, gcp_refined_rpc_orthorectification
 from flaash import create_test_flaash_params
 from helper_functions import translate_gcp_image_to_origin
@@ -17,7 +14,7 @@ from local_match import process_local_histogram_matching
 import envipyengine.config
 from calculate_statistics import plot_pixel_distribution
 
-envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
+envipyengine.config.set('engine', "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe")
 envi_engine = Engine('ENVI')
 envi_engine.tasks()
 
@@ -59,7 +56,8 @@ pan_radiance_offset = 5.505
 
 # DEM file needs to be in WGS84 elipsoidal height and cover all images that will be processed
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
-dem_file_path = '/mnt/d/demlast.tif' # or on the server: "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
+# dem_file_path = '/mnt/d/demlast.tif' # or on the server: "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
+dem_file_path = "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
 # dem_file_path = "/mnt/x/Imagery/Elevation/rasters_SRTMGL1Ellip/output_SRTMGL1Ellip.tif"
 # dem_file_path = '/mnt/x/Imagery/Lidar/Big_Island/2018_PuuWaawaa/DEM/2018_2020_bigIsland_DEM_J970216_000_000.tif'
 

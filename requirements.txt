@@ -1,0 +1,7 @@
+pyproj
+orthority
+numpy
+gdal
+rasterio
+scipy
+envipyengine
