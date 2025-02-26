@@ -307,7 +307,7 @@ def run_automated_image_mosaicing():
 
 
 
-    print('----------Starting Global Matching') # -------------------- Local Histogram Match Mulispectral Images
+    print('----------Starting Local Matching') # -------------------- Local Histogram Match Mulispectral Images
     input_image_paths_array = [os.path.join(f'{global_folder}/images', f) for f in os.listdir(f'{global_folder}/images') if f.lower().endswith('.tif')]
     local_folder = '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/Mosaic/PuuWaawaa_20171208/LocalMatch'
     output_local_basename = "_LocalMatch"
