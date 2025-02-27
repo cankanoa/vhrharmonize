@@ -5,3 +5,6 @@ gdal
 rasterio
 scipy
 envipyengine
+matplotlib
+requests
+gc

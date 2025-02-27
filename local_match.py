@@ -2,6 +2,7 @@ import os
 import numpy as np
 import math
 import rasterio
+import gc
 
 from osgeo import gdal
 from typing import Tuple, List, Optional
@@ -72,7 +73,8 @@ def compute_mosaic_coefficient_of_variation(
         reference_std: float = 45.0,
         reference_mean: float = 125.0,
         base_block_size: Tuple[int, int] = (10, 10),
-        band_index: int = 1
+        band_index: int = 1,
+        calculation_dtype_precision = 'float32'
 ) -> Tuple[int, int]:
     all_pixels = []
 
@@ -82,7 +84,7 @@ def compute_mosaic_coefficient_of_variation(
         if ds is None:
             continue
         band = ds.GetRasterBand(band_index)
-        arr = band.ReadAsArray().astype(np.float64)
+        arr = band.ReadAsArray().astype(calculation_dtype_precision)
         if nodata_value is not None:
             mask = (arr != nodata_value)
             arr = arr[mask]
@@ -123,32 +125,33 @@ def compute_distribution_map(
         num_bands: int,
         nodata_value: float = None,
         valid_pixel_threshold: float = 0.001,
+        calculation_dtype_precision = 'float32'
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-Divides the bounding rectangle into (M x N) blocks and performs
-a "mean of the means" across all images (unweighted).
+    Divides the bounding rectangle into (M x N) blocks and performs
+    a "mean of the means" across all images (unweighted).
 
-For each image:
-- Compute per-block sums and counts.
-- Convert to a block mean for that image.
-Then combine those image-level block means with a simple average
-(each image is 'one vote'), ignoring blocks that are invalid (NaN)
-in a particular image.
+    For each image:
+    - Compute per-block sums and counts.
+    - Convert to a block mean for that image.
+    Then combine those image-level block means with a simple average
+    (each image is 'one vote'), ignoring blocks that are invalid (NaN)
+    in a particular image.
 
-Returns
--------
-final_block_map : np.ndarray
-Shape (M, N, num_bands). The unweighted average of each image's
-block means, per band. If a block is invalid in all images,
-it remains NaN.
-final_count_map : np.ndarray
-Shape (M, N, num_bands). The sum of pixel counts from *all* images
-for each block/band (not used to weight the mean, purely informational).
+    Returns
+    -------
+    final_block_map : np.ndarray
+    Shape (M, N, num_bands). The unweighted average of each image's
+    block means, per band. If a block is invalid in all images,
+    it remains NaN.
+    final_count_map : np.ndarray
+    Shape (M, N, num_bands). The sum of pixel counts from *all* images
+    for each block/band (not used to weight the mean, purely informational).
     """
     # Prepare accumulators
-    sum_of_means_3d = np.zeros((M, N, num_bands), dtype=np.float64)
-    image_count_3d = np.zeros((M, N, num_bands), dtype=np.float64)
-    sum_of_counts_3d = np.zeros((M, N, num_bands), dtype=np.float64)  # track total pixel counts across all images
+    sum_of_means_3d = np.zeros((M, N, num_bands), dtype=calculation_dtype_precision)
+    image_count_3d = np.zeros((M, N, num_bands), dtype=calculation_dtype_precision)
+    sum_of_counts_3d = np.zeros((M, N, num_bands), dtype=calculation_dtype_precision)  # track total pixel counts across all images
 
     # Parse bounding rectangle
     x_min, y_min, x_max, y_max = bounding_rect
@@ -162,13 +165,13 @@ for each block/band (not used to weight the mean, purely informational).
             continue
 
         # We'll store sums/counts for *this single image* in 3D arrays
-        sum_map_3d_single = np.zeros((M, N, num_bands), dtype=np.float64)
-        count_map_3d_single = np.zeros((M, N, num_bands), dtype=np.float64)
+        sum_map_3d_single = np.zeros((M, N, num_bands), dtype=calculation_dtype_precision)
+        count_map_3d_single = np.zeros((M, N, num_bands), dtype=calculation_dtype_precision)
 
         for b in range(num_bands):
             # 2D accumulators for this band
-            sum_map_2d = np.zeros((M, N), dtype=np.float64)
-            count_map_2d = np.zeros((M, N), dtype=np.float64)
+            sum_map_2d = np.zeros((M, N), dtype=calculation_dtype_precision)
+            count_map_2d = np.zeros((M, N), dtype=calculation_dtype_precision)
 
             gt = ds.GetGeoTransform()
             raster_x_size, raster_y_size = ds.RasterXSize, ds.RasterYSize
@@ -177,11 +180,14 @@ for each block/band (not used to weight the mean, purely informational).
             row_indices = np.arange(raster_y_size) + 0.5
 
             X_geo = gt[0] + col_indices * gt[1]
+            del col_indices; gc.collect()
             Y_geo = gt[3] + row_indices * gt[5]
+            del row_indices; gc.collect()
+
             X_geo_2d, Y_geo_2d = np.meshgrid(X_geo, Y_geo)
 
             band_obj = ds.GetRasterBand(b + 1)
-            arr = band_obj.ReadAsArray().astype(np.float64)
+            arr = band_obj.ReadAsArray().astype(calculation_dtype_precision)
 
             # Build a valid mask
             if nodata_value is not None:
@@ -191,29 +197,37 @@ for each block/band (not used to weight the mean, purely informational).
 
             # Identify valid pixels
             valid_indices = np.where(valid_mask)
+            del valid_mask; gc.collect()
             pixel_values = arr[valid_indices]
             pixel_x = X_geo_2d[valid_indices]
             pixel_y = Y_geo_2d[valid_indices]
+            del valid_indices; gc.collect()
 
             # Determine the block indices for each valid pixel
             block_cols = np.clip(((pixel_x - x_min) / block_width).astype(int), 0, N - 1)
+            del pixel_x; gc.collect()
             block_rows = np.clip(((y_max - pixel_y) / block_height).astype(int), 0, M - 1)
+            del pixel_y; gc.collect()
 
             # Accumulate pixel sums/counts for this band
             np.add.at(sum_map_2d, (block_rows, block_cols), pixel_values)
+            del pixel_values; gc.collect()
             np.add.at(count_map_2d, (block_rows, block_cols), 1)
+            del block_cols, block_rows; gc.collect()
 
             # Per-block validity threshold
-            valid_blocks = count_map_2d > (valid_pixel_threshold * block_width * block_height)
+            # valid_blocks = count_map_2d > (valid_pixel_threshold * block_width * block_height)
 
             # Store sums and counts for this band in 3D arrays
             sum_map_3d_single[..., b] = sum_map_2d
+            del sum_map_2d; gc.collect()
             count_map_3d_single[..., b] = count_map_2d
+            del count_map_2d; gc.collect()
 
         ds = None  # done reading this image
 
         # Now convert each block to a *per-image* mean, ignoring invalid blocks
-        block_map_3d_single = np.full((M, N, num_bands), np.nan, dtype=np.float64)
+        block_map_3d_single = np.full((M, N, num_bands), np.nan, dtype=calculation_dtype_precision)
 
         for b in range(num_bands):
             count_band = count_map_3d_single[..., b]
@@ -223,26 +237,34 @@ for each block/band (not used to weight the mean, purely informational).
             block_map_3d_single[valid_blocks_band, b] = (
                 sum_band[valid_blocks_band] / count_band[valid_blocks_band]
             )
+            del count_band, sum_band, valid_blocks_band; gc.collect()
 
+        del sum_map_3d_single; gc.collect()
         # Unweighted accumulation of these means
         #   1) For each block, if block_map_3d_single is valid, we add it to sum_of_means_3d
         #   2) We increment image_count_3d by 1 for that block (where it's valid)
         # Meanwhile, we also accumulate the pixel counts purely for reference
         valid_mask_3d = ~np.isnan(block_map_3d_single)
         sum_of_means_3d[valid_mask_3d] += block_map_3d_single[valid_mask_3d]
+        del block_map_3d_single; gc.collect()
         image_count_3d[valid_mask_3d] += 1
+        del valid_mask_3d; gc.collect()
 
         # Also accumulate pixel counts for reference
         # i.e., add the per-image counts so we know total coverage
         sum_of_counts_3d += count_map_3d_single
 
+        del count_map_3d_single; gc.collect()
+
     # Now compute the final unweighted average across images
-    final_block_map = np.full((M, N, num_bands), np.nan, dtype=np.float64)
+    final_block_map = np.full((M, N, num_bands), np.nan, dtype=calculation_dtype_precision)
     positive_mask = image_count_3d > 0
     final_block_map[positive_mask] = sum_of_means_3d[positive_mask] / image_count_3d[positive_mask]
+    del sum_of_means_3d, image_count_3d, positive_mask; gc.collect()
 
     # final_count_map is the sum of pixel counts from all images
     final_count_map = sum_of_counts_3d
+    del sum_of_counts_3d; gc.collect()
 
     return final_block_map, final_count_map
 
@@ -285,19 +307,19 @@ def download_block_map(
         bounding_rect: Tuple[float, float, float, float],
         output_image_path: str,
         projection: str = "EPSG:4326",  # Default to WGS84
-        dtype: int = gdal.GDT_Float32,         # GDAL data type as a string
+        dtype = 'float32',         # GDAL data type as a string
         nodata_value: Optional[float] = None
 ):
     """
-Export the block_map as a georeferenced raster image.
+    Export the block_map as a georeferenced raster image.
 
-Parameters:
-block_map (np.ndarray): Block map (M x N or M x N x num_bands) to export.
-bounding_rect (tuple): Bounding rectangle (x_min, y_min, x_max, y_max).
-output_image_path (str): Path to save the output raster image.
-projection (str): Coordinate system for the raster (e.g., EPSG:4326, EPSG:3857).
-dtype (str): GDAL-compatible data type (e.g., Float32, Int16).
-nodata_value (float): Value to assign to NoData pixels.
+    Parameters:
+    block_map (np.ndarray): Block map (M x N or M x N x num_bands) to export.
+    bounding_rect (tuple): Bounding rectangle (x_min, y_min, x_max, y_max).
+    output_image_path (str): Path to save the output raster image.
+    projection (str): Coordinate system for the raster (e.g., EPSG:4326, EPSG:3857).
+    dtype (str): GDAL-compatible data type (e.g., Float32, Int16).
+    nodata_value (float): Value to assign to NoData pixels.
     """
     output_dir = os.path.dirname(output_image_path)
     if output_dir and not os.path.exists(output_dir):
@@ -321,7 +343,7 @@ nodata_value (float): Value to assign to NoData pixels.
         N,  # Raster width  (same as number of blocks along x dimension)
         M,  # Raster height (same as number of blocks along y dimension)
         num_bands,
-        dtype
+        gdal.GetDataTypeByName(dtype)
     )
     if not out_ds:
         raise RuntimeError(f"Could not create output dataset at {output_image_path}")
@@ -522,6 +544,7 @@ def process_local_histogram_matching(
         global_nodata_value: float = -9999,
         target_blocks_per_image: int = 100,
         alpha: float = 1.0,
+        calculation_dtype_precision = 'float32',
         floor_value: Optional[float] = None,
         gamma_bounds: Optional[Tuple[float, float]] = None
 ):
@@ -647,7 +670,7 @@ def process_local_histogram_matching(
         print(f'-------------------- Computing local correction, applying, and saving')
         ds_in = gdal.Open(img_path, gdal.GA_ReadOnly) or RuntimeError(f"Could not open {img_path}")
         driver = gdal.GetDriverByName("GTiff")
-        out_ds = driver.Create(out_path, ds_in.RasterXSize, ds_in.RasterYSize, num_bands, gdal.GDT_Float32)
+        out_ds = driver.Create(out_path, ds_in.RasterXSize, ds_in.RasterYSize, num_bands, gdal.GetDataTypeByName(calculation_dtype_precision))
 
         gt = ds_in.GetGeoTransform()
         out_ds.SetGeoTransform(gt)
@@ -660,7 +683,7 @@ def process_local_histogram_matching(
         for b in range(num_bands):
             print(f'-------------------- For band {b + 1}')
             band_in = ds_in.GetRasterBand(b + 1)
-            arr_in = band_in.ReadAsArray().astype(np.float32)
+            arr_in = band_in.ReadAsArray().astype(calculation_dtype_precision)
 
             # Generate a single matrix for block indices directly
             nX, nY = ds_in.RasterXSize, ds_in.RasterYSize
@@ -674,7 +697,7 @@ def process_local_histogram_matching(
             row_fs = np.clip(((bounding_rect[3] - Ygeo_2d) / (bounding_rect[3] - bounding_rect[1])) * M - 0.5, 0, M - 1)
             col_fs = np.clip((((Xgeo_2d - bounding_rect[0]) / (bounding_rect[2] - bounding_rect[0])) * N) - 0.5, 0, N - 1)
 
-            arr_out = np.full_like(arr_in, global_nodata_value, dtype=np.float32)
+            arr_out = np.full_like(arr_in, global_nodata_value, dtype=calculation_dtype_precision)
             valid_mask = arr_in != global_nodata_value
 
             # Extract the band-specific local and reference maps
@@ -700,8 +723,8 @@ def process_local_histogram_matching(
             )
 
             # Ensure weighted interpolation handles only valid regions
-            Mrefs = np.full_like(arr_in, global_nodata_value, dtype=np.float32)
-            Mins = np.full_like(arr_in, global_nodata_value, dtype=np.float32)
+            Mrefs = np.full_like(arr_in, global_nodata_value, dtype=calculation_dtype_precision)
+            Mins = np.full_like(arr_in, global_nodata_value, dtype=calculation_dtype_precision)
 
             Mrefs[valid_rows, valid_cols] = weighted_bilinear_interpolation(
                 ref_band_2d,
@@ -749,7 +772,7 @@ def process_local_histogram_matching(
                 arr_out[valid_pixels], gammas = apply_gamma_correction(arr_in[valid_pixels], Mrefs[valid_pixels], Mins[valid_pixels], alpha)
 
 
-            gammas_array = np.full(arr_in.shape, global_nodata_value, dtype=np.float32)
+            gammas_array = np.full(arr_in.shape, global_nodata_value, dtype=calculation_dtype_precision)
             gammas_array[valid_rows, valid_cols] = gammas
             download_block_map(
                 block_map=gammas_array,

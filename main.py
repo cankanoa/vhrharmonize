@@ -14,7 +14,7 @@ from local_match import process_local_histogram_matching
 import envipyengine.config
 from calculate_statistics import plot_pixel_distribution
 
-envipyengine.config.set('engine', "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe")
+envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
 envi_engine = Engine('ENVI')
 envi_engine.tasks()
 
@@ -41,6 +41,7 @@ filter_basenames = [
 epsg = 6635
 nodata_value = -9999
 dtype = 'int16'
+calculation_dtype_precision = 'float32'
 
 # These values come from Maxar and are updated regularly, update these values with the ones from their website if using the conversion from dn to radiance
 pan_radiance_gain = 0.130354235325
