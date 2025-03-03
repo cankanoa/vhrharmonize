@@ -6,7 +6,6 @@ from rpc_orthorectification import qgis_gcps_to_geojson, gcp_refined_rpc_orthore
 from pansharpen import pansharpen_image
 from flaash import run_flaash
 from envipyengine import Engine
-from local_match import process_local_histogram_matching
 import envipyengine.config
 
 envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
@@ -215,7 +214,7 @@ def run_automated_image_preprocessing(input_folders_array):
 
 
                 print('----------Starting create gcp') # Step 2 -------------------- Create GCPs for image
-                gcp_folder_name = "OrthoFromUSGSLidar" #'OrthoFromUSGSLidar'
+                gcp_folder_name = "OrthoFromUSGSLidar" #'OrthoFromUSGSLidar', 'OrthoFromDefaultRPC'
                 if not os.path.exists(os.path.join(root_folder_path, gcp_folder_name)): os.makedirs(os.path.join(root_folder_path, gcp_folder_name))
                 mul_origin_path = os.path.join(root_folder_path,f'Mul_Origin', f"{mul_photo_basename}_Origin.tif")
                 pan_origin_path = os.path.join(root_folder_path,f'Pan_Origin', f"{pan_photo_basename}_Origin.tif")
@@ -242,6 +241,7 @@ def run_automated_image_preprocessing(input_folders_array):
                 # Helpful command to put input dem into WGS84 vertical datum: gdalwarp -s_srs "+proj=longlat +datum=WGS84 +no_defs +geoidgrids=/mnt/c/Users/admin/Downloads/usa_geoid2012b/usa_geoid2012/g2012a_hawaii.gtx" -t_srs "+proj=longlat +datum=WGS84 +no_def" /mnt/d/demwgs84.tif /mnt/d/demwgs84_VWGS84.tif
                 # Orthorectification info: https://up42.com/blog/how-to-perform-orthorectification-a-practical-guide
                 # Ensure that the dem is in elipsoidal height, may need to convert it with a datum. proj geiods are here: https://download.osgeo.org/proj/vdatum/
+                # If GCPs are provided this function will use them for RPC refinement, if not, it will use the default RPC model
                 gcp_refined_rpc_orthorectification(mul_flaash_image_path, mul_flaash_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=mul_gcp_geojson_file_path, )
 
 
