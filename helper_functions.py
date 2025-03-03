@@ -1,6 +1,6 @@
 import re
 import os
-from osgeo import gdal, gdal_array
+from osgeo import gdal
 import numpy as np
 import os
 import numpy as np
@@ -11,8 +11,21 @@ from osgeo import ogr, osr
 from osgeo import gdal, ogr, osr
 import numpy as np
 import json
+import rasterio
+import numpy as np
+from scipy import ndimage
+import os
+from tqdm import tqdm
+from osgeo import gdal
+import os
 
-def convert_dn_to_radiance(input_image_path, output_image_path, gain, offset, dtype=None):
+def convert_dn_to_radiance(
+        input_image_path,
+        output_image_path,
+        gain,
+        offset,
+        dtype=None
+        ):
     ds = gdal.Open(input_image_path, gdal.GA_ReadOnly)
     if not ds:
         raise RuntimeError(f"Failed to open {input_image_path}")
@@ -56,7 +69,10 @@ def convert_dn_to_radiance(input_image_path, output_image_path, gain, offset, dt
     out_ds.FlushCache()
     del ds, out_ds
 
-def change_last_folder_and_add_suffix(filepath, suffix):
+def change_last_folder_and_add_suffix(
+        filepath,
+        suffix
+        ):
     # Normalize the path to remove any trailing slashes
     filepath = os.path.normpath(filepath)
 
@@ -89,17 +105,25 @@ def change_last_folder_and_add_suffix(filepath, suffix):
 
     return new_path
 
-def wsl_to_windows_path(path):
+def wsl_to_windows_path(
+        path
+        ):
     wsl_pattern = r"^/mnt/([a-zA-Z])/(.*)$"
     windows_path = re.sub(wsl_pattern, r"\1:\\\2", path).replace("/", "\\")
     return windows_path
 
-def windows_to_wsl_path(path):
+def windows_to_wsl_path(
+        path
+        ):
     windows_pattern = r"^([a-zA-Z]):\\(.*)$"
     wsl_path = re.sub(windows_pattern, r"/mnt/\1/\2", path).replace("\\", "/")
     return wsl_path
 
-def shp_to_gpkg(input_shp_path, output_gpkg_path, override_projection_epsg=None):
+def shp_to_gpkg(
+        input_shp_path,
+        output_gpkg_path,
+        override_projection_epsg=None
+        ):
     """
     Reads a shapefile (which might not have a .prj),
     optionally forces a new EPSG code on it,
@@ -188,7 +212,13 @@ def shp_to_gpkg(input_shp_path, output_gpkg_path, override_projection_epsg=None)
     else:
         print(f"No CRS override. Output saved to '{output_gpkg_path}'.")
 
-def convert_dat_to_tif(input_image_path, output_image_path, mask, nodata_value, delete_dat_file=False):
+def convert_dat_to_tif(
+        input_image_path,
+        output_image_path,
+        mask,
+        nodata_value,
+        delete_dat_file=False
+        ):
     """Convert a .dat raster to .tif, apply mask, set NoData value, and clean up files."""
     gdal.Warp(
         output_image_path, input_image_path, format="GTiff", dstNodata=nodata_value, srcNodata=nodata_value
@@ -202,7 +232,12 @@ def convert_dat_to_tif(input_image_path, output_image_path, mask, nodata_value, 
             if os.path.exists(extra_file):
                 os.remove(extra_file)
 
-def copy_tif_file(input_image_path, output_image_path, output_nodata_value=None, output_dtype=None):
+def copy_tif_file(
+        input_image_path,
+        output_image_path,
+        output_nodata_value=None,
+        output_dtype=None
+        ):
     """
     Copies a GeoTIFF file to a new location without altering its properties using gdal.Translate.
     Optionally sets a NoData value and allows specifying a GDAL dtype.
@@ -243,7 +278,12 @@ def copy_tif_file(input_image_path, output_image_path, output_nodata_value=None,
     print(f"Image copied to: {output_image_path} with dtype {output_dtype or 'unchanged'}")
 
 
-def spectral_scale_image(input_image_path, output_image_path, input_image_scale, output_image_scale):
+def spectral_scale_image(
+        input_image_path,
+        output_image_path,
+        input_image_scale,
+        output_image_scale
+        ):
     """
     Scales an image from one range to another while preserving NoData values,
     copying the default metadata, and also copying RPC metadata.
@@ -312,7 +352,7 @@ def stretch_spectral_values(
         smoothing=0,
         dtype_override=None,
         offset=0
-):
+        ):
     """
     For each image in 'input_image_paths_array':
     1. Print "Processing image: [path]" once per image.
@@ -484,7 +524,11 @@ def stretch_spectral_values(
 
         print(f"Saved to: {output_path}\n")
 
-def get_image_largest_value(input_image_path, mask=None, override_mask_crs_epsg=None):
+def get_image_largest_value(
+        input_image_path,
+        mask=None,
+        override_mask_crs_epsg=None
+        ):
     """
     Get the largest value in a raster image, optionally masked by a shapefile.
 
@@ -585,11 +629,6 @@ def get_image_largest_value(input_image_path, mask=None, override_mask_crs_epsg=
 
     return float(largest_value)
 
-import rasterio
-import numpy as np
-from scipy import ndimage
-import os
-from tqdm import tqdm
 def replace_band_continuous_values_in_largest_segment(
         input_image_path,
         output_image_path,
@@ -599,7 +638,7 @@ def replace_band_continuous_values_in_largest_segment(
         dtype=None,
         connectivity=8,
         minimum_contiguous_count_to_remove=20
-):
+        ):
     """
     Replaces pixel values in contiguous regions of a multi-band raster
     where ALL bands share the same search_value at a given pixel,
@@ -710,7 +749,13 @@ def replace_band_continuous_values_in_largest_segment(
     with rasterio.open(output_image_path, 'w', **profile) as dst:
         dst.write(data)
 
-def scale_gcps_geojson(current_gcp_image, desired_scale_image, input_geojson_path, output_geojson_path, replace_filename=None):
+def scale_gcps_geojson(
+        current_gcp_image,
+        desired_scale_image,
+        input_geojson_path,
+        output_geojson_path,
+        replace_filename=None
+        ):
     """
     Scale the 'ji' attribute in a GeoJSON based on the resolution difference between two images.
 
@@ -764,10 +809,10 @@ def scale_gcps_geojson(current_gcp_image, desired_scale_image, input_geojson_pat
 
     print(f"Scaled GeoJSON saved to {output_geojson_path}")
 
-from osgeo import gdal
-import os
-
-def translate_gcp_image_to_origin(input_image_path, output_image_path):
+def translate_gcp_image_to_origin(
+        input_image_path,
+        output_image_path
+        ):
     """
     Replace all existing GCPs in the input dataset with four GCPs that
     place the top-left corner at (0,0), top-right at (width,0), bottom-left

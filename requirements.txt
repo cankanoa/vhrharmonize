@@ -1,10 +1,9 @@
 pyproj
 orthority
-numpy
 gdal
 rasterio
-scipy
 envipyengine
 matplotlib
 requests
-gc
+numpy
+scipy

@@ -1,6 +1,14 @@
 import requests
 
-def download_modis_water_vapor(date, zoom_level, tile_row, tile_col, tile_matrix_set="250m", output_format="png", output_file="modis_water_vapor.png"):
+def download_modis_water_vapor(
+        date,
+        zoom_level,
+        tile_row,
+        tile_col,
+        tile_matrix_set="250m",
+        output_format="png",
+        output_file="modis_water_vapor.png"
+        ):
     """
     Downloads a MOD05_L2 (Water Vapor) tile from NASA GIBS using the WMTS REST API.
 

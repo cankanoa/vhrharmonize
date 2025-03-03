@@ -1,48 +1,25 @@
-# Apply FLAASH to multiple photos in an input folder and output multiple atmosphericlly corrected images
-
-# Update these parameters in the code as needed:
-    # parameters
-        # Check weather here: https://www.wunderground.com/history; visibility only ever gets to 10miles here but is presumably higher.
-    # input_folder
-        # Input path in WINDOWS format (but add extra "\" to parse them correctly or preface string with 'r')
-    # output_folder
-        # Input path in WINDOWS format (but add extra "\" to parse them correctly or preface string with 'r')
-        # Either manually create output folder or it will be created from the output folder path; it should be in the following format: 20171208_36cm_WV03_BAB_FLAASH
-    # key_mapping
-    # math(math in CreateFLAASHParameters function)
-
-# --------------------Define inputs and outputs manually
-# input_folders_array = [
-#     "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010",
-#     "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445318010"
-# ]
-
-# output_folders_array = [
-#     "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010/20171208_36cm_WV03_BAB_016445319010_FLAASH",
-#     "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445318010/20171208_36cm_WV03_BAB_016445318010_FLAASH"
-# ]
-
-# --------------------Start script
 import os
 from envipyengine import Engine
 from pprint import pprint
 import envipyengine.config
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import re
+import os
+import itertools
 from tqdm import tqdm
 import json
 from helper_functions import get_image_largest_value
-# Start the ENVI engine
+# Find the ENVI engine
 # envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
 # envi_engine = Engine('ENVI')
 # envi_engine.tasks()
 
-
-
-
-
-
-def run_flaash(flaash_params, output_params_path, envi_engine, output_image_path_to_delete=None):
+def run_flaash(
+        flaash_params,
+        output_params_path,
+        envi_engine,
+        output_image_path_to_delete=None
+        ):
     print('Processing photo with params:', flaash_params)
     if output_image_path_to_delete:
         try:
@@ -61,7 +38,9 @@ def run_flaash(flaash_params, output_params_path, envi_engine, output_image_path
     except Exception as e:
         print(f"Error processing: {flaash_params}: {e}")
 
-def run_flaash_wrapper(args):
+def run_flaash_wrapper(
+        args
+        ):
     """
     Wrapper function (needed because executors only picklable callables).
     Returns the 'OUTPUT_RASTER_URI' so we can collect it later.
@@ -71,7 +50,11 @@ def run_flaash_wrapper(args):
     run_flaash(test_params, test_output_params_path, envi_engine)
     return test_params["OUTPUT_RASTER_URI"]
 
-def parallel_flaash(test_flaash_params_array, envi_engine, max_workers=4):
+def parallel_flaash(
+        test_flaash_params_array,
+        envi_engine,
+        max_workers=4
+        ):
     """
     Executes run_flaash in parallel on the items in test_flaash_params_array.
     """
@@ -94,10 +77,10 @@ def parallel_flaash(test_flaash_params_array, envi_engine, max_workers=4):
 
     return all_output_paths
 
-import os
-import itertools
-
-def create_test_flaash_params(flaash_params, output_params_path):
+def create_test_flaash_params(
+        flaash_params,
+        output_params_path
+        ):
     test_params={ #'OUTPUT_SCALE': {None,2, 3, 4}, 'AER_BAND_RATIO': {None, 0.3, 4}})
                  'SENSOR_TYPE': None,
                  'INPUT_SCALE': None,

@@ -1,11 +1,14 @@
 import os
-
 from osgeo import gdal
-
 from helper_functions import windows_to_wsl_path
 
-
-def orthorectify_image_with_envi(input_image_path, output_image_path, dem_path, envi_engine, output_image_path_to_delete=None):
+def orthorectify_image_with_envi(
+        input_image_path,
+        output_image_path,
+        dem_path,
+        envi_engine,
+        output_image_path_to_delete=None
+        ):
 
     if output_image_path_to_delete:
         try:
@@ -38,8 +41,14 @@ def orthorectify_image_with_envi(input_image_path, output_image_path, dem_path, 
     except Exception as e:
         print(f"Error processing {input_image_path}: {e}")
 
-def pansharpen_image_with_envi(input_low_res, input_high_res, output_image_path, envi_engine,
-                                    output_image_to_delete=None, output_image_masked_path=None):
+def pansharpen_image_with_envi(
+        input_low_res,
+        input_high_res,
+        output_image_path,
+        envi_engine,
+        output_image_to_delete=None,
+        output_image_masked_path=None
+        ):
     # if output_image_to_delete and os.path.exists(output_image_to_delete):
     #     os.remove(output_image_to_delete)
     #     print(f"Deleted existing output: {output_image_to_delete}")
@@ -79,7 +88,12 @@ def pansharpen_image_with_envi(input_low_res, input_high_res, output_image_path,
         print(f"Masked output created and saved: {output_image_masked_path}")
     print("done")
 
-def convert_dn_to_radiance_with_envi(pan_tif_file, pan_radiance_path, envi_engine, output_image_path_to_delete=None):
+def convert_dn_to_radiance_with_envi(
+        pan_tif_file,
+        pan_radiance_path,
+        envi_engine,
+        output_image_path_to_delete=None
+        ):
     """
 Convert DN to radiance using ENVI's RadiometricCalibration tool.
 Copies RPC data from input image to output image using GDAL.
@@ -131,7 +145,9 @@ Deletes output_image_path_to_delete if provided and exists.
     except Exception as e:
         print(f"Error during radiometric calibration: {e}")
 
-def get_nodata_mask(dataset):
+def get_nodata_mask(
+        dataset
+        ):
     band = dataset.GetRasterBand(1)
     nodata_value = band.GetNoDataValue()
     array = band.ReadAsArray()

@@ -2,8 +2,9 @@ import os
 import re
 import json
 
-
-def find_roots(input_folder):
+def find_roots(
+        input_folder
+        ):
     root_paths = []
 
     for root, dirs, files in os.walk(input_folder):
@@ -19,8 +20,11 @@ def find_roots(input_folder):
     print("Input array item scene count(Root files):", len(root_paths))
     return root_paths
 
-
-def find_files(root_folder_path, root_file_path, filter_basenames):
+def find_files(
+        root_folder_path,
+        root_file_path,
+        filter_basenames
+        ):
     """
     Find files with specific extensions and add their details to a JSON file.
 
@@ -99,10 +103,11 @@ def find_files(root_folder_path, root_file_path, filter_basenames):
 
     return found_files_by_basename
 
-
-
-
-def find_subfolder_files(root_folder_path, subfolders_array, filter_basenames=None):
+def find_subfolder_files(
+        root_folder_path,
+        subfolders_array,
+        filter_basenames=None
+        ):
     """
 Finds and processes subfolders directly under the root folder that match the given names.
 
@@ -141,21 +146,24 @@ and values are lists of '.dat' files with their full paths found in those subfol
 
     return found_subfolders
 
-def get_metadata_from_files(root_file_path, imd_file, photo_basename):
+def get_metadata_from_files(
+        root_file_path,
+        imd_file,
+        photo_basename
+        ):
     """
-Extract metadata from the provided files.
+    Extract metadata from the provided files.
 
-Args:
-root_file_path (str): Path to the root file containing scene-level overrides.
-photo_info_file (str): Path to the photo info file containing photo-level overrides.
-imd_file (str): Path to the IMD file containing metadata.
+    Args:
+    root_file_path (str): Path to the root file containing scene-level overrides.
+    photo_info_file (str): Path to the photo info file containing photo-level overrides.
+    imd_file (str): Path to the IMD file containing metadata.
 
-Returns:
-dict: ParamsOverridesPerScene from root file.
-dict: ParamsOverridesPerPhoto from photo info file.
-dict: Metadata extracted from the IMD file.
-"""
-
+    Returns:
+    dict: ParamsOverridesPerScene from root file.
+    dict: ParamsOverridesPerPhoto from photo info file.
+    dict: Metadata extracted from the IMD file.
+    """
     # 1. Extract scene-level overrides
     params_overrides_scene = {}
     # 2. Extract photo-level overrides

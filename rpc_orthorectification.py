@@ -4,12 +4,6 @@ from tempfile import NamedTemporaryFile
 from osgeo import gdal
 import orthority as oty
 import re
-
-def wsl_to_windows_path(path):
-    wsl_pattern = r"^/mnt/([a-zA-Z])/(.*)$"
-    windows_path = re.sub(wsl_pattern, r"\1:\\\2", path).replace("/", "\\")
-    return windows_path
-
 def gcp_refined_rpc_orthorectification(
         input_image_path,
         output_image_path,
@@ -18,7 +12,7 @@ def gcp_refined_rpc_orthorectification(
         gcp_geojson_file_path=None,
         output_nodata_value=None,
         dtype=None,
-):
+    ):
     # Ensure the output directory exists
     output_image_dir = os.path.dirname(output_image_path)
     if not os.path.exists(output_image_dir):
@@ -111,7 +105,10 @@ def gcp_refined_rpc_orthorectification(
     os.remove(temp_image_path)
     print(f"Orthorectified image saved to {output_image_path}")
 
-def qgis_gcps_to_csv(input_gcp_path, output_epsg=None):
+def qgis_gcps_to_csv(
+        input_gcp_path,
+        output_epsg=None
+        ):
     """
     Convert QGIS GCP format to GDAL-compatible CSV format, with optional map coordinate transformation.
 
@@ -193,7 +190,11 @@ def qgis_gcps_to_csv(input_gcp_path, output_epsg=None):
     print("Converted QGIS GCP file to GDAL-compatible CSV text.")
     return output_csv_text
 
-def geo_to_image_coords(dataset, x, y):
+def geo_to_image_coords(
+        dataset,
+        x,
+        y
+        ):
     transform_options = ["METHOD=GCP_POLYNOMIAL"] # "METHOD=GCP_TPS" or "METHOD=GCP_POLYNOMIAL"
 
     transformer = gdal.Transformer(dataset, None, transform_options)
@@ -204,7 +205,14 @@ def geo_to_image_coords(dataset, x, y):
     success, (px, py, pz) = transformer.TransformPoint(1, float(x), float(y))
     return success, (px, py, pz)
 
-def qgis_gcps_to_geojson(input_image_path, qgis_gcp_file_path, file_name, dem_file_path, output_geojson_path, force_positive_pixel_values=False):
+def qgis_gcps_to_geojson(
+        input_image_path,
+        qgis_gcp_file_path,
+        file_name,
+        dem_file_path,
+        output_geojson_path,
+        force_positive_pixel_values=False
+        ):
     import json
 
     geojson = {
