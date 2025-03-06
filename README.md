@@ -5,3 +5,10 @@ Very high-resolution satellite imagery greatly enhances conservation and environ
 The pipeline begins with atmospheric correction which mitigates scattering, absorption, and adjacency effects, converting digital numbers into reflectance. Next, orthorectification removes terrain distortions, corrects sensor geometry, aligns imagery with reference data, and ensures uniform scale. Next, pansharpening fuses multispectral and panchromatic data to enhance detail. Next, global histogram matching standardizes brightness and contrast across images, assuming overlapping areas have the same spectral signature. Next, local histogram matching refines these adjustments at a block level, producing smoother transitions. Lastly, seamlines are generated between images to minimize visual artifacts and the resulting images are merged into a seamless, tiled, analysis-ready mosaic.
 
 The mosaic is valuable for assessing land cover and land use (LCLU), detecting forest dynamics, assessing native species ranges, land managers, and other analyses of large spatial scales. The pipeline was developed and is being used to create seamless imagery of the Big Island to perform species-level forest mapping and estimate forest carbon.
+
+
+
+# Setup
+- Clone repo
+- Install dependancies
+- Mount drives if working on external drive
