@@ -13,6 +13,7 @@ import numpy as np
 import json
 import rasterio
 import numpy as np
+import warnings
 from scipy import ndimage
 import os
 from tqdm import tqdm
@@ -626,6 +627,11 @@ def get_image_largest_value(
 
     # Clean up
     dataset = None
+
+    if np.isnan(largest_value):
+        warnings.warn(
+            f"Warning: Largest value in file '{input_image_path}' could not be found.This could be because the mask is outside of the bounds of this image."
+        )
 
     return float(largest_value)
 
