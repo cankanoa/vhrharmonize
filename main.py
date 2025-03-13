@@ -202,6 +202,8 @@ def run_automated_image_preprocessing():
 
                 if params_overrides_scene is not None: flaash_params.update(params_overrides_scene)
                 if mul_params_overrides_photo is not None: flaash_params.update(mul_params_overrides_photo)
+                flaash_params = {k: v for k, v in flaash_params.items() if v is not None}
+                
 
 
                 # print(flaash_params)
