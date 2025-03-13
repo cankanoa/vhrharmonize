@@ -12,3 +12,8 @@ The mosaic is valuable for assessing land cover and land use (LCLU), detecting f
 - Clone repo
 - Install dependancies
 - Mount drives if working on external drive
+
+
+# Requirements
+## Atmospheric Correction
+ - ENVI >= 5.7
