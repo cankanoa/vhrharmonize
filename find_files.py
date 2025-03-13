@@ -171,14 +171,26 @@ def get_metadata_from_files(
 
     if root_file_path:
         with open(root_file_path, 'r') as file:
-            data = json.load(file)
-            params_overrides_scene = data.get("ParamsOverridesPerScene", {})
+            content = file.read().strip()  # Read and strip whitespace to check for emptiness
+            if not content:
+                params_overrides_scene = None
+                params_overrides_photo = None
+            else:
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    data = {}
 
-            # Locate the dictionary of all photo overrides
-            all_photos_overrides = data.get("ParamsOverridesPerPhoto", {})
+                try:
+                    params_overrides_scene = data.get("ParamsOverridesPerScene", None)
+                except (AttributeError, TypeError):
+                    params_overrides_scene = None
 
-            # Extract overrides for the specific photo_basename
-            params_overrides_photo = all_photos_overrides.get(photo_basename, {})
+                try:
+                    all_photos_overrides = data.get("ParamsOverridesPerPhoto", {})
+                    params_overrides_photo = all_photos_overrides.get(photo_basename, None)
+                except (AttributeError, TypeError):
+                    params_overrides_photo = None
 
     # Extract metadata from IMD file
     imd_data = {}
