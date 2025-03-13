@@ -200,10 +200,10 @@ def run_automated_image_preprocessing():
                     'OUTPUT_RASTER': None,
                 }
 
-                for key, value in params_overrides_scene.items():
-                    flaash_params[key] = value
-                for key, value in mul_params_overrides_photo.items():
-                    flaash_params[key] = value
+                if params_overrides_scene is not None: flaash_params.update(params_overrides_scene)
+                if mul_params_overrides_photo is not None: flaash_params.update(mul_params_overrides_photo)
+
+
                 # print(flaash_params)
                 
                 run_flaash(flaash_params, mul_flaash_params_path, envi_engine, mul_flaash_image_path) # -------------------- RUN
