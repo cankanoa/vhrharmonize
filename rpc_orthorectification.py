@@ -4,15 +4,30 @@ from tempfile import NamedTemporaryFile
 from osgeo import gdal
 import orthority as oty
 import re
+import json
+from osgeo import gdal
+from orthority.camera import GcpCamera, RpcCamera
+import numpy as np
+from typing import Union, Tuple
 def gcp_refined_rpc_orthorectification(
-        input_image_path,
-        output_image_path,
-        dem_image_path,
-        output_epsg,
-        gcp_geojson_file_path=None,
-        output_nodata_value=None,
-        dtype=None,
+    input_image_path,
+    output_image_path,
+    dem_image_path,
+    output_epsg,
+    gcp_geojson_file_path=None,
+    output_nodata_value=None,
+    dtype=None,
+    output_resolution: Union[float, Tuple[float, float]]=None,
     ):
+
+    # Set resolution of output raster
+    if isinstance(output_resolution, float):
+        x_res = y_res = output_resolution
+    elif isinstance(output_resolution, tuple):
+        x_res, y_res = output_resolution
+    else:
+        x_res, y_res = None, None
+
     # Ensure the output directory exists
     output_image_dir = os.path.dirname(output_image_path)
     if not os.path.exists(output_image_dir):
@@ -82,6 +97,8 @@ def gcp_refined_rpc_orthorectification(
         format="GTiff",
         dstSRS=f"EPSG:{output_epsg}",
         rpc=True,
+        xRes=x_res,
+        yRes=y_res,
         transformerOptions=[f"RPC_DEM={dem_image_path}"],
         resampleAlg="bilinear",
         copyMetadata=True,  # Copies metadata excluding original RPC
@@ -205,6 +222,49 @@ def geo_to_image_coords(
     success, (px, py, pz) = transformer.TransformPoint(1, float(x), float(y))
     return success, (px, py, pz)
 
+# def geo_to_image_coords(
+#         dataset,
+#         x,
+#         y,
+#         projection_method="gcp"
+#     ):
+#     """
+#     Convert geographic coordinates to image coordinates based on the specified projection method.
+#
+#     Parameters:
+#     dataset (gdal.Dataset): GDAL dataset of the image.
+#     x (float): Longitude or X coordinate.
+#     y (float): Latitude or Y coordinate.
+#     projection_method (str): Projection method, either "gcp" (default) or "geotransform".
+#
+#     Returns:
+#     tuple: (success, (px, py, pz)) where px and py are pixel coordinates and pz is the transformed elevation.
+#     """
+#     if projection_method.lower() == "gcp":
+#         transform_options = ["METHOD=GCP_POLYNOMIAL"] # "METHOD=GCP_TPS" or "METHOD=GCP_POLYNOMIAL"
+#
+#         transformer = gdal.Transformer(dataset, None, transform_options)
+#         if not transformer:
+#             raise RuntimeError("Failed to create GDAL Transformer with GCPs.")
+#
+#         # TransformPoint( bDstToSrc, X_in, Y_in ).
+#         success, (px, py, pz) = transformer.TransformPoint(1, float(x), float(y))
+#         return success, (px, py, pz)
+#
+#     elif projection_method.lower() == "geotransform":
+#         geo_transform = dataset.GetGeoTransform()
+#         if not geo_transform:
+#             raise RuntimeError("Dataset does not have a valid GeoTransform.")
+#
+#         inv_transform = gdal.InvGeoTransform(geo_transform)
+#         if not inv_transform:
+#             raise RuntimeError("Failed to invert GeoTransform.")
+#
+#         px, py = gdal.ApplyGeoTransform(inv_transform, x, y)
+#         return True, (px, py, 0)  # Assuming elevation is not transformed
+#
+#     else:
+#         raise ValueError("Invalid projection method. Use 'gcp' or 'geotransform'.")
 def qgis_gcps_to_geojson(
         input_image_path,
         qgis_gcp_file_path,

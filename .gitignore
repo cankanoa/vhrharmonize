@@ -1,3 +1,6 @@
+# Working directory created files
+ENVI_Session_*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
