@@ -201,6 +201,7 @@ def get_metadata_from_files(
         "LOS_ZENITH": "meanOffNadirViewAngle",
         'x_res': 'meanProductRowGSD',
         'y_res': 'meanProductColGSD',
+        'product_res': 'meanProductGSD',
     }
     regex_pattern = r"(?P<key>{})\s*=\s*(?P<value>-?\d+(\.\d+)?)".format("|".join(key_mapping.values()))
 

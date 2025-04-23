@@ -24,11 +24,6 @@ input_folders_array = [
 
 # Only process these iamges if set, if not set, all images will be processed (use either mul or pan photo name)
 filter_basenames = [
-    '17DEC08211758-M1BS-016445319010_01_P003',
-    '17DEC08211800-M1BS-016445319010_01_P004',
-    '17DEC08211801-M1BS-016445319010_01_P005',
-    '17DEC08211840-M1BS-016445318010_01_P015',
-    '17DEC08211841-M1BS-016445318010_01_P016',
     ]
 
 # Some other requires params
@@ -42,12 +37,15 @@ pan_radiance_gain = 0.130354235325
 pan_radiance_offset = 5.505
 
 # Required to create a Root_WV.txt file at each satellite image root folder; optional: add override to params per scene and photo in the following format:
-# {     "ParamsOverridesPerScene": {
-#         "WATER_VAPOR_PRESET": 0.89
-#     },
-#     "ParamsOverridesPerPhoto": {
-#         "17DEC08211758-M1BS-016445319010_01_P003": {
-#             "Key": "value"}}}
+#{  "ParamsOverridesPerScene": {
+#       "WATER_VAPOR_PRESET": 0.89
+#   },
+#   "ParamsOverridesPerPhoto": {
+#       "17DEC08211758-M1BS-016445319010_01_P003": {
+#           "Key": "value"
+#       }
+#   }
+#}
 
 # DEM file needs to be in WGS84 elipsoidal height and cover all images that will be processed
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
@@ -91,7 +89,7 @@ def run_automated_image_preprocessing():
                 pan_photo_basename = found_default_file['pan_photo_basename']
 
                 params_overrides_scene, mul_params_overrides_photo, mul_imd_data = get_metadata_from_files(root_file_path, mul_imd_file, mul_photo_basename)
-                params_overrides_scene, pan_params_overrides_photo, pan_imd_data = get_metadata_from_files(root_file_path, pan_imd_file, pan_photo_basename)
+                _, pan_params_overrides_photo, pan_imd_data = get_metadata_from_files(root_file_path, pan_imd_file, pan_photo_basename)
 
                 mul_shp_path = found_default_file['mul_shp_file']
                 pan_shp_path = found_default_file['pan_shp_file']
@@ -266,7 +264,10 @@ def run_automated_image_preprocessing():
                 pansharpen_image(mul_flaash_ortho_path, pan_ortho_path, mul_pansharp_path) # -------------------- RUN
 
 
+                # Cloud masking
+                mul_ortho_path = os.path.join(root_folder_path, f'Mul_{gcp_folder_name}', f"{mul_photo_basename}_{gcp_folder_name}.tif")
 
+                # gcp_refined_rpc_orthorectification(mul_tif_file, mul_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='UInt16', gcp_geojson_file_path=mul_gcp_geojson_file_path)
 
 
                 # ------------------- Clean up dataset
@@ -275,7 +276,7 @@ def run_automated_image_preprocessing():
                 # replace_band_continuous_values_in_largest_segment(mul_pansharp_path, )
                 print('Main process done')
 
-    print('Done with main process iamgery')
+    print('Done with main process imagery')
 
 run_automated_image_preprocessing()
 
