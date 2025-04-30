@@ -1,25 +1,21 @@
-import os
-from envipyengine import Engine
-from pprint import pprint
-import envipyengine.config
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import re
 import os
 import itertools
 from tqdm import tqdm
-import json
-from helper_functions import get_image_largest_value
+
 # Find the ENVI engine
-# envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
+# envipyengine.config.set('engine', "/path/to/envi/taskengine.exe")
 # envi_engine = Engine('ENVI')
 # envi_engine.tasks()
 
+
 def run_flaash(
-        flaash_params,
-        output_params_path,
-        envi_engine,
-        output_image_path_to_delete=None
-        ):
+    flaash_params,
+    output_params_path,
+    envi_engine,
+    output_image_path_to_delete=None
+    ):
+
     print('Processing photo with params:', flaash_params)
     if output_image_path_to_delete:
         try:
@@ -38,9 +34,11 @@ def run_flaash(
     except Exception as e:
         print(f"Error processing: {flaash_params}: {e}")
 
+
 def run_flaash_wrapper(
-        args
-        ):
+    args
+    ):
+
     """
     Wrapper function (needed because executors only picklable callables).
     Returns the 'OUTPUT_RASTER_URI' so we can collect it later.
@@ -50,11 +48,13 @@ def run_flaash_wrapper(
     run_flaash(test_params, test_output_params_path, envi_engine)
     return test_params["OUTPUT_RASTER_URI"]
 
+
 def parallel_flaash(
-        test_flaash_params_array,
-        envi_engine,
-        max_workers=4
-        ):
+    test_flaash_params_array,
+    envi_engine,
+    max_workers=4
+    ):
+
     """
     Executes run_flaash in parallel on the items in test_flaash_params_array.
     """
@@ -77,10 +77,12 @@ def parallel_flaash(
 
     return all_output_paths
 
+
 def create_test_flaash_params(
-        flaash_params,
-        output_params_path
-        ):
+    flaash_params,
+    output_params_path
+    ):
+
     test_params={ #'OUTPUT_SCALE': {None,2, 3, 4}, 'AER_BAND_RATIO': {None, 0.3, 4}})
                  'SENSOR_TYPE': None,
                  'INPUT_SCALE': None,
@@ -190,7 +192,7 @@ def create_test_flaash_params(
         result_list.append((combo_params, new_params_path))
 
     return result_list
-    
+
 
 
 

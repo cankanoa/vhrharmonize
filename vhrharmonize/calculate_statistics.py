@@ -4,12 +4,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 matplotlib.use('Agg')
 
+
 def plot_pixel_distribution(
-        input_image_path,
-        bands=None,
-        bins=256,
-        save_plot_path=None
-        ):
+    input_image_path,
+    bands=None,
+    bins=256,
+    save_plot_path=None
+    ):
+
     """
     Plots the distribution (histogram) of pixel values for specified bands
     in a raster file as line plots. Optionally saves the plot to a file.

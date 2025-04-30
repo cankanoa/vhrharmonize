@@ -2,9 +2,11 @@ import os
 import re
 import json
 
+
 def find_roots(
-        input_folder
-        ):
+    input_folder
+    ):
+
     root_paths = []
 
     for root, dirs, files in os.walk(input_folder):
@@ -20,11 +22,13 @@ def find_roots(
     print("Input array item scene count(Root files):", len(root_paths))
     return root_paths
 
+
 def find_files(
-        root_folder_path,
-        root_file_path,
-        filter_basenames
-        ):
+    root_folder_path,
+    root_file_path,
+    filter_basenames
+    ):
+
     """
     Find files with specific extensions and add their details to a JSON file.
 
@@ -103,22 +107,24 @@ def find_files(
 
     return found_files_by_basename
 
+
 def find_subfolder_files(
-        root_folder_path,
-        subfolders_array,
-        filter_basenames=None
-        ):
+    root_folder_path,
+    subfolders_array,
+    filter_basenames=None
+    ):
+
     """
-Finds and processes subfolders directly under the root folder that match the given names.
+    Finds and processes subfolders directly under the root folder that match the given names.
 
-Args:
-root_folder_path (str): The root directory to search for subfolders.
-subfolders_array (list of str): List of subfolder names to look for.
-filter_basenames (list of str, optional): List of basenames to filter files by.
+    Args:
+    root_folder_path (str): The root directory to search for subfolders.
+    subfolders_array (list of str): List of subfolder names to look for.
+    filter_basenames (list of str, optional): List of basenames to filter files by.
 
-Returns:
-dict: A dictionary where keys are matching subfolder names,
-and values are lists of '.dat' files with their full paths found in those subfolders.
+    Returns:
+    dict: A dictionary where keys are matching subfolder names,
+    and values are lists of '.dat' files with their full paths found in those subfolders.
     """
     found_subfolders = {}
 
@@ -146,11 +152,13 @@ and values are lists of '.dat' files with their full paths found in those subfol
 
     return found_subfolders
 
+
 def get_metadata_from_files(
-        root_file_path,
-        imd_file,
-        photo_basename
-        ):
+    root_file_path,
+    imd_file,
+    photo_basename
+    ):
+
     """
     Extract metadata from the provided files.
 

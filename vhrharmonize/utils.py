@@ -1,32 +1,26 @@
 import re
-import os
-from osgeo import gdal
-import numpy as np
-import os
-import numpy as np
-import rasterio
-from rasterio import open as rio_open
-from scipy.ndimage import gaussian_filter
-from osgeo import ogr, osr
-from osgeo import gdal, ogr, osr
-import numpy as np
 import json
-import rasterio
-import numpy as np
+import os
 import warnings
+import rasterio
+import rasterio.mask
+import geopandas as gpd
+import numpy as np
+
+from scipy.ndimage import gaussian_filter
+from osgeo import gdal, ogr, osr
 from scipy import ndimage
-import os
-from tqdm import tqdm
-from osgeo import gdal
-import os
+from shapely.geometry import mapping
+
 
 def convert_dn_to_radiance(
-        input_image_path,
-        output_image_path,
-        gain,
-        offset,
-        dtype=None
-        ):
+    input_image_path,
+    output_image_path,
+    gain,
+    offset,
+    dtype=None
+    ):
+
     ds = gdal.Open(input_image_path, gdal.GA_ReadOnly)
     if not ds:
         raise RuntimeError(f"Failed to open {input_image_path}")
@@ -70,10 +64,12 @@ def convert_dn_to_radiance(
     out_ds.FlushCache()
     del ds, out_ds
 
+
 def change_last_folder_and_add_suffix(
-        filepath,
-        suffix
-        ):
+    filepath,
+    suffix
+    ):
+
     # Normalize the path to remove any trailing slashes
     filepath = os.path.normpath(filepath)
 
@@ -106,25 +102,29 @@ def change_last_folder_and_add_suffix(
 
     return new_path
 
+
 def wsl_to_windows_path(
-        path
-        ):
+    path
+    ):
+
     wsl_pattern = r"^/mnt/([a-zA-Z])/(.*)$"
     windows_path = re.sub(wsl_pattern, r"\1:\\\2", path).replace("/", "\\")
     return windows_path
 
 def windows_to_wsl_path(
-        path
-        ):
+    path
+    ):
+
     windows_pattern = r"^([a-zA-Z]):\\(.*)$"
     wsl_path = re.sub(windows_pattern, r"/mnt/\1/\2", path).replace("\\", "/")
     return wsl_path
 
 def shp_to_gpkg(
-        input_shp_path,
-        output_gpkg_path,
-        override_projection_epsg=None
-        ):
+    input_shp_path,
+    output_gpkg_path,
+    override_projection_epsg=None
+    ):
+
     """
     Reads a shapefile (which might not have a .prj),
     optionally forces a new EPSG code on it,
@@ -214,12 +214,13 @@ def shp_to_gpkg(
         print(f"No CRS override. Output saved to '{output_gpkg_path}'.")
 
 def convert_dat_to_tif(
-        input_image_path,
-        output_image_path,
-        mask,
-        nodata_value,
-        delete_dat_file=False
-        ):
+    input_image_path,
+    output_image_path,
+    mask,
+    nodata_value,
+    delete_dat_file=False
+    ):
+
     """Convert a .dat raster to .tif, apply mask, set NoData value, and clean up files."""
     gdal.Warp(
         output_image_path, input_image_path, format="GTiff", dstNodata=nodata_value, srcNodata=nodata_value
@@ -234,11 +235,12 @@ def convert_dat_to_tif(
                 os.remove(extra_file)
 
 def copy_tif_file(
-        input_image_path,
-        output_image_path,
-        output_nodata_value=None,
-        output_dtype=None
-        ):
+    input_image_path,
+    output_image_path,
+    output_nodata_value=None,
+    output_dtype=None
+    ):
+
     """
     Copies a GeoTIFF file to a new location without altering its properties using gdal.Translate.
     Optionally sets a NoData value and allows specifying a GDAL dtype.
@@ -280,11 +282,12 @@ def copy_tif_file(
 
 
 def spectral_scale_image(
-        input_image_path,
-        output_image_path,
-        input_image_scale,
-        output_image_scale
-        ):
+    input_image_path,
+    output_image_path,
+    input_image_scale,
+    output_image_scale
+    ):
+
     """
     Scales an image from one range to another while preserving NoData values,
     copying the default metadata, and also copying RPC metadata.
@@ -346,14 +349,15 @@ def spectral_scale_image(
     dataset = None
 
 def stretch_spectral_values(
-        input_image_paths_array,
-        output_image_folder,
-        output_basename,
-        stretch_dictionary,
-        smoothing=0,
-        dtype_override=None,
-        offset=0
-        ):
+    input_image_paths_array,
+    output_image_folder,
+    output_basename,
+    stretch_dictionary,
+    smoothing=0,
+    dtype_override=None,
+    offset=0
+    ):
+
     """
     For each image in 'input_image_paths_array':
     1. Print "Processing image: [path]" once per image.
@@ -525,11 +529,13 @@ def stretch_spectral_values(
 
         print(f"Saved to: {output_path}\n")
 
+
 def get_image_largest_value(
-        input_image_path,
-        mask=None,
-        override_mask_crs_epsg=None
-        ):
+    input_image_path,
+    mask=None,
+    override_mask_crs_epsg=None
+    ):
+
     """
     Get the largest value in a raster image, optionally masked by a shapefile.
 
@@ -541,110 +547,61 @@ def get_image_largest_value(
     Returns:
     float: The largest value in the raster (masked if mask is provided).
     """
-    # Open the raster dataset
-    dataset = gdal.Open(input_image_path, gdal.GA_ReadOnly)
-    if not dataset:
-        raise FileNotFoundError(f"Raster file not found: {input_image_path}")
+    with rasterio.open(input_image_path) as src:
+        nodata = src.nodata
+        largest_value = None
 
-    # Get raster geotransform and nodata value
-    geo_transform = dataset.GetGeoTransform()
-    projection = dataset.GetProjection()
-    x_size = dataset.RasterXSize
-    y_size = dataset.RasterYSize
+        if mask:
+            mask_gdf = gpd.read_file(mask)
 
-    band = dataset.GetRasterBand(1)
-    nodata_value = band.GetNoDataValue()
+            if mask_gdf.crs is None:
+                if override_mask_crs_epsg:
+                    mask_gdf.set_crs(epsg=override_mask_crs_epsg, inplace=True)
+                else:
+                    raise ValueError(f"Mask file '{mask}' has no CRS. You must specify 'override_mask_crs_epsg'.")
+            elif override_mask_crs_epsg:
+                mask_gdf = mask_gdf.to_crs(epsg=override_mask_crs_epsg)
 
-    # Read the raster data as an array
-    raster_array = band.ReadAsArray()
-    if nodata_value is not None:
-        raster_mask = (raster_array != nodata_value)
-    else:
-        raster_mask = np.ones_like(raster_array, dtype=bool)
+            geometries = [mapping(geom) for geom in mask_gdf.geometry]
+        else:
+            geometries = None
 
-    # If a mask is provided, check for overlaps in valid data
-    mask_array = None
-    if mask:
-        mask_ds = ogr.Open(mask)
-        if not mask_ds:
-            raise FileNotFoundError(f"Mask file not found: {mask}")
+        for i in range(1, src.count + 1):
+            if geometries:
+                band_array, _ = rasterio.mask.mask(src, geometries, indexes=i, filled=False)
+            else:
+                band_array = src.read(i, masked=True)
 
-        mask_layer = mask_ds.GetLayer()
+            if nodata is not None:
+                band_array = np.ma.masked_equal(band_array, nodata)
 
-        # Override the mask's CRS if requested
-        if override_mask_crs_epsg:
-            target_srs = osr.SpatialReference()
-            target_srs.ImportFromEPSG(override_mask_crs_epsg)
+            if band_array.mask.all():
+                continue
 
-            # Create a memory layer with the corrected CRS
-            driver = ogr.GetDriverByName("Memory")
-            mem_ds = driver.CreateDataSource("in_memory")
-            mem_layer = mem_ds.CreateLayer("mask", srs=target_srs, geom_type=mask_layer.GetGeomType())
+            band_max = band_array.max()
+            largest_value = max(largest_value, band_max) if largest_value is not None else band_max
 
-            # Copy features from the original mask layer
-            for feature in mask_layer:
-                mem_layer.CreateFeature(feature.Clone())
 
-            mask_layer = mem_layer  # Replace original mask layer with corrected one
-
-        # Create an in-memory raster for the mask
-        driver = gdal.GetDriverByName("MEM")
-        mask_raster = driver.Create("", x_size, y_size, 1, gdal.GDT_Byte)
-        mask_raster.SetGeoTransform(geo_transform)
-        mask_raster.SetProjection(projection)
-
-        # Rasterize the shapefile to the mask raster
-        gdal.RasterizeLayer(mask_raster, [1], mask_layer, burn_values=[1])
-        mask_array = mask_raster.ReadAsArray()
-
-        # Check if the mask has true values where the raster has no valid data
-        overlap_check = np.logical_and(mask_array == 1, ~raster_mask)
-        if np.any(overlap_check):
-            print("Warning: The provided mask contains areas where there is no valid data in the input image.")
-
-        # Clean up
-        mask_ds = None
-        mask_raster = None
-        if override_mask_crs_epsg:
-            mem_ds = None
-
-    # Loop through all bands and find the largest value
-    largest_value = None
-    for band_index in range(1, dataset.RasterCount + 1):
-        band = dataset.GetRasterBand(band_index)
-        band_array = band.ReadAsArray()
-
-        if nodata_value is not None:
-            band_array = np.ma.masked_where(band_array == nodata_value, band_array)
-
-        if mask_array is not None:
-            # Apply the mask to the band data
-            band_array = np.ma.masked_where(mask_array == 0, band_array)
-
-        # Find the maximum value in the current band
-        band_max = np.max(band_array)
-        largest_value = max(largest_value, band_max) if largest_value is not None else band_max
-
-    # Clean up
-    dataset = None
-
-    if not isinstance(largest_value, (int, float)):
+    if largest_value is None or not np.issubdtype(type(largest_value), np.number):
         warnings.warn(
-            f"Warning: Largest value in file '{input_image_path}' could not be found. This could be because the mask is outside of the bounds of this image."
+            f"Warning: Largest value in file '{input_image_path}' could not be found. "
+            "This could be because the mask is outside of the bounds of this image."
         )
 
     return float(largest_value)
 
+
 def replace_band_continuous_values_in_largest_segment(
-        input_image_path,
-        output_image_path,
-        search_value,
-        replace_value,
-        nodata_value=None,
-        dtype=None,
-        connectivity=8,
-        minimum_contiguous_count_to_remove=20
-        ):
+    input_image_path,
+    output_image_path,
+    search_value,
+    replace_value,
+    nodata_value=None,
+    dtype=None,
+    connectivity=8,
+    minimum_contiguous_count_to_remove=20
+    ):
+
     """
     Replaces pixel values in contiguous regions of a multi-band raster
     where ALL bands share the same search_value at a given pixel,
@@ -755,13 +712,15 @@ def replace_band_continuous_values_in_largest_segment(
     with rasterio.open(output_image_path, 'w', **profile) as dst:
         dst.write(data)
 
+
 def scale_gcps_geojson(
-        current_gcp_image,
-        desired_scale_image,
-        input_geojson_path,
-        output_geojson_path,
-        replace_filename=None
-        ):
+    current_gcp_image,
+    desired_scale_image,
+    input_geojson_path,
+    output_geojson_path,
+    replace_filename=None
+    ):
+
     """
     Scale the 'ji' attribute in a GeoJSON based on the resolution difference between two images.
 
@@ -815,10 +774,12 @@ def scale_gcps_geojson(
 
     print(f"Scaled GeoJSON saved to {output_geojson_path}")
 
+
 def translate_gcp_image_to_origin(
-        input_image_path,
-        output_image_path
-        ):
+    input_image_path,
+    output_image_path
+    ):
+
     """
     Replace all existing GCPs in the input dataset with four GCPs that
     place the top-left corner at (0,0), top-right at (width,0), bottom-left

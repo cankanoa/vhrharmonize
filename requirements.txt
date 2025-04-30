@@ -1,9 +1,0 @@
-pyproj
-orthority
-gdal
-rasterio
-envipyengine
-matplotlib
-requests
-numpy
-scipy

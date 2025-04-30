@@ -1,33 +1,38 @@
 # ------------------- Imports
 import os
-from find_files import find_files, find_roots, get_metadata_from_files
-from helper_functions import shp_to_gpkg, get_image_largest_value
-from rpc_orthorectification import qgis_gcps_to_geojson, gcp_refined_rpc_orthorectification
-from pansharpen import pansharpen_image
-from flaash import run_flaash
+from vhrharmonize import(
+    find_files,
+    find_roots,
+    get_metadata_from_files,
+    shp_to_gpkg,
+    get_image_largest_value,
+    wsl_to_windows_path,
+    qgis_gcps_to_geojson,
+    gcp_refined_rpc_orthorectification,
+    pansharpen_image,
+    run_flaash
+    )
+
 from envipyengine import Engine
 import envipyengine.config
-
-envipyengine.config.set('engine', "/mnt/c/Program Files/Harris/ENVI57/IDL89/bin/bin.x86_64/taskengine.exe")
+envipyengine.config.set('engine', "/path/to/envi/taskengine.exe")
 envi_engine = Engine('ENVI')
 envi_engine.tasks()
-
 
 # ------------------- Define variables
 # Code will search these folders for all Root_WV.txt files to use as roots for each scene
 input_folders_array = [
-    # "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445319010",
-    "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20171208_36cm_WV03_BAB_016445318010",
-    # '/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/PuuWaawaaImages/20170705_35cm_WV03_BAB_016445286010',
-    # "/mnt/s/Satellite_Imagery/Big_Island/Unprocessed/Hamakua"
+    "/folder/to/search/for/root_wv.txt files within",
+    "/second/path/to/search",
 ]
 
 # Only process these iamges if set, if not set, all images will be processed (use either mul or pan photo name)
 filter_basenames = [
-    ]
+    'only_process_these_images_by_basename',
+]
 
 # Some other requires params
-epsg = 6635
+epsg = 4326 # or a more specific one, for example 6635 for the Big Island
 nodata_value = -9999
 dtype = 'int16'
 calculation_dtype_precision = 'float32'
@@ -36,8 +41,9 @@ calculation_dtype_precision = 'float32'
 pan_radiance_gain = 0.130354235325
 pan_radiance_offset = 5.505
 
+# Get WATER_VAPOR_PRESET from: www.worldview.earthdata.nasa.gov (product: 'MOD05_L2' (Water Vapor))
 # Required to create a Root_WV.txt file at each satellite image root folder; optional: add override to params per scene and photo in the following format:
-#{  "ParamsOverridesPerScene": {
+# {  "ParamsOverridesPerScene": {
 #       "WATER_VAPOR_PRESET": 0.89
 #   },
 #   "ParamsOverridesPerPhoto": {
@@ -45,17 +51,11 @@ pan_radiance_offset = 5.505
 #           "Key": "value"
 #       }
 #   }
-#}
+# }
 
 # DEM file needs to be in WGS84 elipsoidal height and cover all images that will be processed
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
-# dem_file_path = '/mnt/d/demlast.tif' # or on the server: "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
-dem_file_path = "/mnt/x/Imagery/Elevation/DEM_WGSEllip_PuuWaawaa.tif"
-# dem_file_path = "/mnt/x/Imagery/Elevation/rasters_SRTMGL1Ellip/output_SRTMGL1Ellip.tif"
-# dem_file_path = '/mnt/x/Imagery/Lidar/Big_Island/2018_PuuWaawaa/DEM/2018_2020_bigIsland_DEM_J970216_000_000.tif'
-
-
-
+dem_file_path = '/path/to/dem.tif'
 
 
 # ------------------- Start processing
@@ -141,13 +141,12 @@ def run_automated_image_preprocessing():
                 # https://www.sciencedirect.com/science/article/pii/S0924271621000095
                 # https://dg-cms-uploads-production.s3.amazonaws.com/uploads/document/file/106/ISD_External.pdf
                 # https://www.mdpi.com/1424-8220/16/10/1624
-                # worldview.earthdata.nasa.gov (product: 'MOD05_L2' (Water Vapor))
                 # https://github.com/dawhite/MCTK (MODIS Conversion Toolkit (MCTK))
                 # https://www.wunderground.com/history
 
                 flaash_params = {
                     'INPUT_RASTER': {
-                        'url': mul_tif_file,
+                        'url': (mul_tif_file),
                         'factory': 'URLRaster'
                     },
                     'SENSOR_TYPE': None,
@@ -166,7 +165,7 @@ def run_automated_image_preprocessing():
                     'SENSOR_AUTOCALIBRATION': None,
                     'SENSOR_CAL_PRECISION': None,
                     'SENSOR_CAL_FEATURE_LIST': None,
-                    'GROUND_ELEVATION': get_image_largest_value(dem_file_path, mul_shp_path, override_mask_crs_epsg=4326)/1000,
+                    'GROUND_ELEVATION': get_image_largest_value(dem_file_path, mul_gpkg_path)/1000,
                     'SOLAR_AZIMUTH': mul_imd_data.get("SOLAR_AZIMUTH"),
                     'SOLAR_ZENITH': mul_imd_data.get("SOLAR_ZENITH"),
                     'LOS_AZIMUTH': mul_imd_data.get("LOS_AZIMUTH"),
@@ -192,7 +191,7 @@ def run_automated_image_preprocessing():
                     'AER_BANDHIGH_MAXREFL': 0.2,
                     'CLOUD_RASTER_URI': None,
                     'WATER_RASTER_URI': None,
-                    'OUTPUT_RASTER_URI': mul_flaash_image_path,
+                    'OUTPUT_RASTER_URI': (mul_flaash_image_path),
                     'CLOUD_RASTER': None,
                     'WATER_RASTER': None,
                     'OUTPUT_RASTER': None,
@@ -201,13 +200,9 @@ def run_automated_image_preprocessing():
                 if params_overrides_scene is not None: flaash_params.update(params_overrides_scene)
                 if mul_params_overrides_photo is not None: flaash_params.update(mul_params_overrides_photo)
                 flaash_params = {k: v for k, v in flaash_params.items() if v is not None}
-                
 
-
-                # print(flaash_params)
-                
                 run_flaash(flaash_params, mul_flaash_params_path, envi_engine, mul_flaash_image_path) # -------------------- RUN
-                # convert_dat_to_tif(input_image_path=mul_flaash_dat_path, output_image_path=mul_flaash_path, mask=mul_gpkg_path, nodata_value=-9999, delete_dat_file=False)
+
 
 
 
@@ -242,7 +237,8 @@ def run_automated_image_preprocessing():
                 # Orthorectification info: https://up42.com/blog/how-to-perform-orthorectification-a-practical-guide
                 # Ensure that the dem is in elipsoidal height, may need to convert it with a datum. proj geiods are here: https://download.osgeo.org/proj/vdatum/
                 # If GCPs are provided this function will use them for RPC refinement, if not, it will use the default RPC model
-                gcp_refined_rpc_orthorectification(mul_flaash_image_path, mul_flaash_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=mul_gcp_geojson_file_path, )
+                gcp_refined_rpc_orthorectification(mul_flaash_image_path, mul_flaash_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=mul_gcp_geojson_file_path, output_resolution=mul_imd_data.get("product_res") )
+
 
 
 
@@ -251,7 +247,8 @@ def run_automated_image_preprocessing():
                 print('----------Starting orthorectify panchromatic image') # Step 4 -------------------- Orthorectify Panchromatic Images
                 pan_ortho_path = os.path.join(root_folder_path, f'Pan_{gcp_folder_name}', f"{pan_photo_basename}_{gcp_folder_name}.tif")
 
-                gcp_refined_rpc_orthorectification(pan_tif_file, pan_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=pan_gcp_geojson_file_path)
+                gcp_refined_rpc_orthorectification(pan_tif_file, pan_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=pan_gcp_geojson_file_path, output_resolution=mul_imd_data.get("product_res"))
+
 
 
 
@@ -261,24 +258,26 @@ def run_automated_image_preprocessing():
                 # From: https://doi.org/10.5194/isprsarchives-XL-1-W1-239-2013
                 mul_pansharp_path = os.path.join(root_folder_path, f'Mul_FLAASH_{gcp_folder_name}_Pansharp', f"{mul_photo_basename}_FLAASH_{gcp_folder_name}_Pansharps.tif")
 
-                pansharpen_image(mul_flaash_ortho_path, pan_ortho_path, mul_pansharp_path) # -------------------- RUN
+                pansharpen_image(mul_flaash_ortho_path, pan_ortho_path, mul_pansharp_path, change_nodata_value=nodata_value)
 
 
-                # Cloud masking
+
+
+
+
+                # Optionally create another ortho from the multispectral imagery that is not FLAASHed that may work better with cloud masking algorythms like omnicloudmask
                 mul_ortho_path = os.path.join(root_folder_path, f'Mul_{gcp_folder_name}', f"{mul_photo_basename}_{gcp_folder_name}.tif")
 
-                # gcp_refined_rpc_orthorectification(mul_tif_file, mul_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='UInt16', gcp_geojson_file_path=mul_gcp_geojson_file_path)
+                # gcp_refined_rpc_orthorectification(mul_tif_file, mul_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='UInt16', gcp_geojson_file_path=mul_gcp_geojson_file_path, output_resolution=mul_imd_data.get("product_res"))
 
 
-                # ------------------- Clean up dataset
-                mul_cleaned_path = os.path.join(root_file_path, 'Cleaned', f'{mul_photo_basename}_Cleaned.tif')
 
-                # replace_band_continuous_values_in_largest_segment(mul_pansharp_path, )
-                print('Main process done')
+
+
+
+                print('Done with image')
 
     print('Done with main process imagery')
 
+
 run_automated_image_preprocessing()
-
-
-

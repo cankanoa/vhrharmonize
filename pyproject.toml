@@ -1,0 +1,67 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["vhrharmonize"]
+
+[project]
+name = "vhrharmonize"
+version = "0.0.1"
+description = "Automated open source library to preprocess and organize satellite imagery"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Kanoa Lindiwe", email = "cankanoa@gmail.com"}
+]
+maintainers = [
+    {name = "Joseph Emile Honour Percival", email = "ipercival@gmail.com"}
+]
+keywords = ['Remote sensing', 'Satellite imagery', 'Image preprocessing', 'Orthorectification', 'Pansharpening', 'Atmospheric correction', 'RPC refinement', 'WorldView', 'Python automation', 'Raster processing', 'Multispectral imagery']
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+
+dependencies = [
+    "pyproj==3.7.1",
+    "orthority==0.5.1",
+    "gdal==3.6.2",
+    "rasterio==1.4.3",
+    "envipyengine==1.0.9",
+    "matplotlib==3.10.1",
+    "requests==2.32.3",
+    "numpy==2.2.4",
+    "scipy==1.15.2",
+    "geopandas==1.0.1",
+    "shapely==2.1.0",
+]
+
+[project.optional-dependencies]
+#dev = [
+#    "pytest>=7.0.0",
+#    "pytest-mock>=3.14.0",
+#    "pytest-cov>=4.0.0",
+#    "flake8>=6.0.0",
+#    "black>=23.0.0",
+#    "pre-commit>=4.1.0"
+#]
+
+docs = [
+    "mkdocs>=1.4.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocs-jupyter>=0.24.0",
+    "mkdocstrings>=0.21.0",
+    "mkdocstrings-python>=0.10.0",
+    "mkdocs-git-revision-date-plugin>=0.3.3",
+    "pymdown-extensions>=9.10"
+]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/cankanoa/vhrharmonize/issues"
+"Source" = "https://github.com/cankanoa/vhrharmonize"
