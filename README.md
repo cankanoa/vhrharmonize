@@ -18,7 +18,7 @@ The goal of vhrharmonize is to provide an automated, modular workflow for prepro
 
 ## Features
 
-- **End-to-End Processing:* Automated python scripts help to automate processing.
+- **End-to-End Processing:** Automated python scripts help to automate processing.
 - **Atmospheric Correction:** Uses ENVI's FLAASH to convert raw DNs into reflectance.
 - **GCP-Based Orthorectification:** Supports refined RPC correction using custom or QGIS GCPs.
 - **Pansharpening:** Fuses multispectral and panchromatic images for sharper detail.
@@ -32,7 +32,7 @@ The goal of vhrharmonize is to provide an automated, modular workflow for prepro
 ### 1. System Requirements
 
 - **Python ≥ 3.8**
-- **ENVI (with atmospheric correction module) ≥ 5.7** (for FLAASH and task engine support)
+- **ENVI ≥ 5.7** (for FLAASH and task engine support; with atmospheric correction module)
 - **GDAL ≥ 3.4**
 - Optional: **QGIS** (for GCP creation)
 
