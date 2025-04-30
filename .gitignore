@@ -1,3 +1,10 @@
+# mac
+.DS_Store
+
+# ide
+.fleet
+.idea
+
 # Working directory created files
 ENVI_Session_*
 
