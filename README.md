@@ -1,11 +1,10 @@
-# vhrharmonize: Preprocess High-Resolution Satellite Imagery into Analysis-Ready Mosaics
+# vhrharmonize: automated open source library to preprocess and organize satellite imagery
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](#)
 
 > [!IMPORTANT]
 > This library is under active development and may change.
 
-**Automated open source library to preprocess and organize satellite imagery.**
 
 ---
 
