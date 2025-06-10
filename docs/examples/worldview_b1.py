@@ -237,7 +237,7 @@ def run_automated_image_preprocessing():
                 # Orthorectification info: https://up42.com/blog/how-to-perform-orthorectification-a-practical-guide
                 # Ensure that the dem is in elipsoidal height, may need to convert it with a datum. proj geiods are here: https://download.osgeo.org/proj/vdatum/
                 # If GCPs are provided this function will use them for RPC refinement, if not, it will use the default RPC model
-                gcp_refined_rpc_orthorectification(mul_flaash_image_path, mul_flaash_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=mul_gcp_geojson_file_path, output_resolution=pan_imd_data.get("product_res") )
+                gcp_refined_rpc_orthorectification(mul_flaash_image_path, mul_flaash_ortho_path, dem_file_path, epsg, output_nodata_value=nodata_value, dtype='int16', gcp_geojson_file_path=mul_gcp_geojson_file_path, output_resolution=mul_imd_data.get("product_res") )
 
 
 
