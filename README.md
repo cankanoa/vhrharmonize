@@ -29,14 +29,21 @@ The goal of vhrharmonize is to provide an automated, modular workflow for prepro
 
 ## Installation
 
-### 1. System Requirements
+### 1. Manual System Requirements
 
-- **Python ≥ 3.8**
 - **ENVI ≥ 5.7** (for FLAASH and task engine support; with atmospheric correction module)
-- **GDAL ≥ 3.4**
 - Optional: **QGIS** (for GCP creation)
 
-### 2. Install the package
+### 2. Library System Requirements
+- **GDAL ≥ 3.4**
+- **Python ≥ 3.8**
+
+```bash
+conda create -n vhrharmonize python=3.10 "gdal=3.10.2" -c conda-forge
+conda activate spectralmatch
+```
+
+### 3. Install the package
 
 ```bash
 git clone https://github.com/yourusername/vhrharmonize.git
