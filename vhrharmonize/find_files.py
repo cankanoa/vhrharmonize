@@ -227,6 +227,8 @@ def get_metadata_from_files(
                         if python_key == "SOLAR_ZENITH":
                             imd_data[python_key] = 90 - value
                         elif python_key == "LOS_ZENITH":
+                            # FLAASH expects line-of-sight zenith in the [90, 270] convention.
+                            # IMD meanOffNadirViewAngle is from nadir (0-90), so convert accordingly.
                             imd_data[python_key] = 180 - value
                         else:
                             imd_data[python_key] = value

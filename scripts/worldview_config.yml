@@ -1,0 +1,21 @@
+input_dir:
+  - /mnt/d/20171019_35cm_WV03_BAB_050311750010
+dem_file_path: /mnt/d/dem/Hawaii_SRTM_GL1Ellip.tif
+envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe"
+epsg: 6635
+nodata_value: -9999
+cloud_mask_method: omnicloudmask
+cloud_buffer_pixels: 10
+tile_gpkg: /mnt/d/tiles.gpkg
+tile_layer: bigisland_tiles
+tile_id_field: id
+tile_buffer_m: 100
+tile_output_dir: /mnt/d/test_data/out/tiles
+tile_output_suffix: _final
+scratch_dir: /mnt/d/test_data/scratch
+lidar_ept_path: /mnt/e/ept-full/ept.json
+lidar_dimension: Intensity
+lidar_resolution: 0.5
+lidar_output_dir: /mnt/d/test_data/out/lidar_mean
+lidar_output_suffix: _mean
+lidar_overwrite: false

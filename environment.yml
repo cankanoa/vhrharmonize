@@ -1,0 +1,25 @@
+name: vhrharmonize
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - gdal=3.10.2
+  - rasterio
+  - pdal
+  - python-pdal
+  - pyproj
+  - geopandas
+  - shapely
+  - numpy
+  - scipy
+  - matplotlib
+  - requests
+  - pyyaml
+  - pip
+  - pip:
+      - envipyengine==1.0.9
+      - orthority==0.5.1
+      - omnicloudmask
+      - pyforestscan
+      - earthengine-api

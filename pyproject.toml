@@ -40,6 +40,8 @@ dependencies = [
     "scipy==1.15.2",
     "geopandas==1.0.1",
     "shapely==2.1.0",
+    "pyforestscan",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +53,10 @@ dependencies = [
 #    "black>=23.0.0",
 #    "pre-commit>=4.1.0"
 #]
+
+cloud = [
+    "omnicloudmask"
+]
 
 docs = [
     "mkdocs>=1.4.0",

@@ -1,7 +1,6 @@
 import orthority as oty
 import rasterio
 import numpy as np
-import os
 
 
 def pansharpen_image(
@@ -25,39 +24,31 @@ def _change_nodata_value(
     ):
 
     """
-    Replaces all pixels equal to `old_nodata` with `new_nodata_value`, and rewrites the file cleanly
-    without any auxiliary metadata issues.
+    Replaces all pixels equal to `old_nodata` with `new_nodata_value` in-place.
+    Uses block-wise IO to avoid loading very large rasters into memory.
 
     :param input_image_path: Path to the original raster file.
     :param new_nodata_value: Value to use as the new NoData.
     :param old_nodata: The pixel value currently used as NoData.
     """
-    # Load into memory
-    with rasterio.open(input_image_path) as src:
-        profile = src.profile.copy()
-        data = src.read()
-        dtype = src.dtypes[0]
+    print(f"Replacing {old_nodata} -> {new_nodata_value} (block-wise)")
 
-        print(f"Replacing {old_nodata} → {new_nodata_value}")
+    replaced_any = False
+    with rasterio.open(input_image_path, "r+") as src:
+        for band_idx in range(1, src.count + 1):
+            for _, window in src.block_windows(band_idx):
+                band_data = src.read(band_idx, window=window)
+                if np.issubdtype(band_data.dtype, np.floating):
+                    mask = np.isclose(band_data, old_nodata)
+                else:
+                    mask = band_data == old_nodata
+                if np.any(mask):
+                    band_data[mask] = new_nodata_value
+                    src.write(band_data, band_idx, window=window)
+                    replaced_any = True
 
-        if np.issubdtype(data.dtype, np.floating):
-            mask = np.isclose(data, old_nodata)
-        else:
-            mask = data == old_nodata
+        # GTiff stores a single dataset nodata (TIFFTAG_GDAL_NODATA).
+        src.nodata = new_nodata_value
 
-        if np.any(mask):
-            data[mask] = new_nodata_value
-        else:
-            print("No pixels matched old nodata value")
-
-    # Remove original file and .aux.xml if it exists
-    os.remove(input_image_path)
-    aux_path = input_image_path + ".aux.xml"
-    if os.path.exists(aux_path):
-        os.remove(aux_path)
-
-    # Write clean raster
-    profile.update(nodata=new_nodata_value)
-
-    with rasterio.open(input_image_path, 'w', **profile) as dst:
-        dst.write(data)
+    if not replaced_any:
+        print("No pixels matched old nodata value")
