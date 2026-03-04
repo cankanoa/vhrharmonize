@@ -7,6 +7,7 @@ The project publishes four primary CLI entry points via `pyproject.toml`:
 - `vhr-cloudmask-raster`: standalone OmniCloudMask runner on a raster
 - `vhr-pansharpen-orthos`: standalone pansharpening from orthorectified inputs
 - `vhr-align-image-pair`: pairwise elastix alignment (tile-aware by default)
+- `vhr-py6s`: Py6S-only atmospheric correction on discovered scenes
 - `vhr-planet`: Planet pipeline scaffold (placeholder for upcoming implementation)
 
 ## General Pattern
@@ -23,4 +24,5 @@ vhr-fetch-modis-water-vapor --help
 vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
+vhr-py6s --help
 ```

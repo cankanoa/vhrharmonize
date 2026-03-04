@@ -19,10 +19,12 @@ nav:
       - vhr-cloudmask-raster: cli/vhr-cloudmask-raster.md
       - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
       - vhr-align-image-pair: cli/vhr-align-image-pair.md
+      - vhr-py6s: cli/vhr-py6s.md
   - Configuration:
       - WorldView Config: configuration/worldview-config.md
   - Workflows:
       - Full-Scene Workflow: workflows/full-scene-worldview.md
+      - Atmospheric Correction (Py6S): workflows/atmospheric-correction-py6s.md
   - Architecture:
       - Package Layout: architecture/package-layout.md
   - API Reference:

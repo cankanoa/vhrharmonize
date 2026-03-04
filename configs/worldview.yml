@@ -6,7 +6,7 @@ atmospheric_method: py6s
 # atmospheric_method: flaash
 
 # Py6S parameters (used when atmospheric_method=py6s)
-py6s_atmosphere_profile: midlatitude_summer
+py6s_atmosphere_profile: user
 py6s_aerosol_profile: maritime
 py6s_aot550: 0.2
 # py6s_visibility: 40.0
@@ -16,7 +16,12 @@ py6s_ozone: 0.3
 py6s_output_scale_factor: 10000.0
 py6s_output_dtype: int16
 py6s_use_imd_radiance_calibration: true
-py6s_use_worldview_gain_offset_adjustment: false
+py6s_use_worldview_gain_offset_adjustment: true
+# Optional auto-source for Py6S atmosphere values (used when profile is `user`)
+py6s_auto_atmos_source: nasa_power
+py6s_auto_atmos_grid_size: 3
+py6s_auto_atmos_search_days: 1
+py6s_auto_atmos_timeout_s: 30.0
 
 epsg: 6635
 nodata_value: -9999

@@ -57,3 +57,14 @@ vhr-align-image-pair \
   --fixed-image /data/image_b_lidar.tif \
   --output-image /data/out/image_a_aligned_to_b.tif
 ```
+
+### Run Py6S atmospheric correction only (optional)
+
+```bash
+vhr-py6s \
+  --input-dir /data/worldview_batch \
+  --output-dir /data/out/py6s_only \
+  --output-suffix _py6s \
+  --py6s-atmosphere-profile user \
+  --py6s-auto-atmos-source nasa_power
+```

@@ -1,6 +1,7 @@
 import os
 import re
 import json
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 _WV_BAND_ORDER = [
@@ -285,6 +286,28 @@ def get_metadata_from_files(
     if imd_file:
         with open(imd_file, "r") as file:
             imd_content = file.read()
+
+            # Prefer IMD acquisition timestamp for any time-dependent processing
+            # (for example NASA atmosphere queries), because basename date tokens
+            # can be inconsistent across products.
+            acq_dt = None
+            for key in ("firstLineTime", "TLCTime", "earliestAcqTime", "latestAcqTime"):
+                m = re.search(
+                    rf"{key}\s*=\s*(?:\"([^\"]+)\"|([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}T[0-9:.+-]+Z?))\s*;",
+                    imd_content,
+                )
+                if not m:
+                    continue
+                raw = (m.group(1) or m.group(2) or "").strip()
+                try:
+                    acq_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    break
+                except ValueError:
+                    continue
+            if acq_dt is not None:
+                if acq_dt.tzinfo is None:
+                    acq_dt = acq_dt.replace(tzinfo=timezone.utc)
+                imd_data["ACQUISITION_DATETIME_UTC"] = acq_dt.astimezone(timezone.utc).isoformat()
 
             matches = re.finditer(regex_pattern, imd_content)
             for match in matches:

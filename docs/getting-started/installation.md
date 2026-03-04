@@ -71,6 +71,7 @@ vhr-fetch-modis-water-vapor --help
 vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
+vhr-py6s --help
 ```
 
 ## Build Docs Locally

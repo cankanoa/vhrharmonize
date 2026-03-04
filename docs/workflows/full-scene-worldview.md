@@ -19,6 +19,9 @@ This describes the execution behavior of `vhr-worldview`.
 
 - Intermediates live in temporary scratch directories.
 - Final deliverables are full-scene rasters.
+- Each final raster also writes a sidecar metadata report:
+  - `<scene_basename><output_suffix>_metadata.json`
+  - contains input file paths, workflow settings, and effective atmospheric values used.
 - For Py6S runs, atmospheric output is surface reflectance.
   - Default storage is scaled reflectance (`int16`, factor `10000`).
 

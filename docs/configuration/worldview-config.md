@@ -17,7 +17,12 @@ py6s_ozone: 0.3
 py6s_output_scale_factor: 10000.0
 py6s_output_dtype: int16
 py6s_use_imd_radiance_calibration: true
-py6s_use_worldview_gain_offset_adjustment: false
+py6s_use_worldview_gain_offset_adjustment: true
+py6s_auto_atmos_source: none
+# py6s_auto_atmos_source: nasa_power
+# py6s_auto_atmos_grid_size: 3
+# py6s_auto_atmos_search_days: 1
+# py6s_auto_atmos_timeout_s: 30.0
 # py6s_executable: /usr/local/bin/sixsV1.1
 
 # Required only if atmospheric_method: flaash
@@ -49,9 +54,17 @@ cloud_mask_omnicloud_kwargs_json:
   - `reflectance = pixel_value / py6s_output_scale_factor`
 - WorldView IMD calibration is enabled by default (`py6s_use_imd_radiance_calibration: true`).
   - Uses IMD per-band `absCalFactor` and `effectiveBandwidth` for DN->radiance input to Py6S.
-  - Optional WV02/WV03 gain/offset table is controlled by `py6s_use_worldview_gain_offset_adjustment`.
-  - Default is `false` because these table adjustments can over-darken some scenes.
+  - WV02/WV03 gain/offset table is controlled by `py6s_use_worldview_gain_offset_adjustment`.
+  - Default is `true`.
   - Set `py6s_use_imd_radiance_calibration: false` to disable.
+- Optional NASA auto-atmosphere mode:
+  - `py6s_auto_atmos_source: nasa_power`
+  - intended for `py6s_atmosphere_profile: user`
+  - when `py6s_atmosphere_profile: user`, this auto-updates:
+    - `py6s_aot550`
+    - `py6s_water_vapor`
+    - `py6s_ozone`
+  - values are computed as bbox sample-grid mean on scene date (with configurable +/- day search).
 - `scratch_dir` is used for scene intermediates.
 - `output_dir` controls final scene output location.
 - `cloud_mask_method` currently supports `omnicloudmask`.

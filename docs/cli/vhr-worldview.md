@@ -51,7 +51,10 @@ vhr-worldview \
 - `--py6s-visibility`: optional visibility mode (km), used instead of `--py6s-aot550`
 - `--py6s-executable`: explicit path to 6S binary if not in `PATH`
 - `--py6s-use-imd-radiance-calibration` / `--no-py6s-use-imd-radiance-calibration`: toggle WorldView IMD-based DN->radiance before Py6S (default: enabled)
-- `--py6s-use-worldview-gain-offset-adjustment` / `--no-py6s-use-worldview-gain-offset-adjustment`: toggle built-in WV02/WV03 gain/offset table (default: disabled)
+- `--py6s-use-worldview-gain-offset-adjustment` / `--no-py6s-use-worldview-gain-offset-adjustment`: toggle built-in WV02/WV03 gain/offset table (default: enabled)
+- `--py6s-auto-atmos-source`: `none` or `nasa_power` auto-fetch for `aot550/water_vapor/ozone` when profile is `user`
+- `--py6s-auto-atmos-grid-size`: sample-grid size over scene bbox for NASA auto mode
+- `--py6s-auto-atmos-search-days`: +/- day search window for NASA auto mode
 - `--existing-mul-ortho-input` + `--existing-pan-ortho-input`: resume at pansharpen step
 - `--cloud-mask-method omnicloudmask`: run built-in cloud masking
 - `--cloud-mask-command`: run external command template on full-scene image
@@ -70,7 +73,7 @@ vhr-worldview \
 
 - By default, the workflow reads per-band `absCalFactor` and `effectiveBandwidth`
   from the scene IMD and computes radiance input for Py6S.
-- Optional: for WV02/WV03, a built-in Maxar gain/offset table can be applied:
+- For WV02/WV03, a built-in Maxar gain/offset table is applied by default:
   - `radiance = gain * (DN * absCalFactor / effectiveBandwidth) + offset`
 - By default, workflow uses `radiance = DN * (absCalFactor / effectiveBandwidth)`.
 
