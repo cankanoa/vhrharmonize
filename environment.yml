@@ -5,6 +5,8 @@ channels:
 dependencies:
   - python=3.10
   - gdal=3.10.2
+  - py6s
+  - sixs
   - rasterio
   - pdal
   - python-pdal

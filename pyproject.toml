@@ -6,7 +6,13 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["vhrharmonize"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vhrharmonize*"]
+
+[tool.setuptools.package-data]
+vhrharmonize = ["py.typed"]
 
 [project]
 name = "vhrharmonize"
@@ -42,6 +48,7 @@ dependencies = [
     "shapely==2.1.0",
     "pyforestscan",
     "pyyaml",
+    "Py6S",
 ]
 
 [project.optional-dependencies]
@@ -58,16 +65,43 @@ cloud = [
     "omnicloudmask"
 ]
 
+py6s = [
+    "Py6S"
+]
+
+spectralmatch = [
+    "spectralmatch"
+]
+
+elastix = [
+    "itk-elastix>=0.19.2"
+]
+
 docs = [
-    "mkdocs>=1.4.0",
+    "mkdocs>=1.6,<2.0",
     "mkdocs-material>=9.0.0",
     "mkdocs-jupyter>=0.24.0",
     "mkdocstrings>=0.21.0",
     "mkdocstrings-python>=0.10.0",
-    "mkdocs-git-revision-date-plugin>=0.3.3",
+    "mkdocs-git-revision-date-plugin>=0.3,<0.3.3; python_version < '3.11'",
+    "mkdocs-git-revision-date-plugin>=0.3.3; python_version >= '3.11'",
     "pymdown-extensions>=9.10"
+]
+
+all = [
+    "omnicloudmask",
+    "spectralmatch",
+    "itk-elastix>=0.19.2"
 ]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/cankanoa/vhrharmonize/issues"
 "Source" = "https://github.com/cankanoa/vhrharmonize"
+
+[project.scripts]
+vhr-worldview = "vhrharmonize.cli.worldview:main"
+vhr-fetch-modis-water-vapor = "vhrharmonize.cli.modis_water_vapor:main"
+vhr-cloudmask-raster = "vhrharmonize.cli.cloudmask:main"
+vhr-pansharpen-orthos = "vhrharmonize.cli.pansharpen:main"
+vhr-align-image-pair = "vhrharmonize.cli.align_image_pair:main"
+vhr-planet = "vhrharmonize.cli.planet:main"
