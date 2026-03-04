@@ -1,0 +1,381 @@
+"""Tile-aware pairwise alignment pipeline."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
+import rasterio
+from rasterio.enums import Resampling
+from rasterio.warp import reproject
+from rasterio.windows import Window, from_bounds
+
+from vhrharmonize.preprocess.registration import (
+    apply_elastix_transform,
+    estimate_elastix_transform,
+)
+
+
+@dataclass
+class AlignmentResult:
+    """Summary of pairwise alignment execution.
+
+    Attributes:
+        output_image_path: Final aligned image path.
+        total_tiles: Number of tile windows evaluated.
+        successful_tiles: Number of tiles successfully aligned and written.
+        skipped_tiles: Number of tiles skipped (for example low valid-data coverage).
+        temp_dir: Retained temporary directory path when ``keep_temp_dir=True``; otherwise ``None``.
+    """
+
+    output_image_path: str
+    total_tiles: int
+    successful_tiles: int
+    skipped_tiles: int
+    temp_dir: Optional[str]
+
+
+def _to_int_window(window: Window, max_width: int, max_height: int) -> Window:
+    col0 = max(0, int(np.floor(window.col_off)))
+    row0 = max(0, int(np.floor(window.row_off)))
+    col1 = min(max_width, int(np.ceil(window.col_off + window.width)))
+    row1 = min(max_height, int(np.ceil(window.row_off + window.height)))
+    return Window(col_off=col0, row_off=row0, width=max(0, col1 - col0), height=max(0, row1 - row0))
+
+
+def _expand_window(window: Window, buffer_px: int, max_width: int, max_height: int) -> Window:
+    expanded = Window(
+        col_off=window.col_off - buffer_px,
+        row_off=window.row_off - buffer_px,
+        width=window.width + (2 * buffer_px),
+        height=window.height + (2 * buffer_px),
+    )
+    return _to_int_window(expanded, max_width=max_width, max_height=max_height)
+
+
+def _iter_core_windows(width: int, height: int, tile_size: int) -> List[Window]:
+    windows: List[Window] = []
+    for row_off in range(0, height, tile_size):
+        for col_off in range(0, width, tile_size):
+            win_w = min(tile_size, width - col_off)
+            win_h = min(tile_size, height - row_off)
+            windows.append(Window(col_off=col_off, row_off=row_off, width=win_w, height=win_h))
+    return windows
+
+
+def _write_single_band_tif(
+    path: str,
+    data: np.ndarray,
+    *,
+    crs,
+    transform,
+    dtype: str,
+    nodata: Optional[float],
+) -> None:
+    profile = {
+        "driver": "GTiff",
+        "count": 1,
+        "height": int(data.shape[0]),
+        "width": int(data.shape[1]),
+        "dtype": dtype,
+        "crs": crs,
+        "transform": transform,
+        "nodata": nodata,
+        "compress": "lzw",
+    }
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(data, 1)
+
+
+def _resolve_nodata(src: rasterio.DatasetReader, override_nodata: Optional[float]) -> Optional[float]:
+    return override_nodata if override_nodata is not None else src.nodata
+
+
+def align_image_pair(
+    moving_image_path: str,
+    fixed_image_path: str,
+    output_image_path: str,
+    *,
+    band_index: int = 0,
+    tiling: bool = True,
+    tile_size: int = 1000,
+    tile_buffer: int = 100,
+    parameter_map: str = "rigid",
+    parameter_file_paths: Optional[List[str]] = None,
+    moving_nodata: Optional[float] = None,
+    fixed_nodata: Optional[float] = None,
+    output_nodata: Optional[float] = None,
+    min_valid_fraction: float = 0.01,
+    temp_dir: Optional[str] = None,
+    keep_temp_dir: bool = False,
+    log_to_console: bool = False,
+) -> AlignmentResult:
+    """Align a moving image onto a fixed image using elastix (tile-aware by default).
+
+    The default mode is buffered tile-wise registration for large rasters:
+    a transform is estimated per tile on a single selected band, then applied to
+    all moving-image bands, and cropped core tiles are written into the final mosaic.
+
+    Args:
+        moving_image_path: Path to moving image A (image to be warped).
+        fixed_image_path: Path to fixed/reference image B (target grid).
+        output_image_path: Path for final aligned output image.
+        band_index: 0-based band index used for registration metric.
+        tiling: If ``True``, run per-tile registration and mosaic. If ``False``,
+            run a single full-extent registration.
+        tile_size: Tile size in pixels when tiling is enabled.
+        tile_buffer: Tile overlap/buffer in pixels used during transform estimation.
+        parameter_map: Elastix default parameter map name when no parameter files are provided.
+        parameter_file_paths: Optional elastix parameter file path(s), used instead of
+            ``parameter_map`` when provided.
+        moving_nodata: Optional moving-image nodata override for mask generation.
+        fixed_nodata: Optional fixed-image nodata override for mask generation.
+        output_nodata: Optional output nodata override. Defaults to moving nodata,
+            then fixed nodata, else ``0``.
+        min_valid_fraction: Minimum valid-mask fraction required per tile to run registration.
+        temp_dir: Optional parent directory for temporary tile artifacts.
+        keep_temp_dir: If ``True``, keep temporary tile directory for inspection.
+        log_to_console: If ``True``, emit elastix/transformix logs to stdout.
+
+    Returns:
+        AlignmentResult summary with output path and tile-level counts.
+
+    Raises:
+        ValueError: If argument values are out of range or images are incompatible.
+    """
+    if band_index < 0:
+        raise ValueError("band_index must be >= 0 (0-based).")
+    if tile_size <= 0:
+        raise ValueError("tile_size must be > 0.")
+    if tile_buffer < 0:
+        raise ValueError("tile_buffer must be >= 0.")
+    if min_valid_fraction <= 0 or min_valid_fraction > 1:
+        raise ValueError("min_valid_fraction must be in (0, 1].")
+
+    temp_ctx = None
+    work_dir: str
+    if keep_temp_dir:
+        work_dir = tempfile.mkdtemp(prefix="vhr_align_", dir=temp_dir)
+    else:
+        temp_ctx = tempfile.TemporaryDirectory(prefix="vhr_align_", dir=temp_dir)
+        work_dir = temp_ctx.name
+
+    total_tiles = 0
+    success_tiles = 0
+    skipped_tiles = 0
+
+    with rasterio.open(fixed_image_path) as fixed_src, rasterio.open(moving_image_path) as moving_src:
+        band_1based = band_index + 1
+        if band_1based > fixed_src.count:
+            raise ValueError(f"Requested band_index={band_index}, but fixed image has {fixed_src.count} band(s).")
+        if band_1based > moving_src.count:
+            raise ValueError(f"Requested band_index={band_index}, but moving image has {moving_src.count} band(s).")
+        if fixed_src.crs is None or moving_src.crs is None:
+            raise ValueError("Both fixed and moving images must have CRS.")
+
+        moving_nodata_value = _resolve_nodata(moving_src, moving_nodata)
+        fixed_nodata_value = _resolve_nodata(fixed_src, fixed_nodata)
+        out_nodata = (
+            output_nodata
+            if output_nodata is not None
+            else moving_nodata_value
+            if moving_nodata_value is not None
+            else fixed_nodata_value
+            if fixed_nodata_value is not None
+            else 0
+        )
+
+        os.makedirs(os.path.dirname(output_image_path) or ".", exist_ok=True)
+        out_profile = fixed_src.profile.copy()
+        out_profile.update(
+            count=moving_src.count,
+            dtype=moving_src.dtypes[0],
+            nodata=out_nodata,
+            compress="lzw",
+        )
+
+        if tiling:
+            core_windows = _iter_core_windows(fixed_src.width, fixed_src.height, tile_size=tile_size)
+        else:
+            core_windows = [Window(0, 0, fixed_src.width, fixed_src.height)]
+
+        with rasterio.open(output_image_path, "w", **out_profile) as out_dst:
+            for b in range(1, moving_src.count + 1):
+                for _, block_window in out_dst.block_windows(b):
+                    fill = np.full(
+                        (int(block_window.height), int(block_window.width)),
+                        out_nodata,
+                        dtype=out_profile["dtype"],
+                    )
+                    out_dst.write(fill, b, window=block_window)
+
+            for tile_idx, core_fixed_window in enumerate(core_windows):
+                total_tiles += 1
+                fixed_window = _expand_window(
+                    core_fixed_window,
+                    buffer_px=tile_buffer if tiling else 0,
+                    max_width=fixed_src.width,
+                    max_height=fixed_src.height,
+                )
+                if fixed_window.width <= 0 or fixed_window.height <= 0:
+                    skipped_tiles += 1
+                    continue
+
+                fixed_bounds = fixed_src.window_bounds(fixed_window)
+                moving_window = _to_int_window(
+                    from_bounds(
+                        left=fixed_bounds[0],
+                        bottom=fixed_bounds[1],
+                        right=fixed_bounds[2],
+                        top=fixed_bounds[3],
+                        transform=moving_src.transform,
+                    ),
+                    max_width=moving_src.width,
+                    max_height=moving_src.height,
+                )
+                if moving_window.width <= 0 or moving_window.height <= 0:
+                    skipped_tiles += 1
+                    continue
+
+                fixed_band = fixed_src.read(band_1based, window=fixed_window)
+                moving_band = moving_src.read(band_1based, window=moving_window)
+                fixed_valid = fixed_src.read_masks(band_1based, window=fixed_window) > 0
+                moving_valid = moving_src.read_masks(band_1based, window=moving_window) > 0
+                if fixed_nodata_value is not None:
+                    fixed_valid &= fixed_band != fixed_nodata_value
+                if moving_nodata_value is not None:
+                    moving_valid &= moving_band != moving_nodata_value
+
+                moving_valid_reprojected = np.zeros(
+                    (int(fixed_window.height), int(fixed_window.width)),
+                    dtype=np.uint8,
+                )
+                reproject(
+                    source=moving_valid.astype(np.uint8),
+                    destination=moving_valid_reprojected,
+                    src_transform=moving_src.window_transform(moving_window),
+                    src_crs=moving_src.crs,
+                    dst_transform=fixed_src.window_transform(fixed_window),
+                    dst_crs=fixed_src.crs,
+                    src_nodata=0,
+                    dst_nodata=0,
+                    resampling=Resampling.nearest,
+                )
+
+                fixed_mask = (fixed_valid & (moving_valid_reprojected > 0)).astype(np.uint8)
+                moving_mask = moving_valid.astype(np.uint8)
+
+                min_valid_pixels = int(max(1, min_valid_fraction * (fixed_window.width * fixed_window.height)))
+                if int(fixed_mask.sum()) < min_valid_pixels:
+                    skipped_tiles += 1
+                    continue
+                if int(moving_mask.sum()) < min_valid_pixels:
+                    skipped_tiles += 1
+                    continue
+
+                tile_dir = os.path.join(work_dir, f"tile_{tile_idx:06d}")
+                os.makedirs(tile_dir, exist_ok=True)
+                fixed_reg_path = os.path.join(tile_dir, "fixed_reg.tif")
+                moving_reg_path = os.path.join(tile_dir, "moving_reg.tif")
+                fixed_mask_path = os.path.join(tile_dir, "fixed_mask.tif")
+                moving_mask_path = os.path.join(tile_dir, "moving_mask.tif")
+
+                _write_single_band_tif(
+                    fixed_reg_path,
+                    fixed_band.astype("float32"),
+                    crs=fixed_src.crs,
+                    transform=fixed_src.window_transform(fixed_window),
+                    dtype="float32",
+                    nodata=fixed_nodata_value,
+                )
+                _write_single_band_tif(
+                    moving_reg_path,
+                    moving_band.astype("float32"),
+                    crs=moving_src.crs,
+                    transform=moving_src.window_transform(moving_window),
+                    dtype="float32",
+                    nodata=moving_nodata_value,
+                )
+                _write_single_band_tif(
+                    fixed_mask_path,
+                    fixed_mask.astype("uint8"),
+                    crs=fixed_src.crs,
+                    transform=fixed_src.window_transform(fixed_window),
+                    dtype="uint8",
+                    nodata=0,
+                )
+                _write_single_band_tif(
+                    moving_mask_path,
+                    moving_mask.astype("uint8"),
+                    crs=moving_src.crs,
+                    transform=moving_src.window_transform(moving_window),
+                    dtype="uint8",
+                    nodata=0,
+                )
+
+                try:
+                    transform_parameter_object = estimate_elastix_transform(
+                        fixed_image_path=fixed_reg_path,
+                        moving_image_path=moving_reg_path,
+                        parameter_map=parameter_map,
+                        parameter_file_paths=parameter_file_paths,
+                        fixed_mask_path=fixed_mask_path,
+                        moving_mask_path=moving_mask_path,
+                        log_to_console=log_to_console,
+                    )
+                except Exception:
+                    skipped_tiles += 1
+                    continue
+
+                row0 = int(core_fixed_window.row_off - fixed_window.row_off)
+                col0 = int(core_fixed_window.col_off - fixed_window.col_off)
+                row1 = row0 + int(core_fixed_window.height)
+                col1 = col0 + int(core_fixed_window.width)
+                fixed_mask_core = fixed_mask[row0:row1, col0:col1] > 0
+
+                for b in range(1, moving_src.count + 1):
+                    moving_band_path = os.path.join(tile_dir, f"moving_band_{b:03d}.tif")
+                    moving_band_data = moving_src.read(b, window=moving_window)
+                    _write_single_band_tif(
+                        moving_band_path,
+                        moving_band_data.astype("float32"),
+                        crs=moving_src.crs,
+                        transform=moving_src.window_transform(moving_window),
+                        dtype="float32",
+                        nodata=moving_nodata_value,
+                    )
+
+                    transformed_band_path = os.path.join(tile_dir, f"warped_band_{b:03d}.tif")
+                    apply_elastix_transform(
+                        moving_image_path=moving_band_path,
+                        output_image_path=transformed_band_path,
+                        transform_parameter_object=transform_parameter_object,
+                        log_to_console=log_to_console,
+                    )
+                    with rasterio.open(transformed_band_path) as warped_src:
+                        warped_full = warped_src.read(1)
+                    warped_core = warped_full[row0:row1, col0:col1]
+                    warped_core = np.where(fixed_mask_core, warped_core, out_nodata)
+                    out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_fixed_window)
+
+                success_tiles += 1
+
+    if temp_ctx is not None:
+        temp_ctx.cleanup()
+        kept_temp = None
+    else:
+        kept_temp = work_dir
+
+    return AlignmentResult(
+        output_image_path=output_image_path,
+        total_tiles=total_tiles,
+        successful_tiles=success_tiles,
+        skipped_tiles=skipped_tiles,
+        temp_dir=kept_temp,
+    )
+
+
+__all__ = ["AlignmentResult", "align_image_pair"]
