@@ -1,34 +1,38 @@
-# High Resolution Satellite Imagery Pipeline
+# vhrharmonize
 
-Visit the Github repo [here](https://github.com/cankanoa/preprocess-high-resolution-satellite-imagery-pipeline).
+`vhrharmonize` is a Python library and CLI suite for preprocessing very high resolution (VHR) satellite imagery.
+Today, the tested and supported end-to-end workflow is WorldView; support for additional providers and sensors (for example, Planet) is being added.
 
-## Commands
+Core capabilities:
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+- Atmospheric correction
+- RPC orthorectification
+- Pansharpening
+- Optional cloud masking with OmniCloudMask
+- Metadata processing tools for automated workflows, including scene discovery
 
-## Project layout
+Primary execution path is the `vhr-worldview` CLI, which runs the full-scene workflow and writes final scene outputs.
 
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+## Documentation Map
 
+- Installation and environment setup: `Getting Started`
+- Operational command usage: `CLI`
+- YAML templates and settings: `Configuration`
+- End-to-end pipeline behavior: `Workflows`
+- Function-level module index: `API Reference`
 
-## Overview
-Very high-resolution satellite imagery greatly enhances conservation and environmental analyses by offering broad coverage and enabling useful methodologies. However, preprocessing is complex and time-consuming because radiometric and geometric distortions pose mosaicking and harmonizing challenges. This work presents an open-source library to processes raw Worldview satellite imagery into analysis-ready, mosaicked imagery. This result is spectrally matched, allowing direct comparison between images, enhancing land cover model training, and improving analyses that rely on spectral signatures. It is also aligned with reference data which allows for highly accurate co-registration and absolute geolocation accuracy.
+## Quick Command Preview
 
-The pipeline begins with atmospheric correction which mitigates scattering, absorption, and adjacency effects, converting digital numbers into reflectance. Next, orthorectification removes terrain distortions, corrects sensor geometry, aligns imagery with reference data, and ensures uniform scale. Next, pansharpening fuses multispectral and panchromatic data to enhance detail. Next, global histogram matching standardizes brightness and contrast across images, assuming overlapping areas have the same spectral signature. Next, local histogram matching refines these adjustments at a block level, producing smoother transitions. Lastly, seamlines are generated between images to minimize visual artifacts and the resulting images are merged into a seamless, tiled, analysis-ready mosaic.
+```bash
+vhr-worldview --help
+vhr-fetch-modis-water-vapor --help
+vhr-cloudmask-raster --help
+vhr-pansharpen-orthos --help
+```
 
-The mosaic is valuable for assessing land cover and land use (LCLU), detecting forest dynamics, assessing native species ranges, land managers, and other analyses of large spatial scales. The pipeline was developed and is being used to create seamless imagery of the Big Island to perform species-level forest mapping and estimate forest carbon.
-## Steps
-### Organize and create files and initialize variables
+## Project Structure
 
-### Atmospheric correction and convert to reflectance
-### Orthorectification with RPC refinement from GCPs
-### Pansharpening with higher resolution panchromatic band
-### Global histogram matching
-### Local histogram matching
-### Seamline creation and merging
+- `vhrharmonize/`: reusable Python package
+- `vhrharmonize/cli/`: packaged CLI implementations
+- `configs/`: current config templates
+- `docs/`: MkDocs source
