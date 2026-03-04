@@ -51,6 +51,12 @@ With elastix registration extras:
 pip install -e ".[elastix]"
 ```
 
+If you created your env from `environment.yml`, install elastix support separately:
+
+```bash
+pip install itk-elastix>=0.19.2
+```
+
 With docs extras:
 
 ```bash

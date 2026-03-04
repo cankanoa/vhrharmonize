@@ -27,3 +27,9 @@ output_suffix: _final
 
 cloud_mask_method: omnicloudmask
 cloud_buffer_pixels: 10
+# cloud_mask_omnicloud_kwargs_json:
+#   inference_device: cuda
+#   mosaic_device: cpu
+#   batch_size: 1
+#   patch_size: 768
+#   patch_overlap: 192

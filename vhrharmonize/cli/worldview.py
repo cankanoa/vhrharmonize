@@ -232,9 +232,15 @@ def _parse_int_csv(raw_values: str) -> List[int]:
     return parsed
 
 
-def _parse_json_dict(raw_json: Optional[str]) -> Dict:
-    if not raw_json:
+def _parse_json_dict(raw_json: Optional[object]) -> Dict:
+    if raw_json is None or raw_json == "":
         return {}
+    if isinstance(raw_json, dict):
+        return raw_json
+    if not isinstance(raw_json, str):
+        raise ValueError(
+            "Expected omnicloud kwargs as a JSON string or dictionary mapping."
+        )
     parsed = json.loads(raw_json)
     if not isinstance(parsed, dict):
         raise ValueError("Expected a JSON object for omnicloud kwargs.")

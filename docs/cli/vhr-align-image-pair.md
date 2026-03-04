@@ -11,6 +11,13 @@ Default behavior is tile-wise registration for large rasters:
 
 The transform is estimated per tile on a single selected band, then applied to all bands for output.
 
+## Requirements
+
+- `itk-elastix` installed (for example: `pip install -e ".[elastix]"`)
+- both rasters must have a defined CRS
+- both rasters must currently use the same CRS
+- both rasters should spatially overlap in that CRS
+
 ## Example
 
 ```bash

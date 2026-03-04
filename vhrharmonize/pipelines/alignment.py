@@ -175,6 +175,11 @@ def align_image_pair(
             raise ValueError(f"Requested band_index={band_index}, but moving image has {moving_src.count} band(s).")
         if fixed_src.crs is None or moving_src.crs is None:
             raise ValueError("Both fixed and moving images must have CRS.")
+        if fixed_src.crs != moving_src.crs:
+            raise ValueError(
+                "Fixed and moving images must share the same CRS for tile-window extraction. "
+                f"fixed={fixed_src.crs}, moving={moving_src.crs}"
+            )
 
         moving_nodata_value = _resolve_nodata(moving_src, moving_nodata)
         fixed_nodata_value = _resolve_nodata(fixed_src, fixed_nodata)

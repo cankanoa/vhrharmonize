@@ -81,9 +81,10 @@ vhr-worldview \
 
 ## Calibration References
 
-- Maxar / DigitalGlobe radiometric calibration update tables (WV2/WV3 gain/offset):
+- WorldView-3 DN->Radiance gain/offset table used in this workflow:
+  - https://docs.mcube.terradue.com/pre-processing/opt/worldview-3/
+- Additional WorldView radiometric technical notes:
   - https://nctec.co/wp-content/uploads/2018/01/2018_03_28_DigitalGlobe_Radiometric_Use_of_WorldView-2_Imagery_RevA.pdf
-- WorldView-3 radiometric use technical note:
   - https://dg-cms-uploads-production.s3.amazonaws.com/uploads/document/file/95/Radiometric_Use_of_WorldView-3_Imagery.pdf
 
 ## Validation Rules
