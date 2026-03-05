@@ -1,1 +1,84 @@
-site_name: My Docs
+site_name: vhrharmonize
+site_description: WorldView preprocessing library and CLI documentation
+site_url: https://example.com/vhrharmonize
+repo_url: https://github.com/cankanoa/vhrharmonize
+repo_name: cankanoa/vhrharmonize
+
+docs_dir: .
+site_dir: ../site
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - CLI:
+      - Overview: cli/overview.md
+      - vhr-worldview: cli/vhr-worldview.md
+      - vhr-fetch-modis-water-vapor: cli/vhr-fetch-modis-water-vapor.md
+      - vhr-cloudmask-raster: cli/vhr-cloudmask-raster.md
+      - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
+      - vhr-align-image-pair: cli/vhr-align-image-pair.md
+      - vhr-py6s: cli/vhr-py6s.md
+  - Configuration:
+      - WorldView Config: configuration/worldview-config.md
+  - Workflows:
+      - Full-Scene Workflow: workflows/full-scene-worldview.md
+      - Atmospheric Correction (Py6S): workflows/atmospheric-correction-py6s.md
+  - Architecture:
+      - Package Layout: architecture/package-layout.md
+  - API Reference:
+      - Overview: api/index.md
+      - preprocess.atmospheric_correction: api/preprocess-atmospheric-correction.md
+      - preprocess.orthorectification: api/preprocess-orthorectification.md
+      - preprocess.pansharpening: api/preprocess-pansharpening.md
+      - preprocess.cloudmasking: api/preprocess-cloudmasking.md
+      - preprocess.registration: api/preprocess-registration.md
+      - preprocess.tiling: api/preprocess-tiling.md
+      - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
+      - preprocess.data_preparation: api/data_prep.md
+      - io.geospatial: api/utils.md
+      - analysis.statistics: api/calculate_statistics.md
+      - providers.worldview.files: api/find_files.md
+      - providers.worldview.discover: api/providers-worldview-discover.md
+      - providers.worldview.metadata: api/providers-worldview-metadata.md
+      - pipelines.alignment: api/pipelines-alignment.md
+      - pipelines.worldview: api/pipelines-worldview.md
+      - pipelines.config: api/pipelines-config.md
+      - pipelines.scene: api/pipelines-scene.md
+  - Notes:
+      - FLAASH Tuning Findings: notes/flaash_tuning_findings.md
+      - FLAASH Params Info: flaash_params_info.txt
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_section_style: table
+            members_order: source
+            show_source: false
+            show_root_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            filters:
+              - "!^_"

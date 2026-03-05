@@ -18,6 +18,7 @@ def gcp_refined_rpc_orthorectification(
     dtype=None,
     output_resolution: Union[float, Tuple[float, float]]=None,
     ):
+    """Orthorectify an image using RPC metadata, with optional GCP-based RPC refinement."""
 
     # Set resolution of output raster
     if isinstance(output_resolution, float):
@@ -59,6 +60,7 @@ def gcp_refined_rpc_orthorectification(
 
     # Step 3: Update the temporary file
     temp_dataset = gdal.Open(temp_image_path, gdal.GA_Update)
+    input_dataset = gdal.Open(input_image_path, gdal.GA_ReadOnly)
 
     # Apply NoData value if specified (unconditionally)
     if output_nodata_value is not None:
@@ -87,9 +89,16 @@ def gcp_refined_rpc_orthorectification(
             "SAMP_DEN_COEFF": " ".join(map(str, camera.samp_den_coeff)),
         }
         temp_dataset.SetMetadata(refined_rpc_metadata, "RPC")
+    else:
+        # Preserve source RPC metadata for standard RPC orthorectification path.
+        if input_dataset is not None:
+            source_rpc_metadata = input_dataset.GetMetadata("RPC")
+            if source_rpc_metadata:
+                temp_dataset.SetMetadata(source_rpc_metadata, "RPC")
 
     # Close the dataset to write changes
     temp_dataset = None
+    input_dataset = None
 
     # Step 4: Perform orthorectification using GDAL Warp
     warp_options = gdal.WarpOptions(
@@ -102,14 +111,22 @@ def gcp_refined_rpc_orthorectification(
         resampleAlg="bilinear",
         copyMetadata=True,  # Copies metadata excluding original RPC
     )
-    gdal.Warp(
+    warp_result = gdal.Warp(
         destNameOrDestDS=output_image_path,
         srcDSOrSrcDSTab=temp_image_path,
         options=warp_options,
     )
+    if warp_result is None:
+        raise RuntimeError(
+            "GDAL Warp failed during orthorectification. "
+            "Check that the atmospheric-corrected input still contains valid RPC metadata."
+        )
+    warp_result = None
 
     # Step 3: Update the temporary file
     dataset = gdal.Open(output_image_path, gdal.GA_Update)
+    if dataset is None:
+        raise RuntimeError(f"Orthorectification output was not created: {output_image_path}")
 
     # Apply NoData value if specified (unconditionally)
     if output_nodata_value is not None:
@@ -214,6 +231,7 @@ def geo_to_image_coords(
     x,
     y
     ):
+    """Transform map coordinates into image pixel coordinates using dataset GCPs."""
 
     transform_options = ["METHOD=GCP_POLYNOMIAL"] # "METHOD=GCP_TPS" or "METHOD=GCP_POLYNOMIAL"
 
@@ -234,6 +252,7 @@ def qgis_gcps_to_geojson(
     output_geojson_path,
     force_positive_pixel_values=False
     ):
+    """Convert a QGIS GCP text file into Orthority-compatible GeoJSON control points."""
 
     geojson = {
         "type": "FeatureCollection",

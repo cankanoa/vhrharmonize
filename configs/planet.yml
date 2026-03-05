@@ -1,0 +1,9 @@
+# Planet pipeline scaffold config
+input_dir:
+  - /data/planet_scenes
+output_dir: /data/out/planet
+output_suffix: _final
+
+epsg: 4326
+nodata_value: -9999
+scratch_dir: /tmp

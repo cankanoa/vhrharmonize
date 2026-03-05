@@ -180,3 +180,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Generated run artifacts
+outputs/*.csv
+outputs/*.json
+
+# Local user config (copy from tracked example)
+configs/worldview.yml

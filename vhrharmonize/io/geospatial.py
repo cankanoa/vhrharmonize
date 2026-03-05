@@ -20,6 +20,7 @@ def convert_dn_to_radiance(
     offset,
     dtype=None
     ):
+    """Convert digital number pixels to radiance using per-band gain and offset."""
 
     ds = gdal.Open(input_image_path, gdal.GA_ReadOnly)
     if not ds:
@@ -69,6 +70,7 @@ def change_last_folder_and_add_suffix(
     filepath,
     suffix
     ):
+    """Rewrite path by replacing its last folder and appending suffix to filename."""
 
     # Normalize the path to remove any trailing slashes
     filepath = os.path.normpath(filepath)
@@ -106,6 +108,7 @@ def change_last_folder_and_add_suffix(
 def wsl_to_windows_path(
     path
     ):
+    """Convert a WSL-mounted Windows path into a native Windows path string."""
 
     wsl_pattern = r"^/mnt/([a-zA-Z])/(.*)$"
     windows_path = re.sub(wsl_pattern, r"\1:\\\2", path).replace("/", "\\")
@@ -114,6 +117,7 @@ def wsl_to_windows_path(
 def windows_to_wsl_path(
     path
     ):
+    """Convert a Windows path into its WSL `/mnt/<drive>/...` equivalent."""
 
     windows_pattern = r"^([a-zA-Z]):\\(.*)$"
     wsl_path = re.sub(windows_pattern, r"/mnt/\1/\2", path).replace("\\", "/")
@@ -589,6 +593,76 @@ def get_image_largest_value(
         )
 
     return float(largest_value)
+
+
+def get_image_percentile_value(
+    input_image_path,
+    percentile=50.0,
+    mask=None,
+    override_mask_crs_epsg=None,
+    ):
+
+    """
+    Get a percentile value from a raster image, optionally constrained by a vector mask.
+
+    Args:
+    input_image_path (str): Path to raster.
+    percentile (float): Percentile to compute (0-100). Default is 50 (median).
+    mask (str, optional): Vector mask path.
+    override_mask_crs_epsg (int, optional): Override EPSG for mask when needed.
+
+    Returns:
+    float: Percentile value from valid (non-nodata) raster pixels.
+    """
+    if percentile < 0 or percentile > 100:
+        raise ValueError("percentile must be between 0 and 100.")
+
+    with rasterio.open(input_image_path) as src:
+        nodata = src.nodata
+        collected = []
+
+        if mask:
+            mask_gdf = gpd.read_file(mask)
+
+            if mask_gdf.crs is None:
+                if override_mask_crs_epsg:
+                    mask_gdf.set_crs(epsg=override_mask_crs_epsg, inplace=True)
+                else:
+                    raise ValueError(
+                        f"Mask file '{mask}' has no CRS. You must specify 'override_mask_crs_epsg'."
+                    )
+            elif override_mask_crs_epsg:
+                mask_gdf = mask_gdf.to_crs(epsg=override_mask_crs_epsg)
+
+            geometries = [mapping(geom) for geom in mask_gdf.geometry]
+        else:
+            geometries = None
+
+        for i in range(1, src.count + 1):
+            if geometries:
+                band_array, _ = rasterio.mask.mask(src, geometries, indexes=i, filled=False)
+            else:
+                band_array = src.read(i, masked=True)
+
+            if nodata is not None:
+                band_array = np.ma.masked_equal(band_array, nodata)
+
+            if band_array.mask.all():
+                continue
+
+            valid = band_array.compressed() if np.ma.isMaskedArray(band_array) else band_array.ravel()
+            if valid.size:
+                collected.append(valid)
+
+    if not collected:
+        warnings.warn(
+            f"Warning: Percentile value in file '{input_image_path}' could not be found. "
+            "This could be because the mask is outside of the bounds of this image."
+        )
+        return float("nan")
+
+    values = np.concatenate(collected)
+    return float(np.percentile(values, percentile))
 
 
 def replace_band_continuous_values_in_largest_segment(

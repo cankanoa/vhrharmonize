@@ -1,4 +1,4 @@
-# vhrharmonize: automated open source library to preprocess and organize satellite imagery
+# vhrharmonize: VHR Satellite Imagery Preprocessing Library
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](#)
 
@@ -10,50 +10,87 @@
 
 ## Overview
 
-vhrharmonize is an open-source Python library designed to assist in preprocessing satellite imagery into analysis-ready data products. It provides ready-to-use functions for performing atmospheric correction, orthorectification, pansharpening, and Relative Radiometric Normalization (spectralharmonize). Alongside these core tools, it offers a standardized structure and automated pipeline to help process large volumes of imagery consistently and efficiently.
+`vhrharmonize` is an open-source Python library and CLI suite for preprocessing very high resolution (VHR) satellite imagery into analysis-ready products.
 
-The goal of vhrharmonize is to provide an automated, modular workflow for preprocessing satellite imagery—regardless of sensor or processing level—into spectrally and geometrically consistent outputs. With the goal of supporting a wide range of inputs for now it just supportss WorldView imagery.
+Current tested/supported end-to-end workflow: **WorldView**.  
+Additional providers and sensors (for example, Planet) are being added.
 
 ---
 
 ## Features
 
-- **End-to-End Processing:** Automated python scripts help to automate processing.
-- **Atmospheric Correction:** Uses ENVI's FLAASH to convert raw DNs into reflectance.
-- **GCP-Based Orthorectification:** Supports refined RPC correction using custom or QGIS GCPs.
-- **Pansharpening:** Fuses multispectral and panchromatic images for sharper detail.
-- **Batch-Friendly:** Automatically processes all images in a directory tree.
-- **Customizable:** Allows image filtering, metadata overrides, and DEM selection.
+- Atmospheric correction workflows (Py6S default, FLAASH optional backend)
+- RPC orthorectification
+- Pansharpening
+- Optional cloud masking with OmniCloudMask
+- Tile utilities and tile-aware pairwise alignment (elastix)
+- Batch scene discovery + metadata/override processing
+- CLI and library-first interfaces
 
 ---
 
 ## Installation
 
-### 1. Manual System Requirements
+### 1. Requirements
 
-- **ENVI ≥ 5.7** (for FLAASH and task engine support; with atmospheric correction module)
-- Optional: **QGIS** (for GCP creation)
+- Python `>=3.9` (3.11+ recommended)
+- GDAL-compatible environment
+- `6S` executable for Py6S workflows (default)
+- ENVI Task Engine only for FLAASH workflows
 
-### 2. Library System Requirements
-- **GDAL ≥ 3.4**
-- **Python ≥ 3.8**
+### 2. Create environment (example)
 
 ```bash
-conda create -n vhrharmonize python=3.10 "gdal=3.10.2" -c conda-forge
-conda activate spectralmatch
+conda create -n vhrharmonize python=3.11 -c conda-forge
+conda activate vhrharmonize
 ```
 
-### 3. Install the package
+### 3. Install package
 
 ```bash
-git clone https://github.com/yourusername/vhrharmonize.git
+git clone https://github.com/cankanoa/vhrharmonize.git
 cd vhrharmonize
 pip install -e .
 ```
 
+Optional extras:
+
+```bash
+pip install -e ".[cloud]"      # omnicloudmask
+pip install -e ".[elastix]"    # itk-elastix
+pip install -e ".[py6s]"       # backward-compat extra; Py6S is included in base install
+pip install -e ".[spectralmatch]"
+pip install -e ".[docs]"
+```
+
+For conda users, install 6S with:
+
+```bash
+mamba install -n vhrharmonize -c conda-forge py6s sixs
+```
+
 ## Getting Started
 
-To see how to run the full processing pipeline, start with the example script at 'docs/examples/worldview_b1.py'.
+For usage docs:
+
+- `docs/getting-started/quickstart.md`
+- `docs/cli/overview.md`
+
+Primary CLI commands:
+
+```bash
+vhr-worldview --help
+vhr-fetch-modis-water-vapor --help
+vhr-cloudmask-raster --help
+vhr-pansharpen-orthos --help
+vhr-align-image-pair --help
+```
+
+Docs site:
+
+```bash
+python -m mkdocs serve -f docs/mkdocs.yml
+```
 
 ## Contributing
 
@@ -68,4 +105,4 @@ We appreciate any feedback, suggestions, or pull requests to improve this projec
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE.md) for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
