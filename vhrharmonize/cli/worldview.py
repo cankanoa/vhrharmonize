@@ -675,6 +675,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                             cloud_classes=cloud_classes,
                             buffer_pixels=args.cloud_buffer_pixels,
                             omnicloud_kwargs=omnicloud_kwargs,
+                            inference_resolution_m=args.cloud_mask_inference_resolution_m,
                         )
                         cloud_mask_pixel_count = _count_mask_pixels(mask_output_path, mask_value=1)
                         print(f"Cloud mask pixels (value=1): {cloud_mask_pixel_count}")
@@ -748,6 +749,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                             "enabled": args.run_cloud_mask,
                             "method": args.cloud_mask_method,
                             "command": args.cloud_mask_command,
+                            "inference_resolution_m": args.cloud_mask_inference_resolution_m,
                             "classes": cloud_classes,
                             "buffer_pixels": args.cloud_buffer_pixels,
                             "kwargs": omnicloud_kwargs,
@@ -1037,6 +1039,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional binary dilation size in pixels applied around cloud mask regions.",
     )
     parser.add_argument(
+        "--cloud-mask-inference-resolution-m",
+        type=float,
+        default=10.0,
+        help=(
+            "Target map resolution for OmniCloudMask inference input (default: 10.0). "
+            "Mask is reprojected back to final output grid when applied."
+        ),
+    )
+    parser.add_argument(
         "--cloud-mask-omnicloud-kwargs-json",
         help='Optional JSON object passed directly to omnicloudmask predict_from_array, e.g. \'{"batch_size": 8}\'.',
     )
@@ -1112,6 +1123,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error(f"--scratch-dir does not exist or is not a directory: {args.scratch_dir}")
     if args.run_cloud_mask and args.cloud_mask_method and args.cloud_mask_command:
         parser.error("Use either --cloud-mask-method or --cloud-mask-command, not both.")
+    if args.cloud_mask_inference_resolution_m <= 0:
+        parser.error("--cloud-mask-inference-resolution-m must be > 0.")
     if args.py6s_auto_atmos_grid_size < 1:
         parser.error("--py6s-auto-atmos-grid-size must be >= 1.")
     if args.py6s_auto_atmos_search_days < 0:

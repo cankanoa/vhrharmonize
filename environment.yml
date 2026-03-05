@@ -3,25 +3,27 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.10
-  - gdal=3.10.2
-  - py6s
-  - sixs
-  - rasterio
-  - pdal
-  - python-pdal
-  - pyproj
+  - python=3.12
+  - gdal=3.12.*
+  - rasterio>=1.4.3
   - geopandas
   - shapely
+  - pyproj
   - numpy
   - scipy
   - matplotlib
   - requests
   - pyyaml
+  - py6s
+  - sixs
+  - omnicloudmask
+  - pdal
+  - python-pdal
   - pip
   - pip:
       - envipyengine==1.0.9
       - orthority==0.5.1
-      - omnicloudmask
+      - spectralmatch
+      - itk-elastix>=0.19.2
       - pyforestscan
       - earthengine-api

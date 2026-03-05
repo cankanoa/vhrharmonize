@@ -66,6 +66,7 @@ vhr-worldview \
 - `--run-pansharpen` / `--no-run-pansharpen`: enable/skip pansharpen stage
 - `--run-cloud-mask` / `--no-run-cloud-mask`: enable or skip cloud masking without editing YAML
 - `--cloud-mask-method omnicloudmask`: run built-in cloud masking
+- `--cloud-mask-inference-resolution-m`: resolution used for OmniCloudMask inference input (default `10.0`)
 - `--cloud-mask-command`: run external command template on full-scene image
 
 ## Py6S Output Units

@@ -45,6 +45,7 @@ run_pansharpen: true
 run_cloud_mask: true
 cloud_mask_method: omnicloudmask
 cloud_buffer_pixels: 10
+cloud_mask_inference_resolution_m: 10.0
 cloud_mask_omnicloud_kwargs_json:
   inference_device: cuda
   mosaic_device: cpu
@@ -80,6 +81,7 @@ cloud_mask_omnicloud_kwargs_json:
 - `run_cloud_mask` defaults to `true`; set to `false` to skip cloud masking without removing cloud settings.
 - `cloud_mask_method` currently supports `omnicloudmask`.
 - Built-in cloud masking always infers mask from orthorectified multispectral and applies it to current workflow output.
+- `cloud_mask_inference_resolution_m` defaults to `10.0` so OmniCloudMask runs at coarser resolution suited to the model, then the mask is reprojected back to the workflow output grid.
 - `cloud_mask_omnicloud_kwargs_json` accepts either:
   - a YAML mapping/dictionary (recommended in YAML config), or
   - a JSON string (same format used by CLI flag).

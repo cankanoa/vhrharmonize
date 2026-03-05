@@ -12,7 +12,7 @@ This describes the execution behavior of `vhr-worldview`.
    - run atmospheric correction (`py6s` default, `flaash` optional) when `run_atmospheric_correction: true`
    - orthorectify multispectral and panchromatic imagery
    - pansharpen when `run_pansharpen: true`
-   - optionally infer cloud mask from orthorectified MS and apply it to current workflow output
+   - optionally infer cloud mask from orthorectified MS (default inference at 10 m), then apply it to current workflow output
    - write final output in `output_dir`
 
 ## Output Model
