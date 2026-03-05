@@ -17,9 +17,21 @@ def _ensure_parent_dir(path: str) -> None:
 
 def _normalize_omnicloud_output(prediction: np.ndarray) -> np.ndarray:
     pred = np.asarray(prediction)
+    pred = np.squeeze(pred)
     if pred.ndim == 3:
-        # Support confidence/class-first output by taking argmax if needed.
-        pred = np.argmax(pred, axis=0)
+        # Class-probability cubes can be class-first or class-last.
+        # Keep singleton class dimensions as plain masks, otherwise reduce.
+        if pred.shape[0] == 1:
+            pred = pred[0]
+        elif pred.shape[-1] == 1:
+            pred = pred[..., 0]
+        elif np.issubdtype(pred.dtype, np.floating):
+            if pred.shape[0] <= pred.shape[-1]:
+                pred = np.argmax(pred, axis=0)
+            else:
+                pred = np.argmax(pred, axis=-1)
+        else:
+            raise ValueError(f"Unexpected 3D omnicloudmask output shape: {pred.shape}")
     if pred.ndim != 2:
         raise ValueError(f"Unexpected omnicloudmask output shape: {pred.shape}")
     return pred.astype(np.uint8)
