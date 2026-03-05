@@ -6,10 +6,16 @@ Runs full-scene WorldView preprocessing:
 2. Atmospheric correction (`flaash`, `py6s`, or `none`)
 3. Orthorectification (default RPC)
 4. Pansharpening
-5. Optional cloud masking (inferred from orthorectified MS by default, then applied to pansharpened output)
+5. Optional cloud masking (inferred from orthorectified MS and applied to current workflow output)
 6. Write final full-scene output
 
 ## Typical Usage
+
+Create local config first:
+
+```bash
+cp configs/worldview.example.yml configs/worldview.yml
+```
 
 ```bash
 vhr-worldview --config-yaml configs/worldview.yml
@@ -56,8 +62,10 @@ vhr-worldview \
 - `--py6s-auto-atmos-grid-size`: sample-grid size over scene bbox for NASA auto mode
 - `--py6s-auto-atmos-search-days`: +/- day search window for NASA auto mode
 - `--existing-mul-ortho-input` + `--existing-pan-ortho-input`: resume at pansharpen step
+- `--run-atmospheric-correction` / `--no-run-atmospheric-correction`: enable/skip atmospheric correction stage
+- `--run-pansharpen` / `--no-run-pansharpen`: enable/skip pansharpen stage
+- `--run-cloud-mask` / `--no-run-cloud-mask`: enable or skip cloud masking without editing YAML
 - `--cloud-mask-method omnicloudmask`: run built-in cloud masking
-- `--cloud-mask-source`: `orthorectified-ms` (default) or `pansharpened` for mask inference source
 - `--cloud-mask-command`: run external command template on full-scene image
 
 ## Py6S Output Units

@@ -9,10 +9,10 @@ This describes the execution behavior of `vhr-worldview`.
 3. Discover scenes from input directory structure (optional `Root*.txt` overrides)
 4. Read scene/photo metadata and overrides
 5. For each scene:
-   - run atmospheric correction (`py6s` default, `flaash` optional) or reuse existing atmospheric/ortho inputs
+   - run atmospheric correction (`py6s` default, `flaash` optional) when `run_atmospheric_correction: true`
    - orthorectify multispectral and panchromatic imagery
-   - pansharpen
-   - optionally infer cloud mask from orthorectified MS (default) and apply it to final pansharpened scene
+   - pansharpen when `run_pansharpen: true`
+   - optionally infer cloud mask from orthorectified MS and apply it to current workflow output
    - write final output in `output_dir`
 
 ## Output Model

@@ -2,7 +2,11 @@
 
 ## 1. Start from the default config
 
-Use the template at `configs/worldview.yml` and adjust paths for your machine.
+Create a local config from the tracked template, then adjust paths for your machine.
+
+```bash
+cp configs/worldview.example.yml configs/worldview.yml
+```
 
 ## 2. Run full-scene preprocessing
 

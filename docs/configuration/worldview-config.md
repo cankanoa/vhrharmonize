@@ -1,6 +1,12 @@
-# WorldView Config (`configs/worldview.yml`)
+# WorldView Config (`configs/worldview.example.yml`)
 
-This is the primary config template for `vhr-worldview`.
+`configs/worldview.example.yml` is the tracked template for `vhr-worldview`.
+
+Create your local config first:
+
+```bash
+cp configs/worldview.example.yml configs/worldview.yml
+```
 
 ## Example
 
@@ -34,8 +40,10 @@ scratch_dir: /mnt/d/test_data/scratch
 output_dir: /mnt/d/test_data/out/scenes
 output_suffix: _final
 
+run_atmospheric_correction: true
+run_pansharpen: true
+run_cloud_mask: true
 cloud_mask_method: omnicloudmask
-cloud_mask_source: orthorectified-ms
 cloud_buffer_pixels: 10
 cloud_mask_omnicloud_kwargs_json:
   inference_device: cuda
@@ -67,8 +75,11 @@ cloud_mask_omnicloud_kwargs_json:
   - values are computed as bbox sample-grid mean on scene date (with configurable +/- day search).
 - `scratch_dir` is used for scene intermediates.
 - `output_dir` controls final scene output location.
+- `run_atmospheric_correction` defaults to `true`; set to `false` to skip atmospheric correction.
+- `run_pansharpen` defaults to `true`; set to `false` to stop at orthorectified multispectral output.
+- `run_cloud_mask` defaults to `true`; set to `false` to skip cloud masking without removing cloud settings.
 - `cloud_mask_method` currently supports `omnicloudmask`.
-- `cloud_mask_source` defaults to `orthorectified-ms` to reduce cloudmask compute; mask is reprojected and applied to the pansharpened final image.
+- Built-in cloud masking always infers mask from orthorectified multispectral and applies it to current workflow output.
 - `cloud_mask_omnicloud_kwargs_json` accepts either:
   - a YAML mapping/dictionary (recommended in YAML config), or
   - a JSON string (same format used by CLI flag).

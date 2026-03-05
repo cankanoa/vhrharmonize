@@ -321,6 +321,17 @@ def _write_scene_metadata_report(report_path: str, payload: Dict) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
+def _count_mask_pixels(mask_path: str, mask_value: int = 1) -> int:
+    import rasterio
+
+    count = 0
+    with rasterio.open(mask_path) as src:
+        for _, window in src.block_windows(1):
+            block = src.read(1, window=window)
+            count += int((block == mask_value).sum())
+    return count
+
+
 def run_workflow(args: argparse.Namespace) -> int:
     """Run full-scene WorldView preprocessing for one or more input directories."""
     from vhrharmonize.providers.worldview.files import (
@@ -338,15 +349,20 @@ def run_workflow(args: argparse.Namespace) -> int:
     from vhrharmonize.io.geospatial import shp_to_gpkg
 
     filter_basenames = _parse_filter_basenames(args.filter_basename)
-    use_existing_ortho_inputs = bool(
-        args.existing_mul_ortho_input and args.existing_pan_ortho_input
-    )
+    use_existing_mul_ortho = bool(args.existing_mul_ortho_input)
+    use_existing_pan_ortho = bool(args.existing_pan_ortho_input)
+    use_existing_ortho_inputs = bool(use_existing_mul_ortho and use_existing_pan_ortho)
     cloud_classes = _parse_int_csv(args.cloud_mask_classes)
     omnicloud_kwargs = _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
     os.makedirs(args.output_dir, exist_ok=True)
 
     envi_engine = None
-    if args.atmospheric_method == "flaash" and not args.skip_flaash and not use_existing_ortho_inputs:
+    if (
+        args.run_atmospheric_correction
+        and args.atmospheric_method == "flaash"
+        and not args.skip_flaash
+        and not use_existing_ortho_inputs
+    ):
         envi_engine = _init_envi_engine(args.envi_engine_path)
 
     for input_folder in args.input_dir:
@@ -390,12 +406,24 @@ def run_workflow(args: argparse.Namespace) -> int:
                     py6s_effective_params = None
                     py6s_auto_atmos_estimate = None
                     mask_output_path = None
+                    cloud_mask_pixel_count = None
                     masked_image_output_path = None
                     ortho_folder_name = "OrthoFromDefaultRPC"
-                    if use_existing_ortho_inputs:
-                        print("Using existing orthorectified inputs; skipping FLAASH and orthorectification")
+                    if args.run_atmospheric_correction:
+                        if args.atmospheric_method == "py6s":
+                            atmos_label = "PY6S"
+                        elif args.atmospheric_method == "flaash":
+                            atmos_label = "FLAASH"
+                        else:
+                            atmos_label = "RAW"
+                    else:
+                        atmos_label = "RAW"
+                    if use_existing_mul_ortho:
+                        print("Using existing orthorectified multispectral input")
                         mul_flaash_ortho_path = args.existing_mul_ortho_input
-                        pan_ortho_path = args.existing_pan_ortho_input
+                        if args.run_pansharpen:
+                            print("Using existing orthorectified panchromatic input")
+                            pan_ortho_path = args.existing_pan_ortho_input
                     else:
                         print("Creating footprint GeoPackage for atmospheric terrain statistics")
                         mul_gpkg_path = os.path.join(work_dir, f"{mul_photo_basename}.gpkg")
@@ -410,154 +438,157 @@ def run_workflow(args: argparse.Namespace) -> int:
                         )
                         ground_elevation_km = ground_elevation_m / 1000.0
 
-                        if args.atmospheric_method == "none":
-                            mul_flaash_input_path = mul_tif_file
-                        elif args.atmospheric_method == "flaash" and args.skip_flaash:
-                            mul_flaash_input_path = args.existing_flaash_input
-                        elif args.atmospheric_method == "flaash":
-                            mul_flaash_image_path = os.path.join(work_dir, f"{mul_photo_basename}_FLAASH.dat")
-                            mul_flaash_params_path = os.path.join(work_dir, f"{mul_photo_basename}_FLAASH_Params.txt")
-                            print("Running FLAASH")
-                            flaash_params = _build_flaash_params(
-                                mul_tif_file,
-                                args.dem_file_path,
-                                mul_gpkg_path,
-                                mul_imd_data,
-                                mul_flaash_image_path,
-                                dem_ground_percentile=args.flaash_dem_ground_percentile,
-                                modtran_atm=args.flaash_modtran_atm,
-                                modtran_aer=args.flaash_modtran_aer,
-                                use_aerosol=args.flaash_use_aerosol,
-                                default_visibility=args.flaash_default_visibility,
-                            )
-                            if params_overrides_scene is not None:
-                                flaash_params.update(params_overrides_scene)
-                            if mul_params_overrides_photo is not None:
-                                flaash_params.update(mul_params_overrides_photo)
-                            flaash_params = {k: v for k, v in flaash_params.items() if v is not None}
-                            flaash_params_for_envi = _convert_flaash_params_paths_for_windows(flaash_params)
-                            run_flaash(
-                                flaash_params_for_envi,
-                                mul_flaash_params_path,
-                                envi_engine,
-                                mul_flaash_image_path,
-                            )
-                            if not os.path.exists(mul_flaash_image_path):
-                                print(
-                                    "Skipping scene: FLAASH did not produce output. "
-                                    "Check ENVI path handling and FLAASH parameters."
+                        mul_flaash_input_path = mul_tif_file
+                        if args.run_atmospheric_correction:
+                            if args.atmospheric_method == "none":
+                                mul_flaash_input_path = mul_tif_file
+                            elif args.atmospheric_method == "flaash" and args.skip_flaash:
+                                mul_flaash_input_path = args.existing_flaash_input
+                            elif args.atmospheric_method == "flaash":
+                                mul_flaash_image_path = os.path.join(work_dir, f"{mul_photo_basename}_FLAASH.dat")
+                                mul_flaash_params_path = os.path.join(work_dir, f"{mul_photo_basename}_FLAASH_Params.txt")
+                                print("Running FLAASH")
+                                flaash_params = _build_flaash_params(
+                                    mul_tif_file,
+                                    args.dem_file_path,
+                                    mul_gpkg_path,
+                                    mul_imd_data,
+                                    mul_flaash_image_path,
+                                    dem_ground_percentile=args.flaash_dem_ground_percentile,
+                                    modtran_atm=args.flaash_modtran_atm,
+                                    modtran_aer=args.flaash_modtran_aer,
+                                    use_aerosol=args.flaash_use_aerosol,
+                                    default_visibility=args.flaash_default_visibility,
                                 )
-                                continue
-                            mul_flaash_input_path = mul_flaash_image_path
-                        else:
-                            print("Running Py6S atmospheric correction")
-                            mul_py6s_image_path = os.path.join(work_dir, f"{mul_photo_basename}_PY6S.tif")
-                            auto_aot550 = args.py6s_aot550
-                            auto_water_vapor = args.py6s_water_vapor
-                            auto_ozone = args.py6s_ozone
-                            if (
-                                args.py6s_auto_atmos_source == "nasa_power"
-                                and args.py6s_atmosphere_profile.strip().lower() == "user"
-                            ):
-                                try:
-                                    from vhrharmonize.preprocess.atmosphere_nasa import (
-                                        fetch_power_atmosphere_for_bbox,
+                                if params_overrides_scene is not None:
+                                    flaash_params.update(params_overrides_scene)
+                                if mul_params_overrides_photo is not None:
+                                    flaash_params.update(mul_params_overrides_photo)
+                                flaash_params = {k: v for k, v in flaash_params.items() if v is not None}
+                                flaash_params_for_envi = _convert_flaash_params_paths_for_windows(flaash_params)
+                                run_flaash(
+                                    flaash_params_for_envi,
+                                    mul_flaash_params_path,
+                                    envi_engine,
+                                    mul_flaash_image_path,
+                                )
+                                if not os.path.exists(mul_flaash_image_path):
+                                    print(
+                                        "Skipping scene: FLAASH did not produce output. "
+                                        "Check ENVI path handling and FLAASH parameters."
                                     )
+                                    continue
+                                mul_flaash_input_path = mul_flaash_image_path
+                            else:
+                                print("Running Py6S atmospheric correction")
+                                mul_py6s_image_path = os.path.join(work_dir, f"{mul_photo_basename}_PY6S.tif")
+                                auto_aot550 = args.py6s_aot550
+                                auto_water_vapor = args.py6s_water_vapor
+                                auto_ozone = args.py6s_ozone
+                                if (
+                                    args.py6s_auto_atmos_source == "nasa_power"
+                                    and args.py6s_atmosphere_profile.strip().lower() == "user"
+                                ):
+                                    try:
+                                        from vhrharmonize.preprocess.atmosphere_nasa import (
+                                            fetch_power_atmosphere_for_bbox,
+                                        )
 
-                                    scene_dt = _resolve_scene_datetime(mul_imd_data, mul_photo_basename)
-                                    min_lon, min_lat, max_lon, max_lat = _scene_bbox_wgs84_from_shp(mul_shp_path)
-                                    estimate = fetch_power_atmosphere_for_bbox(
-                                        day_utc=scene_dt.date(),
-                                        min_lon=min_lon,
-                                        min_lat=min_lat,
-                                        max_lon=max_lon,
-                                        max_lat=max_lat,
-                                        grid_size=args.py6s_auto_atmos_grid_size,
-                                        search_days=args.py6s_auto_atmos_search_days,
-                                        timeout_s=args.py6s_auto_atmos_timeout_s,
-                                        endpoint=args.py6s_auto_atmos_power_endpoint,
-                                    )
-                                    if estimate.aot550 is not None:
-                                        auto_aot550 = float(estimate.aot550)
-                                    if estimate.water_vapor is not None:
-                                        auto_water_vapor = float(estimate.water_vapor)
-                                    if estimate.ozone_cm_atm is not None:
-                                        auto_ozone = float(estimate.ozone_cm_atm)
-                                    py6s_auto_atmos_estimate = {
-                                        "source": estimate.source,
-                                        "date_used": estimate.date_used,
-                                        "sample_count": estimate.sample_count,
-                                        "aot550": estimate.aot550,
-                                        "water_vapor": estimate.water_vapor,
-                                        "ozone_cm_atm": estimate.ozone_cm_atm,
-                                    }
-                                    print(
-                                        "Auto-updated Py6S atmosphere from NASA POWER "
-                                        f"(date={estimate.date_used}, samples={estimate.sample_count}): "
-                                        f"aot550={auto_aot550:.4f}, water_vapor={auto_water_vapor:.4f}, ozone={auto_ozone:.4f}"
-                                    )
-                                except Exception as exc:
-                                    print(
-                                        "Warning: failed to auto-fetch atmosphere from NASA POWER; "
-                                        f"using configured values. ({exc})"
-                                    )
-                                    py6s_auto_atmos_estimate = {"error": str(exc)}
-                            py6s_kwargs = _build_py6s_kwargs(
-                                mul_imd_data,
-                                mul_photo_basename,
-                                ground_elevation_km=ground_elevation_km,
-                                atmosphere_profile=args.py6s_atmosphere_profile,
-                                aerosol_profile=args.py6s_aerosol_profile,
-                                aot550=auto_aot550,
-                                visibility_km=args.py6s_visibility,
-                                water_vapor=auto_water_vapor,
-                                ozone=auto_ozone,
-                                sixs_executable=args.py6s_executable,
-                                output_scale_factor=args.py6s_output_scale_factor,
-                                output_dtype=args.py6s_output_dtype,
-                                use_imd_radiance_calibration=args.py6s_use_imd_radiance_calibration,
-                                use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
-                            )
-                            py6s_effective_params = {
-                                "atmosphere_profile": args.py6s_atmosphere_profile,
-                                "aerosol_profile": args.py6s_aerosol_profile,
-                                "aot550": auto_aot550,
-                                "visibility_km": args.py6s_visibility,
-                                "water_vapor": auto_water_vapor,
-                                "ozone": auto_ozone,
-                                "output_scale_factor": args.py6s_output_scale_factor,
-                                "output_dtype": args.py6s_output_dtype,
-                                "use_imd_radiance_calibration": args.py6s_use_imd_radiance_calibration,
-                                "use_worldview_gain_offset_adjustment": args.py6s_use_worldview_gain_offset_adjustment,
-                                "auto_atmos_source": args.py6s_auto_atmos_source,
-                            }
-                            if "dn_to_radiance_factors" in py6s_kwargs:
-                                sensor_id = mul_imd_data.get("sensor_id")
-                                version = mul_imd_data.get("worldview_radiometric_adjustment_version")
-                                if version and args.py6s_use_worldview_gain_offset_adjustment:
-                                    print(
-                                        "Using WorldView IMD radiometric calibration "
-                                        f"(absCal/EBW + gain/offset {version}, sensor={sensor_id})"
-                                    )
-                                else:
-                                    print(
-                                        "Using WorldView IMD radiometric calibration "
-                                        "(absCal/EBW only; no gain/offset table available)"
-                                    )
-                            atmospheric_correction(
-                                mul_tif_file,
-                                mul_py6s_image_path,
-                                method="py6s",
-                                **py6s_kwargs,
-                            )
-                            mul_flaash_input_path = mul_py6s_image_path
+                                        scene_dt = _resolve_scene_datetime(mul_imd_data, mul_photo_basename)
+                                        min_lon, min_lat, max_lon, max_lat = _scene_bbox_wgs84_from_shp(mul_shp_path)
+                                        estimate = fetch_power_atmosphere_for_bbox(
+                                            day_utc=scene_dt.date(),
+                                            min_lon=min_lon,
+                                            min_lat=min_lat,
+                                            max_lon=max_lon,
+                                            max_lat=max_lat,
+                                            grid_size=args.py6s_auto_atmos_grid_size,
+                                            search_days=args.py6s_auto_atmos_search_days,
+                                            timeout_s=args.py6s_auto_atmos_timeout_s,
+                                            endpoint=args.py6s_auto_atmos_power_endpoint,
+                                        )
+                                        if estimate.aot550 is not None:
+                                            auto_aot550 = float(estimate.aot550)
+                                        if estimate.water_vapor is not None:
+                                            auto_water_vapor = float(estimate.water_vapor)
+                                        if estimate.ozone_cm_atm is not None:
+                                            auto_ozone = float(estimate.ozone_cm_atm)
+                                        py6s_auto_atmos_estimate = {
+                                            "source": estimate.source,
+                                            "date_used": estimate.date_used,
+                                            "sample_count": estimate.sample_count,
+                                            "aot550": estimate.aot550,
+                                            "water_vapor": estimate.water_vapor,
+                                            "ozone_cm_atm": estimate.ozone_cm_atm,
+                                        }
+                                        print(
+                                            "Auto-updated Py6S atmosphere from NASA POWER "
+                                            f"(date={estimate.date_used}, samples={estimate.sample_count}): "
+                                            f"aot550={auto_aot550:.4f}, water_vapor={auto_water_vapor:.4f}, ozone={auto_ozone:.4f}"
+                                        )
+                                    except Exception as exc:
+                                        print(
+                                            "Warning: failed to auto-fetch atmosphere from NASA POWER; "
+                                            f"using configured values. ({exc})"
+                                        )
+                                        py6s_auto_atmos_estimate = {"error": str(exc)}
+                                py6s_kwargs = _build_py6s_kwargs(
+                                    mul_imd_data,
+                                    mul_photo_basename,
+                                    ground_elevation_km=ground_elevation_km,
+                                    atmosphere_profile=args.py6s_atmosphere_profile,
+                                    aerosol_profile=args.py6s_aerosol_profile,
+                                    aot550=auto_aot550,
+                                    visibility_km=args.py6s_visibility,
+                                    water_vapor=auto_water_vapor,
+                                    ozone=auto_ozone,
+                                    sixs_executable=args.py6s_executable,
+                                    output_scale_factor=args.py6s_output_scale_factor,
+                                    output_dtype=args.py6s_output_dtype,
+                                    use_imd_radiance_calibration=args.py6s_use_imd_radiance_calibration,
+                                    use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
+                                )
+                                py6s_effective_params = {
+                                    "atmosphere_profile": args.py6s_atmosphere_profile,
+                                    "aerosol_profile": args.py6s_aerosol_profile,
+                                    "aot550": auto_aot550,
+                                    "visibility_km": args.py6s_visibility,
+                                    "water_vapor": auto_water_vapor,
+                                    "ozone": auto_ozone,
+                                    "output_scale_factor": args.py6s_output_scale_factor,
+                                    "output_dtype": args.py6s_output_dtype,
+                                    "use_imd_radiance_calibration": args.py6s_use_imd_radiance_calibration,
+                                    "use_worldview_gain_offset_adjustment": args.py6s_use_worldview_gain_offset_adjustment,
+                                    "auto_atmos_source": args.py6s_auto_atmos_source,
+                                }
+                                if "dn_to_radiance_factors" in py6s_kwargs:
+                                    sensor_id = mul_imd_data.get("sensor_id")
+                                    version = mul_imd_data.get("worldview_radiometric_adjustment_version")
+                                    if version and args.py6s_use_worldview_gain_offset_adjustment:
+                                        print(
+                                            "Using WorldView IMD radiometric calibration "
+                                            f"(absCal/EBW + gain/offset {version}, sensor={sensor_id})"
+                                        )
+                                    else:
+                                        print(
+                                            "Using WorldView IMD radiometric calibration "
+                                            "(absCal/EBW only; no gain/offset table available)"
+                                        )
+                                atmospheric_correction(
+                                    mul_tif_file,
+                                    mul_py6s_image_path,
+                                    method="py6s",
+                                    **py6s_kwargs,
+                                )
+                                mul_flaash_input_path = mul_py6s_image_path
+                        else:
+                            print("Skipping atmospheric correction")
 
                         print("Using default RPC model for orthorectification (no GCP refinement)")
-
                         print("Orthorectifying multispectral image")
                         mul_flaash_ortho_path = os.path.join(
                             work_dir,
-                            f"{mul_photo_basename}_FLAASH_{ortho_folder_name}.tif",
+                            f"{mul_photo_basename}_{atmos_label}_{ortho_folder_name}.tif",
                         )
                         gcp_refined_rpc_orthorectification(
                             mul_flaash_input_path,
@@ -572,70 +603,69 @@ def run_workflow(args: argparse.Namespace) -> int:
                             ),
                         )
 
-                        print("Orthorectifying panchromatic image")
-                        pan_ortho_path = os.path.join(
-                            work_dir,
-                            f"{pan_photo_basename}_{ortho_folder_name}.tif",
-                        )
-                        gcp_refined_rpc_orthorectification(
-                            pan_tif_file,
-                            pan_ortho_path,
-                            args.dem_file_path,
-                            args.epsg,
-                            output_nodata_value=args.nodata_value,
-                            dtype=args.dtype,
-                            output_resolution=_resolve_output_resolution_for_epsg(
+                        if args.run_pansharpen:
+                            print("Orthorectifying panchromatic image")
+                            pan_ortho_path = os.path.join(
+                                work_dir,
+                                f"{pan_photo_basename}_{ortho_folder_name}.tif",
+                            )
+                            gcp_refined_rpc_orthorectification(
+                                pan_tif_file,
+                                pan_ortho_path,
+                                args.dem_file_path,
                                 args.epsg,
-                                pan_imd_data.get("product_res"),
-                            ),
-                        )
+                                output_nodata_value=args.nodata_value,
+                                dtype=args.dtype,
+                                output_resolution=_resolve_output_resolution_for_epsg(
+                                    args.epsg,
+                                    pan_imd_data.get("product_res"),
+                                ),
+                            )
 
-                    print("Pansharpening multispectral image")
-                    mul_pansharp_path = os.path.join(
-                        work_dir,
-                        f"{mul_photo_basename}_FLAASH_{ortho_folder_name}_Pansharps.tif",
-                    )
-                    pansharpen_image(
-                        mul_flaash_ortho_path,
-                        pan_ortho_path,
-                        mul_pansharp_path,
-                        change_nodata_value=args.nodata_value,
-                    )
+                    if not args.run_pansharpen:
+                        print("Skipping pansharpen step")
+                        final_scene_path = mul_flaash_ortho_path
+                    else:
+                        print("Pansharpening multispectral image")
+                        mul_pansharp_path = os.path.join(
+                            work_dir,
+                            f"{mul_photo_basename}_{atmos_label}_{ortho_folder_name}_Pansharps.tif",
+                        )
+                        pansharpen_image(
+                            mul_flaash_ortho_path,
+                            pan_ortho_path,
+                            mul_pansharp_path,
+                            change_nodata_value=args.nodata_value,
+                        )
+                        final_scene_path = mul_pansharp_path
 
                     print("Writing final scene output")
-                    final_scene_path = mul_pansharp_path
 
-                    if args.cloud_mask_command:
+                    if args.run_cloud_mask and args.cloud_mask_command:
                         cloud_mask_output_path = _build_cloud_mask_output_path(
-                            mul_pansharp_path,
+                            final_scene_path,
                             args.cloud_mask_output_suffix,
                         )
                         _run_cloud_mask_command(
                             args.cloud_mask_command,
-                            mul_pansharp_path,
+                            final_scene_path,
                             cloud_mask_output_path,
                             root_folder_path,
                             mul_photo_basename,
                         )
                         final_scene_path = cloud_mask_output_path
 
-                    if args.cloud_mask_method == "omnicloudmask":
-                        if args.cloud_mask_source == "orthorectified-ms":
-                            cloud_mask_input_path = mul_flaash_ortho_path
-                        else:
-                            cloud_mask_input_path = mul_pansharp_path
+                    if args.run_cloud_mask and args.cloud_mask_method == "omnicloudmask":
+                        cloud_mask_input_path = mul_flaash_ortho_path
                         mask_output_path = _build_cloud_mask_output_path(
-                            mul_pansharp_path,
+                            final_scene_path,
                             args.cloud_mask_mask_suffix,
                         )
                         masked_image_output_path = _build_cloud_mask_output_path(
-                            mul_pansharp_path,
+                            final_scene_path,
                             args.cloud_mask_output_suffix,
                         )
-                        print(
-                            "Running built-in OmniCloudMask cloud masking "
-                            f"on {'orthorectified multispectral' if args.cloud_mask_source == 'orthorectified-ms' else 'pansharpened'} image"
-                        )
+                        print("Running built-in OmniCloudMask cloud masking on orthorectified multispectral image")
                         create_cloud_mask_with_omnicloudmask(
                             cloud_mask_input_path,
                             mask_output_path,
@@ -646,14 +676,18 @@ def run_workflow(args: argparse.Namespace) -> int:
                             buffer_pixels=args.cloud_buffer_pixels,
                             omnicloud_kwargs=omnicloud_kwargs,
                         )
+                        cloud_mask_pixel_count = _count_mask_pixels(mask_output_path, mask_value=1)
+                        print(f"Cloud mask pixels (value=1): {cloud_mask_pixel_count}")
                         apply_binary_cloud_mask_to_image(
-                            mul_pansharp_path,
+                            final_scene_path,
                             mask_output_path,
                             masked_image_output_path,
                             output_nodata_value=args.nodata_value,
                             allow_mask_reprojection=True,
                         )
                         final_scene_path = masked_image_output_path
+                    elif not args.run_cloud_mask:
+                        print("Skipping cloud masking")
 
                     scene_output_filename = f"{mul_photo_basename}{args.output_suffix}.tif"
                     scene_output_path = os.path.join(args.output_dir, scene_output_filename)
@@ -684,6 +718,9 @@ def run_workflow(args: argparse.Namespace) -> int:
                         },
                         "workflow": {
                             "atmospheric_method": args.atmospheric_method,
+                            "run_atmospheric_correction": args.run_atmospheric_correction,
+                            "run_pansharpen": args.run_pansharpen,
+                            "run_cloud_mask": args.run_cloud_mask,
                             "epsg": args.epsg,
                             "nodata_value": args.nodata_value,
                             "dtype": args.dtype,
@@ -708,13 +745,18 @@ def run_workflow(args: argparse.Namespace) -> int:
                             "auto_atmos_estimate": py6s_auto_atmos_estimate,
                         },
                         "cloud_mask": {
+                            "enabled": args.run_cloud_mask,
                             "method": args.cloud_mask_method,
-                            "source": args.cloud_mask_source,
                             "command": args.cloud_mask_command,
                             "classes": cloud_classes,
                             "buffer_pixels": args.cloud_buffer_pixels,
                             "kwargs": omnicloud_kwargs,
                             "mask_output_path": mask_output_path,
+                            "mask_pixel_count": (
+                                cloud_mask_pixel_count
+                                if args.run_cloud_mask and args.cloud_mask_method == "omnicloudmask"
+                                else None
+                            ),
                             "masked_image_output_path": masked_image_output_path,
                         },
                         "outputs": {
@@ -912,6 +954,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scratch directory for temporary intermediate files.",
     )
     parser.add_argument(
+        "--run-atmospheric-correction",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable/disable atmospheric correction stage (default: enabled).",
+    )
+    parser.add_argument(
+        "--run-pansharpen",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable/disable pansharpen stage (default: enabled).",
+    )
+    parser.add_argument(
         "--skip-flaash",
         action="store_true",
         help="Skip FLAASH and use --existing-flaash-input as multispectral input (flaash method only).",
@@ -936,18 +990,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--cloud-mask-method",
-        choices=["omnicloudmask"],
+        "--run-cloud-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Optional built-in cloud masking method. "
-            "Default source is orthorectified multispectral; mask is applied to pansharpened output."
+            "Enable/disable cloud masking stage. Enabled by default; use "
+            "--no-run-cloud-mask to skip without changing config."
         ),
     )
     parser.add_argument(
-        "--cloud-mask-source",
-        choices=["orthorectified-ms", "pansharpened"],
-        default="orthorectified-ms",
-        help="Source image used to infer cloud mask (default: orthorectified-ms).",
+        "--cloud-mask-method",
+        choices=["omnicloudmask"],
+        default="omnicloudmask",
+        help=(
+            "Optional built-in cloud masking method. "
+            "Mask is inferred from orthorectified multispectral and applied to current workflow output."
+        ),
     )
     parser.add_argument(
         "--cloud-mask-red-band-index",
@@ -975,7 +1033,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cloud-buffer-pixels",
         type=int,
-        default=0,
+        default=10,
         help="Optional binary dilation size in pixels applied around cloud mask regions.",
     )
     parser.add_argument(
@@ -1015,34 +1073,44 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not args.input_dir:
         parser.error("--input-dir is required (via CLI or --config-yaml).")
-    if not args.dem_file_path:
-        parser.error("--dem-file-path is required (via CLI or --config-yaml).")
-    if args.atmospheric_method == "flaash" and not args.skip_flaash and not args.envi_engine_path:
-        if not (args.existing_mul_ortho_input and args.existing_pan_ortho_input):
-            parser.error("--envi-engine-path is required when --atmospheric-method=flaash (unless --skip-flaash is set).")
+    if not args.dem_file_path and not args.existing_mul_ortho_input:
+        parser.error(
+            "--dem-file-path is required unless --existing-mul-ortho-input is provided."
+        )
+    if (
+        args.run_atmospheric_correction
+        and args.atmospheric_method == "flaash"
+        and not args.skip_flaash
+        and not args.envi_engine_path
+        and not (args.existing_mul_ortho_input and (args.existing_pan_ortho_input or not args.run_pansharpen))
+    ):
+        parser.error("--envi-engine-path is required when running FLAASH atmospheric correction.")
     if args.flaash_dem_ground_percentile < 0 or args.flaash_dem_ground_percentile > 100:
         parser.error("--flaash-dem-ground-percentile must be between 0 and 100.")
-    if args.atmospheric_method == "flaash" and not args.skip_flaash:
+    if args.run_atmospheric_correction and args.atmospheric_method == "flaash" and not args.skip_flaash:
         if not re.match(r"^/mnt/[a-zA-Z]/", args.scratch_dir):
             parser.error(
                 "--scratch-dir must be under /mnt/<drive>/... when running FLAASH with Windows ENVI."
             )
-    if args.atmospheric_method == "flaash" and args.skip_flaash and not args.existing_flaash_input:
-        if not (args.existing_mul_ortho_input and args.existing_pan_ortho_input):
+    if (
+        args.run_atmospheric_correction
+        and args.atmospheric_method == "flaash"
+        and args.skip_flaash
+        and not args.existing_flaash_input
+    ):
+        if not (args.existing_mul_ortho_input and (args.existing_pan_ortho_input or not args.run_pansharpen)):
             parser.error("--existing-flaash-input is required when --skip-flaash is set.")
-    if bool(args.existing_mul_ortho_input) ^ bool(args.existing_pan_ortho_input):
-        parser.error(
-            "--existing-mul-ortho-input and --existing-pan-ortho-input must be provided together."
-        )
+    if args.run_pansharpen and args.existing_mul_ortho_input and not args.existing_pan_ortho_input:
+        parser.error("--existing-pan-ortho-input is required when --run-pansharpen is enabled with --existing-mul-ortho-input.")
     for path_arg, path_value in (
         ("--existing-mul-ortho-input", args.existing_mul_ortho_input),
-        ("--existing-pan-ortho-input", args.existing_pan_ortho_input),
+        ("--existing-pan-ortho-input", args.existing_pan_ortho_input if args.run_pansharpen else None),
     ):
         if path_value and not os.path.isfile(path_value):
             parser.error(f"{path_arg} does not exist: {path_value}")
     if not os.path.isdir(args.scratch_dir):
         parser.error(f"--scratch-dir does not exist or is not a directory: {args.scratch_dir}")
-    if args.cloud_mask_method and args.cloud_mask_command:
+    if args.run_cloud_mask and args.cloud_mask_method and args.cloud_mask_command:
         parser.error("Use either --cloud-mask-method or --cloud-mask-command, not both.")
     if args.py6s_auto_atmos_grid_size < 1:
         parser.error("--py6s-auto-atmos-grid-size must be >= 1.")

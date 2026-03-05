@@ -31,7 +31,7 @@ The following are auto-derived per scene and do not usually need manual edits:
 - terrain elevation percentile from DEM + footprint
 - WorldView per-band `absCalFactor/effectiveBandwidth` from IMD when IMD radiance calibration is enabled
 
-## Py6S Fields in `configs/worldview.yml`
+## Py6S Fields in `configs/worldview.example.yml`
 
 These fields are used when `atmospheric_method: py6s`:
 
