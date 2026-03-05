@@ -4,6 +4,8 @@ from typing import Iterable, Optional, Sequence
 import numpy as np
 import rasterio
 from scipy.ndimage import binary_dilation
+from rasterio.enums import Resampling
+from rasterio.vrt import WarpedVRT
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -107,15 +109,30 @@ def apply_binary_cloud_mask_to_image(
     *,
     cloud_mask_value: int = 1,
     output_nodata_value: Optional[float] = None,
+    allow_mask_reprojection: bool = True,
 ) -> str:
     """
     Apply a binary cloud mask to an image by assigning NoData to masked pixels.
     """
     with rasterio.open(input_image_path) as src, rasterio.open(cloud_mask_path) as mask_src:
+        mask_reader = mask_src
         if (mask_src.width, mask_src.height) != (src.width, src.height):
-            raise ValueError(
-                "Cloud mask shape "
-                f"{(mask_src.height, mask_src.width)} does not match image shape {(src.height, src.width)}"
+            if not allow_mask_reprojection:
+                raise ValueError(
+                    "Cloud mask shape "
+                    f"{(mask_src.height, mask_src.width)} does not match image shape {(src.height, src.width)}"
+                )
+            if src.crs is None or mask_src.crs is None:
+                raise ValueError(
+                    "Cannot reproject cloud mask because source image or mask has no CRS."
+                )
+            mask_reader = WarpedVRT(
+                mask_src,
+                crs=src.crs,
+                transform=src.transform,
+                width=src.width,
+                height=src.height,
+                resampling=Resampling.nearest,
             )
 
         nodata_value = output_nodata_value if output_nodata_value is not None else src.nodata
@@ -129,10 +146,12 @@ def apply_binary_cloud_mask_to_image(
         _ensure_parent_dir(output_image_path)
         with rasterio.open(output_image_path, "w", **profile) as dst:
             for _, window in src.block_windows(1):
-                mask_block = mask_src.read(1, window=window)
+                mask_block = mask_reader.read(1, window=window)
                 cloud_pixels = mask_block == cloud_mask_value
                 data_block = src.read(window=window)
                 data_block[:, cloud_pixels] = nodata_value
                 dst.write(data_block, window=window)
+        if mask_reader is not mask_src:
+            mask_reader.close()
 
     return output_image_path

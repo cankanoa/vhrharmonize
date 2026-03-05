@@ -9,7 +9,7 @@ input_dir:
   - /mnt/d/20171019_35cm_WV03_BAB_050311750010
 dem_file_path: /mnt/d/dem/Hawaii_SRTM_GL1Ellip.tif
 atmospheric_method: py6s
-py6s_atmosphere_profile: midlatitude_summer
+py6s_atmosphere_profile: user
 py6s_aerosol_profile: maritime
 py6s_aot550: 0.2
 py6s_water_vapor: 2.5
@@ -18,11 +18,10 @@ py6s_output_scale_factor: 10000.0
 py6s_output_dtype: int16
 py6s_use_imd_radiance_calibration: true
 py6s_use_worldview_gain_offset_adjustment: true
-py6s_auto_atmos_source: none
-# py6s_auto_atmos_source: nasa_power
-# py6s_auto_atmos_grid_size: 3
-# py6s_auto_atmos_search_days: 1
-# py6s_auto_atmos_timeout_s: 30.0
+py6s_auto_atmos_source: nasa_power
+py6s_auto_atmos_grid_size: 3
+py6s_auto_atmos_search_days: 1
+py6s_auto_atmos_timeout_s: 30.0
 # py6s_executable: /usr/local/bin/sixsV1.1
 
 # Required only if atmospheric_method: flaash
@@ -36,6 +35,7 @@ output_dir: /mnt/d/test_data/out/scenes
 output_suffix: _final
 
 cloud_mask_method: omnicloudmask
+cloud_mask_source: orthorectified-ms
 cloud_buffer_pixels: 10
 cloud_mask_omnicloud_kwargs_json:
   inference_device: cuda
@@ -68,6 +68,7 @@ cloud_mask_omnicloud_kwargs_json:
 - `scratch_dir` is used for scene intermediates.
 - `output_dir` controls final scene output location.
 - `cloud_mask_method` currently supports `omnicloudmask`.
+- `cloud_mask_source` defaults to `orthorectified-ms` to reduce cloudmask compute; mask is reprojected and applied to the pansharpened final image.
 - `cloud_mask_omnicloud_kwargs_json` accepts either:
   - a YAML mapping/dictionary (recommended in YAML config), or
   - a JSON string (same format used by CLI flag).

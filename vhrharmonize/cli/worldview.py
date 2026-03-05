@@ -620,6 +620,10 @@ def run_workflow(args: argparse.Namespace) -> int:
                         final_scene_path = cloud_mask_output_path
 
                     if args.cloud_mask_method == "omnicloudmask":
+                        if args.cloud_mask_source == "orthorectified-ms":
+                            cloud_mask_input_path = mul_flaash_ortho_path
+                        else:
+                            cloud_mask_input_path = mul_pansharp_path
                         mask_output_path = _build_cloud_mask_output_path(
                             mul_pansharp_path,
                             args.cloud_mask_mask_suffix,
@@ -628,9 +632,12 @@ def run_workflow(args: argparse.Namespace) -> int:
                             mul_pansharp_path,
                             args.cloud_mask_output_suffix,
                         )
-                        print("Running built-in OmniCloudMask cloud masking for full scene")
+                        print(
+                            "Running built-in OmniCloudMask cloud masking "
+                            f"on {'orthorectified multispectral' if args.cloud_mask_source == 'orthorectified-ms' else 'pansharpened'} image"
+                        )
                         create_cloud_mask_with_omnicloudmask(
-                            mul_pansharp_path,
+                            cloud_mask_input_path,
                             mask_output_path,
                             red_band_index=args.cloud_mask_red_band_index,
                             green_band_index=args.cloud_mask_green_band_index,
@@ -644,6 +651,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                             mask_output_path,
                             masked_image_output_path,
                             output_nodata_value=args.nodata_value,
+                            allow_mask_reprojection=True,
                         )
                         final_scene_path = masked_image_output_path
 
@@ -701,6 +709,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                         },
                         "cloud_mask": {
                             "method": args.cloud_mask_method,
+                            "source": args.cloud_mask_source,
                             "command": args.cloud_mask_command,
                             "classes": cloud_classes,
                             "buffer_pixels": args.cloud_buffer_pixels,
@@ -929,7 +938,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cloud-mask-method",
         choices=["omnicloudmask"],
-        help="Optional built-in cloud masking method to run after pansharpening.",
+        help=(
+            "Optional built-in cloud masking method. "
+            "Default source is orthorectified multispectral; mask is applied to pansharpened output."
+        ),
+    )
+    parser.add_argument(
+        "--cloud-mask-source",
+        choices=["orthorectified-ms", "pansharpened"],
+        default="orthorectified-ms",
+        help="Source image used to infer cloud mask (default: orthorectified-ms).",
     )
     parser.add_argument(
         "--cloud-mask-red-band-index",

@@ -12,7 +12,7 @@ This describes the execution behavior of `vhr-worldview`.
    - run atmospheric correction (`py6s` default, `flaash` optional) or reuse existing atmospheric/ortho inputs
    - orthorectify multispectral and panchromatic imagery
    - pansharpen
-   - optionally cloud-mask final scene
+   - optionally infer cloud mask from orthorectified MS (default) and apply it to final pansharpened scene
    - write final output in `output_dir`
 
 ## Output Model

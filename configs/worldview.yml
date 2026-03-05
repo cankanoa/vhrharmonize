@@ -31,6 +31,7 @@ output_dir: /mnt/d/test_data/out/scenes
 output_suffix: _final
 
 cloud_mask_method: omnicloudmask
+cloud_mask_source: orthorectified-ms
 cloud_buffer_pixels: 10
 # cloud_mask_omnicloud_kwargs_json:
 #   inference_device: cuda

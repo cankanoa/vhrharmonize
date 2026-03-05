@@ -6,7 +6,7 @@ Runs full-scene WorldView preprocessing:
 2. Atmospheric correction (`flaash`, `py6s`, or `none`)
 3. Orthorectification (default RPC)
 4. Pansharpening
-5. Optional cloud masking
+5. Optional cloud masking (inferred from orthorectified MS by default, then applied to pansharpened output)
 6. Write final full-scene output
 
 ## Typical Usage
@@ -57,6 +57,7 @@ vhr-worldview \
 - `--py6s-auto-atmos-search-days`: +/- day search window for NASA auto mode
 - `--existing-mul-ortho-input` + `--existing-pan-ortho-input`: resume at pansharpen step
 - `--cloud-mask-method omnicloudmask`: run built-in cloud masking
+- `--cloud-mask-source`: `orthorectified-ms` (default) or `pansharpened` for mask inference source
 - `--cloud-mask-command`: run external command template on full-scene image
 
 ## Py6S Output Units
