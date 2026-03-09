@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 
@@ -692,7 +693,18 @@ def run_workflow(args: argparse.Namespace) -> int:
 
                     scene_output_filename = f"{mul_photo_basename}{args.output_suffix}.tif"
                     scene_output_path = os.path.join(args.output_dir, scene_output_filename)
-                    shutil.copy2(final_scene_path, scene_output_path)
+                    tmp_output_path = f"{scene_output_path}.tmp-{uuid.uuid4().hex}"
+                    try:
+                        shutil.copy2(final_scene_path, tmp_output_path)
+                    except PermissionError:
+                        # Some mounted filesystems (for example WSL drvfs mounts under /mnt/*)
+                        # can allow file writes but reject metadata updates performed by copy2.
+                        shutil.copyfile(final_scene_path, tmp_output_path)
+                        print(
+                            f"Warning: unable to preserve file metadata when writing {scene_output_path}; "
+                            "copied file contents only."
+                        )
+                    os.replace(tmp_output_path, scene_output_path)
                     print(f"Wrote: {scene_output_path}")
 
                     scene_metadata_path = os.path.join(
