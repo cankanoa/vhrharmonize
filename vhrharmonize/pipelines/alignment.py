@@ -94,12 +94,23 @@ def _resolve_nodata(src: rasterio.DatasetReader, override_nodata: Optional[float
     return override_nodata if override_nodata is not None else src.nodata
 
 
+def _edge_proxy(data: np.ndarray, valid_mask: np.ndarray) -> np.ndarray:
+    arr = data.astype(np.float32, copy=True)
+    arr[~valid_mask] = 0.0
+    gy, gx = np.gradient(arr)
+    edge = np.hypot(gx, gy)
+    edge[~valid_mask] = 0.0
+    return edge.astype(np.float32)
+
+
 def align_image_pair(
     moving_image_path: str,
     fixed_image_path: str,
     output_image_path: str,
     *,
     band_index: int = 0,
+    moving_band_index: Optional[int] = None,
+    fixed_band_index: Optional[int] = None,
     tiling: bool = True,
     tile_size: int = 1000,
     tile_buffer: int = 100,
@@ -112,6 +123,10 @@ def align_image_pair(
     temp_dir: Optional[str] = None,
     keep_temp_dir: bool = False,
     log_to_console: bool = False,
+    clip_fixed_to_moving: bool = False,
+    output_on_moving_grid: bool = True,
+    enforce_mutual_valid_mask: bool = False,
+    registration_mode: str = "default",
 ) -> AlignmentResult:
     """Align a moving image onto a fixed image using elastix (tile-aware by default).
 
@@ -139,6 +154,15 @@ def align_image_pair(
         temp_dir: Optional parent directory for temporary tile artifacts.
         keep_temp_dir: If ``True``, keep temporary tile directory for inspection.
         log_to_console: If ``True``, emit elastix/transformix logs to stdout.
+        clip_fixed_to_moving: If ``True``, restrict fixed-image domain to moving-image bounds.
+        output_on_moving_grid: If ``True``, write final output on moving-image grid
+            (same transform, size, and pixel size as moving image). Currently supported
+            for non-tiled mode.
+        enforce_mutual_valid_mask: If ``True``, constrain both fixed and moving
+            elastix masks to the mutual valid-data overlap of both images.
+        registration_mode: Registration strategy. ``default`` uses raw bands.
+            ``structural_wv3_lidar`` uses common-grid structural edges and
+            a chained translation->rigid elastix parameter schedule.
 
     Returns:
         AlignmentResult summary with output path and tile-level counts.
@@ -148,12 +172,24 @@ def align_image_pair(
     """
     if band_index < 0:
         raise ValueError("band_index must be >= 0 (0-based).")
+    if moving_band_index is not None and moving_band_index < 0:
+        raise ValueError("moving_band_index must be >= 0 (0-based).")
+    if fixed_band_index is not None and fixed_band_index < 0:
+        raise ValueError("fixed_band_index must be >= 0 (0-based).")
     if tile_size <= 0:
         raise ValueError("tile_size must be > 0.")
     if tile_buffer < 0:
         raise ValueError("tile_buffer must be >= 0.")
     if min_valid_fraction <= 0 or min_valid_fraction > 1:
         raise ValueError("min_valid_fraction must be in (0, 1].")
+    if output_on_moving_grid and tiling:
+        raise ValueError("output_on_moving_grid is currently supported only when tiling=False.")
+    if registration_mode not in {"default", "structural_wv3_lidar"}:
+        raise ValueError("registration_mode must be one of: default, structural_wv3_lidar")
+    if registration_mode == "structural_wv3_lidar" and output_on_moving_grid:
+        raise ValueError(
+            "registration_mode=structural_wv3_lidar currently requires --no-output-on-moving-grid."
+        )
 
     temp_ctx = None
     work_dir: str
@@ -168,11 +204,16 @@ def align_image_pair(
     skipped_tiles = 0
 
     with rasterio.open(fixed_image_path) as fixed_src, rasterio.open(moving_image_path) as moving_src:
-        band_1based = band_index + 1
-        if band_1based > fixed_src.count:
-            raise ValueError(f"Requested band_index={band_index}, but fixed image has {fixed_src.count} band(s).")
-        if band_1based > moving_src.count:
-            raise ValueError(f"Requested band_index={band_index}, but moving image has {moving_src.count} band(s).")
+        moving_band_1based = (moving_band_index if moving_band_index is not None else band_index) + 1
+        fixed_band_1based = (fixed_band_index if fixed_band_index is not None else band_index) + 1
+        if fixed_band_1based > fixed_src.count:
+            raise ValueError(
+                f"Requested fixed band index={fixed_band_1based - 1}, but fixed image has {fixed_src.count} band(s)."
+            )
+        if moving_band_1based > moving_src.count:
+            raise ValueError(
+                f"Requested moving band index={moving_band_1based - 1}, but moving image has {moving_src.count} band(s)."
+            )
         if fixed_src.crs is None or moving_src.crs is None:
             raise ValueError("Both fixed and moving images must have CRS.")
         if fixed_src.crs != moving_src.crs:
@@ -193,32 +234,123 @@ def align_image_pair(
             else 0
         )
 
+        if clip_fixed_to_moving:
+            fixed_domain_window = _to_int_window(
+                from_bounds(
+                    left=moving_src.bounds.left,
+                    bottom=moving_src.bounds.bottom,
+                    right=moving_src.bounds.right,
+                    top=moving_src.bounds.top,
+                    transform=fixed_src.transform,
+                ),
+                max_width=fixed_src.width,
+                max_height=fixed_src.height,
+            )
+            if fixed_domain_window.width <= 0 or fixed_domain_window.height <= 0:
+                raise ValueError(
+                    "No overlap between moving-image bounds and fixed-image grid."
+                )
+        else:
+            fixed_domain_window = Window(
+                col_off=0, row_off=0, width=fixed_src.width, height=fixed_src.height
+            )
+
         os.makedirs(os.path.dirname(output_image_path) or ".", exist_ok=True)
-        out_profile = fixed_src.profile.copy()
-        out_profile.update(
-            count=moving_src.count,
-            dtype=moving_src.dtypes[0],
-            nodata=out_nodata,
-            compress="lzw",
-        )
+        if output_on_moving_grid:
+            out_profile = moving_src.profile.copy()
+            out_profile.update(
+                count=moving_src.count,
+                dtype=moving_src.dtypes[0],
+                nodata=out_nodata,
+                compress="lzw",
+                tiled=True,
+                BIGTIFF="IF_SAFER",
+            )
+        else:
+            out_profile = fixed_src.profile.copy()
+            out_profile.update(
+                count=moving_src.count,
+                dtype=moving_src.dtypes[0],
+                nodata=out_nodata,
+                compress="lzw",
+                tiled=True,
+                BIGTIFF="IF_SAFER",
+                width=int(fixed_domain_window.width),
+                height=int(fixed_domain_window.height),
+                transform=fixed_src.window_transform(fixed_domain_window),
+            )
 
         if tiling:
-            core_windows = _iter_core_windows(fixed_src.width, fixed_src.height, tile_size=tile_size)
+            core_windows = []
+            row_start = int(fixed_domain_window.row_off)
+            row_end = row_start + int(fixed_domain_window.height)
+            col_start = int(fixed_domain_window.col_off)
+            col_end = col_start + int(fixed_domain_window.width)
+            for row_off in range(row_start, row_end, tile_size):
+                for col_off in range(col_start, col_end, tile_size):
+                    win_w = min(tile_size, col_end - col_off)
+                    win_h = min(tile_size, row_end - row_off)
+                    core_windows.append(
+                        Window(col_off=col_off, row_off=row_off, width=win_w, height=win_h)
+                    )
         else:
-            core_windows = [Window(0, 0, fixed_src.width, fixed_src.height)]
+            core_windows = [fixed_domain_window]
 
         with rasterio.open(output_image_path, "w", **out_profile) as out_dst:
+            # Preserve radiometric/band metadata from moving image and clear stale stats
+            # that can cause misleading display stretches in GIS viewers.
+            try:
+                out_dst.colorinterp = moving_src.colorinterp
+            except Exception:
+                pass
+            try:
+                out_dst.scales = moving_src.scales
+                out_dst.offsets = moving_src.offsets
+            except Exception:
+                pass
             for b in range(1, moving_src.count + 1):
-                for _, block_window in out_dst.block_windows(b):
-                    fill = np.full(
-                        (int(block_window.height), int(block_window.width)),
-                        out_nodata,
-                        dtype=out_profile["dtype"],
-                    )
-                    out_dst.write(fill, b, window=block_window)
+                desc = moving_src.descriptions[b - 1]
+                if desc:
+                    out_dst.set_band_description(b, desc)
+                band_tags = moving_src.tags(b).copy()
+                # Remove stale stats tags from source and output; they are often invalid
+                # after reprojection/warping and can distort visualization.
+                for k in list(band_tags.keys()):
+                    if k.upper().startswith("STATISTICS_"):
+                        band_tags.pop(k, None)
+                out_dst.update_tags(b, **band_tags)
+                out_dst.update_tags(
+                    b,
+                    STATISTICS_MINIMUM="",
+                    STATISTICS_MAXIMUM="",
+                    STATISTICS_MEAN="",
+                    STATISTICS_STDDEV="",
+                )
+
+            if output_on_moving_grid:
+                # Preserve moving-image pixels outside fixed overlap domain.
+                for b in range(1, moving_src.count + 1):
+                    for _, block_window in out_dst.block_windows(b):
+                        src_block = moving_src.read(b, window=block_window)
+                        out_dst.write(src_block.astype(out_profile["dtype"]), b, window=block_window)
+            else:
+                for b in range(1, moving_src.count + 1):
+                    for _, block_window in out_dst.block_windows(b):
+                        fill = np.full(
+                            (int(block_window.height), int(block_window.width)),
+                            out_nodata,
+                            dtype=out_profile["dtype"],
+                        )
+                        out_dst.write(fill, b, window=block_window)
 
             for tile_idx, core_fixed_window in enumerate(core_windows):
                 total_tiles += 1
+                core_out_window = Window(
+                    col_off=int(core_fixed_window.col_off - fixed_domain_window.col_off),
+                    row_off=int(core_fixed_window.row_off - fixed_domain_window.row_off),
+                    width=int(core_fixed_window.width),
+                    height=int(core_fixed_window.height),
+                )
                 fixed_window = _expand_window(
                     core_fixed_window,
                     buffer_px=tile_buffer if tiling else 0,
@@ -245,10 +377,10 @@ def align_image_pair(
                     skipped_tiles += 1
                     continue
 
-                fixed_band = fixed_src.read(band_1based, window=fixed_window)
-                moving_band = moving_src.read(band_1based, window=moving_window)
-                fixed_valid = fixed_src.read_masks(band_1based, window=fixed_window) > 0
-                moving_valid = moving_src.read_masks(band_1based, window=moving_window) > 0
+                fixed_band = fixed_src.read(fixed_band_1based, window=fixed_window)
+                moving_band = moving_src.read(moving_band_1based, window=moving_window)
+                fixed_valid = fixed_src.read_masks(fixed_band_1based, window=fixed_window) > 0
+                moving_valid = moving_src.read_masks(moving_band_1based, window=moving_window) > 0
                 if fixed_nodata_value is not None:
                     fixed_valid &= fixed_band != fixed_nodata_value
                 if moving_nodata_value is not None:
@@ -270,14 +402,68 @@ def align_image_pair(
                     resampling=Resampling.nearest,
                 )
 
-                fixed_mask = (fixed_valid & (moving_valid_reprojected > 0)).astype(np.uint8)
-                moving_mask = moving_valid.astype(np.uint8)
+                structural_mode = registration_mode == "structural_wv3_lidar"
+                fixed_reg_data = fixed_band.astype(np.float32)
+                moving_reg_data = moving_band.astype(np.float32)
+                moving_mask_for_elastix: np.ndarray
+                fixed_mask_for_elastix: np.ndarray
+                if structural_mode:
+                    moving_on_fixed = np.full(
+                        (int(fixed_window.height), int(fixed_window.width)),
+                        moving_nodata_value if moving_nodata_value is not None else out_nodata,
+                        dtype=np.float32,
+                    )
+                    reproject(
+                        source=moving_band.astype(np.float32),
+                        destination=moving_on_fixed,
+                        src_transform=moving_src.window_transform(moving_window),
+                        src_crs=moving_src.crs,
+                        dst_transform=fixed_src.window_transform(fixed_window),
+                        dst_crs=fixed_src.crs,
+                        src_nodata=moving_nodata_value,
+                        dst_nodata=moving_nodata_value if moving_nodata_value is not None else out_nodata,
+                        resampling=Resampling.nearest,
+                    )
+                    fixed_edge = _edge_proxy(fixed_reg_data, fixed_valid)
+                    moving_on_fixed_valid = moving_valid_reprojected > 0
+                    moving_edge = _edge_proxy(moving_on_fixed, moving_on_fixed_valid)
+                    fixed_reg_data = fixed_edge
+                    moving_reg_data = moving_edge
+                    fixed_mask_for_elastix = (fixed_edge > 0).astype(np.uint8)
+                    moving_mask_for_elastix = (moving_edge > 0).astype(np.uint8)
+                    if enforce_mutual_valid_mask:
+                        mutual = (fixed_mask_for_elastix > 0) & (moving_mask_for_elastix > 0)
+                        fixed_mask_for_elastix = mutual.astype(np.uint8)
+                        moving_mask_for_elastix = mutual.astype(np.uint8)
+                else:
+                    fixed_mask_for_elastix = (fixed_valid & (moving_valid_reprojected > 0)).astype(np.uint8)
+                    if enforce_mutual_valid_mask:
+                        fixed_valid_reprojected_to_moving = np.zeros(
+                            (int(moving_window.height), int(moving_window.width)),
+                            dtype=np.uint8,
+                        )
+                        reproject(
+                            source=fixed_valid.astype(np.uint8),
+                            destination=fixed_valid_reprojected_to_moving,
+                            src_transform=fixed_src.window_transform(fixed_window),
+                            src_crs=fixed_src.crs,
+                            dst_transform=moving_src.window_transform(moving_window),
+                            dst_crs=moving_src.crs,
+                            src_nodata=0,
+                            dst_nodata=0,
+                            resampling=Resampling.nearest,
+                        )
+                        moving_mask_for_elastix = (
+                            moving_valid & (fixed_valid_reprojected_to_moving > 0)
+                        ).astype(np.uint8)
+                    else:
+                        moving_mask_for_elastix = moving_valid.astype(np.uint8)
 
                 min_valid_pixels = int(max(1, min_valid_fraction * (fixed_window.width * fixed_window.height)))
-                if int(fixed_mask.sum()) < min_valid_pixels:
+                if int(fixed_mask_for_elastix.sum()) < min_valid_pixels:
                     skipped_tiles += 1
                     continue
-                if int(moving_mask.sum()) < min_valid_pixels:
+                if int(moving_mask_for_elastix.sum()) < min_valid_pixels:
                     skipped_tiles += 1
                     continue
 
@@ -290,7 +476,7 @@ def align_image_pair(
 
                 _write_single_band_tif(
                     fixed_reg_path,
-                    fixed_band.astype("float32"),
+                    fixed_reg_data.astype("float32"),
                     crs=fixed_src.crs,
                     transform=fixed_src.window_transform(fixed_window),
                     dtype="float32",
@@ -298,15 +484,19 @@ def align_image_pair(
                 )
                 _write_single_band_tif(
                     moving_reg_path,
-                    moving_band.astype("float32"),
-                    crs=moving_src.crs,
-                    transform=moving_src.window_transform(moving_window),
+                    moving_reg_data.astype("float32"),
+                    crs=fixed_src.crs if structural_mode else moving_src.crs,
+                    transform=(
+                        fixed_src.window_transform(fixed_window)
+                        if structural_mode
+                        else moving_src.window_transform(moving_window)
+                    ),
                     dtype="float32",
                     nodata=moving_nodata_value,
                 )
                 _write_single_band_tif(
                     fixed_mask_path,
-                    fixed_mask.astype("uint8"),
+                    fixed_mask_for_elastix.astype("uint8"),
                     crs=fixed_src.crs,
                     transform=fixed_src.window_transform(fixed_window),
                     dtype="uint8",
@@ -314,24 +504,34 @@ def align_image_pair(
                 )
                 _write_single_band_tif(
                     moving_mask_path,
-                    moving_mask.astype("uint8"),
-                    crs=moving_src.crs,
-                    transform=moving_src.window_transform(moving_window),
+                    moving_mask_for_elastix.astype("uint8"),
+                    crs=fixed_src.crs if structural_mode else moving_src.crs,
+                    transform=(
+                        fixed_src.window_transform(fixed_window)
+                        if structural_mode
+                        else moving_src.window_transform(moving_window)
+                    ),
                     dtype="uint8",
                     nodata=0,
                 )
 
                 try:
+                    effective_parameter_files = parameter_file_paths
+                    effective_parameter_map = parameter_map
+                    if structural_mode and not parameter_file_paths:
+                        effective_parameter_map = ["translation", "rigid"]
                     transform_parameter_object = estimate_elastix_transform(
                         fixed_image_path=fixed_reg_path,
                         moving_image_path=moving_reg_path,
-                        parameter_map=parameter_map,
-                        parameter_file_paths=parameter_file_paths,
+                        parameter_map=effective_parameter_map,
+                        parameter_file_paths=effective_parameter_files,
+                        force_nearest_resample=structural_mode,
                         fixed_mask_path=fixed_mask_path,
                         moving_mask_path=moving_mask_path,
                         log_to_console=log_to_console,
                     )
-                except Exception:
+                except Exception as exc:
+                    print(f"Skipping tile {tile_idx}: elastix registration failed: {exc}")
                     skipped_tiles += 1
                     continue
 
@@ -339,16 +539,40 @@ def align_image_pair(
                 col0 = int(core_fixed_window.col_off - fixed_window.col_off)
                 row1 = row0 + int(core_fixed_window.height)
                 col1 = col0 + int(core_fixed_window.width)
-                fixed_mask_core = fixed_mask[row0:row1, col0:col1] > 0
+                fixed_mask_core = fixed_mask_for_elastix[row0:row1, col0:col1] > 0
 
                 for b in range(1, moving_src.count + 1):
                     moving_band_path = os.path.join(tile_dir, f"moving_band_{b:03d}.tif")
-                    moving_band_data = moving_src.read(b, window=moving_window)
+                    moving_band_data = moving_src.read(b, window=moving_window).astype(np.float32)
+                    moving_band_crs = moving_src.crs
+                    moving_band_transform = moving_src.window_transform(moving_window)
+                    if structural_mode:
+                        # Structural mode estimates transforms on moving data resampled to the
+                        # fixed-grid ROI. Apply transforms in that same geometry.
+                        moving_band_on_fixed = np.full(
+                            (int(fixed_window.height), int(fixed_window.width)),
+                            out_nodata,
+                            dtype=np.float32,
+                        )
+                        reproject(
+                            source=moving_band_data,
+                            destination=moving_band_on_fixed,
+                            src_transform=moving_src.window_transform(moving_window),
+                            src_crs=moving_src.crs,
+                            dst_transform=fixed_src.window_transform(fixed_window),
+                            dst_crs=fixed_src.crs,
+                            src_nodata=moving_nodata_value,
+                            dst_nodata=out_nodata,
+                            resampling=Resampling.nearest,
+                        )
+                        moving_band_data = moving_band_on_fixed
+                        moving_band_crs = fixed_src.crs
+                        moving_band_transform = fixed_src.window_transform(fixed_window)
                     _write_single_band_tif(
                         moving_band_path,
                         moving_band_data.astype("float32"),
-                        crs=moving_src.crs,
-                        transform=moving_src.window_transform(moving_window),
+                        crs=moving_band_crs,
+                        transform=moving_band_transform,
                         dtype="float32",
                         nodata=moving_nodata_value,
                     )
@@ -358,13 +582,37 @@ def align_image_pair(
                         moving_image_path=moving_band_path,
                         output_image_path=transformed_band_path,
                         transform_parameter_object=transform_parameter_object,
+                        reference_image_path=fixed_reg_path,
                         log_to_console=log_to_console,
                     )
                     with rasterio.open(transformed_band_path) as warped_src:
                         warped_full = warped_src.read(1)
                     warped_core = warped_full[row0:row1, col0:col1]
-                    warped_core = np.where(fixed_mask_core, warped_core, out_nodata)
-                    out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_fixed_window)
+                    if not structural_mode:
+                        warped_core = np.where(fixed_mask_core, warped_core, out_nodata)
+                    if output_on_moving_grid and not tiling:
+                        with rasterio.open(transformed_band_path) as warped_src:
+                            src_arr = warped_src.read(1).astype(np.float32)
+                            src_transform = warped_src.transform
+                            src_crs = warped_src.crs or fixed_src.crs
+                        remapped = np.full((moving_src.height, moving_src.width), out_nodata, dtype=np.float32)
+                        reproject(
+                            source=src_arr.astype(np.float32),
+                            destination=remapped,
+                            src_transform=src_transform,
+                            src_crs=src_crs,
+                            src_nodata=out_nodata,
+                            dst_transform=moving_src.transform,
+                            dst_crs=moving_src.crs,
+                            dst_nodata=out_nodata,
+                            resampling=Resampling.bilinear,
+                        )
+                        existing = out_dst.read(b)
+                        valid = remapped != out_nodata
+                        combined = np.where(valid, remapped, existing.astype(np.float32))
+                        out_dst.write(combined.astype(out_profile["dtype"]), b)
+                    else:
+                        out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_out_window)
 
                 success_tiles += 1
 

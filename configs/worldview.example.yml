@@ -44,3 +44,25 @@ cloud_mask_inference_resolution_m: 10.0
 #   batch_size: 1
 #   patch_size: 768
 #   patch_overlap: 192
+
+# Optional alignment stage (final scene -> fixed/reference raster)
+run_alignment: false
+alignment_fixed_image: /path/to/fixed/reference_intensity.tif
+alignment_output_suffix: _aligned
+alignment_moving_band_index: 6
+alignment_fixed_band_index: 0
+alignment_registration_mode: structural_wv3_lidar
+alignment_parameter_map: rigid
+alignment_no_tiling: true
+alignment_tile_size: 1000
+alignment_tile_buffer: 100
+alignment_clip_fixed_to_moving: true
+alignment_enforce_mutual_valid_mask: true
+alignment_output_on_moving_grid: false
+alignment_moving_nodata: -9999
+alignment_fixed_nodata: -9999
+# alignment_output_nodata: -9999
+alignment_min_valid_fraction: 0.002
+alignment_temp_dir: /tmp
+alignment_keep_temp_dir: false
+alignment_log_to_console: false

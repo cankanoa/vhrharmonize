@@ -7,7 +7,8 @@ Runs full-scene WorldView preprocessing:
 3. Orthorectification (default RPC)
 4. Pansharpening
 5. Optional cloud masking (inferred from orthorectified MS and applied to current workflow output)
-6. Write final full-scene output
+6. Optional alignment to a fixed/reference raster
+7. Write final full-scene output(s)
 
 ## Typical Usage
 
@@ -68,6 +69,13 @@ vhr-worldview \
 - `--cloud-mask-method omnicloudmask`: run built-in cloud masking
 - `--cloud-mask-inference-resolution-m`: resolution used for OmniCloudMask inference input (default `10.0`)
 - `--cloud-mask-command`: run external command template on full-scene image
+- `--run-alignment` / `--no-run-alignment`: enable or skip final alignment stage
+- `--alignment-fixed-image`: required fixed/reference raster when alignment is enabled
+- `--alignment-moving-band-index`: 0-based moving image band used for registration metric
+- `--alignment-fixed-band-index`: 0-based fixed image band used for registration metric
+- `--alignment-registration-mode`: `default` or `structural_wv3_lidar`
+- `--alignment-clip-fixed-to-moving`: clip fixed domain to moving extent before alignment
+- `--alignment-output-on-moving-grid`: optional moving-grid output (disabled by default for `structural_wv3_lidar`)
 
 ## Py6S Output Units
 
@@ -114,3 +122,4 @@ The command enforces:
 
 - Atmospheric method default: `py6s`
 - If you switch to `flaash`, ENVI Task Engine settings/requirements apply.
+- Alignment default: disabled (`--no-run-alignment`).

@@ -28,6 +28,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="0-based band index used for registration metric (default: 0).",
     )
     parser.add_argument(
+        "--moving-band-index",
+        type=int,
+        help="Optional 0-based moving-image band index for registration metric.",
+    )
+    parser.add_argument(
+        "--fixed-band-index",
+        type=int,
+        help="Optional 0-based fixed-image band index for registration metric.",
+    )
+    parser.add_argument(
         "--no-tiling",
         action="store_true",
         help="Disable tiling and run registration on the full image extent.",
@@ -86,6 +96,39 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable verbose elastix logging.",
     )
+    parser.add_argument(
+        "--clip-fixed-to-moving",
+        action="store_true",
+        help="Clip fixed image domain to moving-image bounds before alignment.",
+    )
+    parser.add_argument(
+        "--output-on-moving-grid",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Write aligned output on the moving-image grid (default: true). "
+            "Disable with --no-output-on-moving-grid to write on fixed-image grid."
+        ),
+    )
+    parser.add_argument(
+        "--enforce-mutual-valid-mask",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use only pixels valid in both fixed and moving images for both elastix masks "
+            "(default: false)."
+        ),
+    )
+    parser.add_argument(
+        "--registration-mode",
+        choices=["default", "structural_wv3_lidar"],
+        default="default",
+        help=(
+            "Registration strategy. `default` uses raw bands; "
+            "`structural_wv3_lidar` mirrors the elastix-wrapper flow "
+            "(common-grid ROI + edge proxies + translation->rigid chain)."
+        ),
+    )
     return parser
 
 
@@ -100,6 +143,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error(f"--fixed-image does not exist: {args.fixed_image}")
     if args.band_index < 0:
         parser.error("--band-index must be >= 0.")
+    if args.moving_band_index is not None and args.moving_band_index < 0:
+        parser.error("--moving-band-index must be >= 0.")
+    if args.fixed_band_index is not None and args.fixed_band_index < 0:
+        parser.error("--fixed-band-index must be >= 0.")
     if args.tile_size <= 0:
         parser.error("--tile-size must be > 0.")
     if args.tile_buffer < 0:
@@ -112,6 +159,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         fixed_image_path=args.fixed_image,
         output_image_path=args.output_image,
         band_index=args.band_index,
+        moving_band_index=args.moving_band_index,
+        fixed_band_index=args.fixed_band_index,
         tiling=not args.no_tiling,
         tile_size=args.tile_size,
         tile_buffer=args.tile_buffer,
@@ -124,6 +173,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         temp_dir=args.temp_dir,
         keep_temp_dir=args.keep_temp_dir,
         log_to_console=args.log_to_console,
+        clip_fixed_to_moving=args.clip_fixed_to_moving,
+        output_on_moving_grid=args.output_on_moving_grid,
+        enforce_mutual_valid_mask=args.enforce_mutual_valid_mask,
+        registration_mode=args.registration_mode,
     )
 
     print(

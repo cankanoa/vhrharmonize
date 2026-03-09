@@ -1,6 +1,6 @@
 """Image registration utilities."""
 
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Union
 
 
 def _require_itk():
@@ -17,8 +17,10 @@ def estimate_elastix_transform(
     fixed_image_path: str,
     moving_image_path: str,
     *,
-    parameter_map: str = "rigid",
+    parameter_map: Union[str, Sequence[str]] = "rigid",
     parameter_file_paths: Optional[Sequence[str]] = None,
+    force_linear_resample: bool = False,
+    force_nearest_resample: bool = False,
     fixed_mask_path: Optional[str] = None,
     moving_mask_path: Optional[str] = None,
     log_to_console: bool = False,
@@ -28,10 +30,15 @@ def estimate_elastix_transform(
     Args:
         fixed_image_path: Path to the fixed/reference image.
         moving_image_path: Path to the moving image to be aligned.
-        parameter_map: Default elastix parameter map name if no parameter files are provided.
-            Typical values include ``"rigid"``, ``"affine"``, and ``"bspline"``.
+        parameter_map: Default elastix parameter map name(s) if no parameter files
+            are provided. Typical values include ``"translation"``, ``"rigid"``,
+            ``"affine"``, and ``"bspline"``.
         parameter_file_paths: Optional elastix parameter file path(s). If provided,
             these are used instead of ``parameter_map``.
+        force_linear_resample: If ``True``, enforce linear final resampling in all
+            loaded parameter maps (mimics explicit wrapper settings).
+        force_nearest_resample: If ``True``, enforce nearest-neighbor final
+            resampling in all loaded parameter maps.
         fixed_mask_path: Optional fixed-image mask path.
         moving_mask_path: Optional moving-image mask path.
         log_to_console: If ``True``, emit elastix logs to stdout.
@@ -52,7 +59,19 @@ def estimate_elastix_transform(
         for path in parameter_file_paths:
             parameter_object.AddParameterMap(parameter_object.ReadParameterFile(path))
     else:
-        parameter_object.AddParameterMap(parameter_object.GetDefaultParameterMap(parameter_map))
+        map_names = [parameter_map] if isinstance(parameter_map, str) else list(parameter_map)
+        for map_name in map_names:
+            parameter_object.AddParameterMap(parameter_object.GetDefaultParameterMap(map_name))
+    if force_linear_resample:
+        for idx in range(int(parameter_object.GetNumberOfParameterMaps())):
+            parameter_object.SetParameter(idx, "ResampleInterpolator", "FinalLinearInterpolator")
+            parameter_object.SetParameter(idx, "DefaultPixelValue", "0")
+            parameter_object.SetParameter(idx, "FinalBSplineInterpolationOrder", "1")
+    if force_nearest_resample:
+        for idx in range(int(parameter_object.GetNumberOfParameterMaps())):
+            parameter_object.SetParameter(idx, "ResampleInterpolator", "FinalNearestNeighborInterpolator")
+            parameter_object.SetParameter(idx, "DefaultPixelValue", "0")
+            parameter_object.SetParameter(idx, "FinalBSplineInterpolationOrder", "0")
 
     kwargs = {
         "fixed_image": fixed,
@@ -75,6 +94,7 @@ def apply_elastix_transform(
     output_image_path: str,
     transform_parameter_object: Any,
     *,
+    reference_image_path: Optional[str] = None,
     log_to_console: bool = False,
 ) -> str:
     """Apply a precomputed elastix transform to an image and write the result.
@@ -84,6 +104,8 @@ def apply_elastix_transform(
         output_image_path: Output path for the transformed image.
         transform_parameter_object: Transform parameter object from
             :func:`estimate_elastix_transform`.
+        reference_image_path: Optional raster whose CRS/transform are copied to
+            ``output_image_path`` after transformix writes the data.
         log_to_console: If ``True``, emit transformix logs to stdout.
 
     Returns:
@@ -100,6 +122,14 @@ def apply_elastix_transform(
         log_to_console=log_to_console,
     )
     itk.imwrite(transformed, output_image_path)
+    if reference_image_path:
+        import rasterio
+
+        with rasterio.open(reference_image_path) as ref, rasterio.open(output_image_path, "r+") as out:
+            out.crs = ref.crs
+            out.transform = ref.transform
+            if ref.nodata is not None:
+                out.nodata = ref.nodata
     return output_image_path
 
 
@@ -108,7 +138,7 @@ def run_elastix_registration(
     moving_image_path: str,
     output_image_path: str,
     *,
-    parameter_map: str = "rigid",
+    parameter_map: Union[str, Sequence[str]] = "rigid",
     parameter_file_paths: Optional[Sequence[str]] = None,
     fixed_mask_path: Optional[str] = None,
     moving_mask_path: Optional[str] = None,
