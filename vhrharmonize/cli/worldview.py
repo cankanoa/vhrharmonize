@@ -347,6 +347,7 @@ def run_workflow(args: argparse.Namespace) -> int:
     )
     from vhrharmonize.preprocess.orthorectification import gcp_refined_rpc_orthorectification
     from vhrharmonize.preprocess.pansharpening import pansharpen_image
+    from vhrharmonize.pipelines.alignment import align_image_pair
     from vhrharmonize.io.geospatial import shp_to_gpkg
 
     filter_basenames = _parse_filter_basenames(args.filter_basename)
@@ -409,6 +410,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                     mask_output_path = None
                     cloud_mask_pixel_count = None
                     masked_image_output_path = None
+                    alignment_result = None
                     ortho_folder_name = "OrthoFromDefaultRPC"
                     if args.run_atmospheric_correction:
                         if args.atmospheric_method == "py6s":
@@ -707,6 +709,37 @@ def run_workflow(args: argparse.Namespace) -> int:
                     os.replace(tmp_output_path, scene_output_path)
                     print(f"Wrote: {scene_output_path}")
 
+                    if args.run_alignment:
+                        print("Running alignment step")
+                        aligned_output_filename = (
+                            f"{mul_photo_basename}{args.output_suffix}{args.alignment_output_suffix}.tif"
+                        )
+                        aligned_output_path = os.path.join(args.output_dir, aligned_output_filename)
+                        alignment_result = align_image_pair(
+                            moving_image_path=scene_output_path,
+                            fixed_image_path=args.alignment_fixed_image,
+                            output_image_path=aligned_output_path,
+                            band_index=0,
+                            moving_band_index=args.alignment_moving_band_index,
+                            fixed_band_index=args.alignment_fixed_band_index,
+                            tiling=not args.alignment_no_tiling,
+                            tile_size=args.alignment_tile_size,
+                            tile_buffer=args.alignment_tile_buffer,
+                            parameter_map=args.alignment_parameter_map,
+                            moving_nodata=args.alignment_moving_nodata,
+                            fixed_nodata=args.alignment_fixed_nodata,
+                            output_nodata=args.alignment_output_nodata,
+                            min_valid_fraction=args.alignment_min_valid_fraction,
+                            temp_dir=args.alignment_temp_dir,
+                            keep_temp_dir=args.alignment_keep_temp_dir,
+                            log_to_console=args.alignment_log_to_console,
+                            clip_fixed_to_moving=args.alignment_clip_fixed_to_moving,
+                            output_on_moving_grid=args.alignment_output_on_moving_grid,
+                            enforce_mutual_valid_mask=args.alignment_enforce_mutual_valid_mask,
+                            registration_mode=args.alignment_registration_mode,
+                        )
+                        print(f"Wrote aligned output: {alignment_result.output_image_path}")
+
                     scene_metadata_path = os.path.join(
                         args.output_dir,
                         f"{mul_photo_basename}{args.output_suffix}_metadata.json",
@@ -739,6 +772,7 @@ def run_workflow(args: argparse.Namespace) -> int:
                             "dtype": args.dtype,
                             "output_suffix": args.output_suffix,
                             "flaash_dem_ground_percentile": args.flaash_dem_ground_percentile,
+                            "run_alignment": args.run_alignment,
                         },
                         "py6s": {
                             "configured": {
@@ -775,8 +809,46 @@ def run_workflow(args: argparse.Namespace) -> int:
                         },
                         "outputs": {
                             "final_scene_path": scene_output_path,
+                            "aligned_scene_path": (
+                                alignment_result.output_image_path if alignment_result else None
+                            ),
                             "scene_metadata_path": scene_metadata_path,
                         },
+                        "alignment": (
+                            {
+                                "enabled": args.run_alignment,
+                                "fixed_image": args.alignment_fixed_image,
+                                "output_suffix": args.alignment_output_suffix,
+                                "moving_band_index": args.alignment_moving_band_index,
+                                "fixed_band_index": args.alignment_fixed_band_index,
+                                "registration_mode": args.alignment_registration_mode,
+                                "parameter_map": args.alignment_parameter_map,
+                                "no_tiling": args.alignment_no_tiling,
+                                "tile_size": args.alignment_tile_size,
+                                "tile_buffer": args.alignment_tile_buffer,
+                                "clip_fixed_to_moving": args.alignment_clip_fixed_to_moving,
+                                "enforce_mutual_valid_mask": args.alignment_enforce_mutual_valid_mask,
+                                "output_on_moving_grid": args.alignment_output_on_moving_grid,
+                                "moving_nodata": args.alignment_moving_nodata,
+                                "fixed_nodata": args.alignment_fixed_nodata,
+                                "output_nodata": args.alignment_output_nodata,
+                                "min_valid_fraction": args.alignment_min_valid_fraction,
+                                "temp_dir": args.alignment_temp_dir,
+                                "keep_temp_dir": args.alignment_keep_temp_dir,
+                                "log_to_console": args.alignment_log_to_console,
+                                "result": (
+                                    {
+                                        "output_image_path": alignment_result.output_image_path,
+                                        "total_tiles": alignment_result.total_tiles,
+                                        "successful_tiles": alignment_result.successful_tiles,
+                                        "skipped_tiles": alignment_result.skipped_tiles,
+                                        "temp_dir": alignment_result.temp_dir,
+                                    }
+                                    if alignment_result
+                                    else None
+                                ),
+                            }
+                        ),
                     }
                     _write_scene_metadata_report(scene_metadata_path, scene_metadata)
                     print(f"Wrote metadata: {scene_metadata_path}")
@@ -1073,6 +1145,119 @@ def build_parser() -> argparse.ArgumentParser:
         default="_cloudmask",
         help="Suffix added before extension for binary cloud mask output.",
     )
+    parser.add_argument(
+        "--run-alignment",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable/disable final alignment step on scene output.",
+    )
+    parser.add_argument(
+        "--alignment-fixed-image",
+        help="Fixed/reference raster path used by alignment step.",
+    )
+    parser.add_argument(
+        "--alignment-output-suffix",
+        default="_aligned",
+        help="Suffix appended to aligned output filename.",
+    )
+    parser.add_argument(
+        "--alignment-moving-band-index",
+        type=int,
+        default=6,
+        help="0-based moving-image band index used for alignment metric.",
+    )
+    parser.add_argument(
+        "--alignment-fixed-band-index",
+        type=int,
+        default=0,
+        help="0-based fixed-image band index used for alignment metric.",
+    )
+    parser.add_argument(
+        "--alignment-registration-mode",
+        choices=["default", "structural_wv3_lidar"],
+        default="structural_wv3_lidar",
+        help="Alignment registration mode.",
+    )
+    parser.add_argument(
+        "--alignment-parameter-map",
+        default="rigid",
+        help="Default elastix parameter map for alignment when custom files are not provided.",
+    )
+    parser.add_argument(
+        "--alignment-no-tiling",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Disable/enable tile-wise alignment processing (default: no tiling).",
+    )
+    parser.add_argument(
+        "--alignment-tile-size",
+        type=int,
+        default=1000,
+        help="Tile size in pixels for tiled alignment mode.",
+    )
+    parser.add_argument(
+        "--alignment-tile-buffer",
+        type=int,
+        default=100,
+        help="Tile buffer in pixels for tiled alignment mode.",
+    )
+    parser.add_argument(
+        "--alignment-clip-fixed-to-moving",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Clip fixed-image domain to moving-image bounds before alignment.",
+    )
+    parser.add_argument(
+        "--alignment-enforce-mutual-valid-mask",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Constrain both alignment masks to mutual valid-data overlap.",
+    )
+    parser.add_argument(
+        "--alignment-output-on-moving-grid",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Write alignment result on moving grid (default false for structural mode parity).",
+    )
+    parser.add_argument(
+        "--alignment-moving-nodata",
+        type=float,
+        default=-9999,
+        help="Optional moving nodata override for alignment.",
+    )
+    parser.add_argument(
+        "--alignment-fixed-nodata",
+        type=float,
+        default=-9999,
+        help="Optional fixed nodata override for alignment.",
+    )
+    parser.add_argument(
+        "--alignment-output-nodata",
+        type=float,
+        help="Optional output nodata override for alignment.",
+    )
+    parser.add_argument(
+        "--alignment-min-valid-fraction",
+        type=float,
+        default=0.002,
+        help="Minimum valid-mask fraction per tile/window required for alignment.",
+    )
+    parser.add_argument(
+        "--alignment-temp-dir",
+        help="Optional parent directory for alignment temp artifacts.",
+    )
+    parser.add_argument(
+        "--alignment-keep-temp-dir",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep alignment temp directory for debugging.",
+    )
+    parser.add_argument(
+        "--alignment-log-to-console",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable verbose elastix/transformix logs for alignment.",
+    )
     return parser
 
 
@@ -1143,6 +1328,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--py6s-auto-atmos-search-days must be >= 0.")
     if args.py6s_auto_atmos_timeout_s <= 0:
         parser.error("--py6s-auto-atmos-timeout-s must be > 0.")
+    if args.run_alignment:
+        if not args.alignment_fixed_image:
+            parser.error("--alignment-fixed-image is required when --run-alignment is enabled.")
+        if not os.path.isfile(args.alignment_fixed_image):
+            parser.error(f"--alignment-fixed-image does not exist: {args.alignment_fixed_image}")
+        if args.alignment_moving_band_index < 0:
+            parser.error("--alignment-moving-band-index must be >= 0.")
+        if args.alignment_fixed_band_index < 0:
+            parser.error("--alignment-fixed-band-index must be >= 0.")
+        if args.alignment_tile_size <= 0:
+            parser.error("--alignment-tile-size must be > 0.")
+        if args.alignment_tile_buffer < 0:
+            parser.error("--alignment-tile-buffer must be >= 0.")
+        if args.alignment_min_valid_fraction <= 0 or args.alignment_min_valid_fraction > 1:
+            parser.error("--alignment-min-valid-fraction must be in (0, 1].")
+        if args.alignment_registration_mode == "structural_wv3_lidar" and args.alignment_output_on_moving_grid:
+            parser.error(
+                "--alignment-output-on-moving-grid must be disabled when --alignment-registration-mode=structural_wv3_lidar."
+            )
+        if args.alignment_temp_dir and not os.path.isdir(args.alignment_temp_dir):
+            parser.error(f"--alignment-temp-dir does not exist or is not a directory: {args.alignment_temp_dir}")
     try:
         _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
     except Exception as exc:
