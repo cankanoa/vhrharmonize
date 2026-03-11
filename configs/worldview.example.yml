@@ -49,7 +49,7 @@ cloud_mask_inference_resolution_m: 10.0
 run_alignment: false
 alignment_fixed_image: /path/to/fixed/reference_intensity.tif
 alignment_output_suffix: _aligned
-alignment_moving_band_index: 6
+alignment_moving_band_index: 0
 alignment_fixed_band_index: 0
 alignment_registration_mode: structural_wv3_lidar
 alignment_parameter_map: rigid
@@ -58,7 +58,7 @@ alignment_tile_size: 1000
 alignment_tile_buffer: 100
 alignment_clip_fixed_to_moving: true
 alignment_enforce_mutual_valid_mask: true
-alignment_output_on_moving_grid: false
+alignment_output_on_moving_grid: true
 alignment_moving_nodata: -9999
 alignment_fixed_nodata: -9999
 # alignment_output_nodata: -9999
