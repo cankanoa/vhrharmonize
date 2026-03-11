@@ -322,6 +322,31 @@ def _write_scene_metadata_report(report_path: str, payload: Dict) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
+def _scene_outputs_complete(
+    *,
+    output_dir: str,
+    mul_photo_basename: str,
+    output_suffix: str,
+    run_alignment: bool,
+    alignment_output_suffix: str,
+) -> bool:
+    scene_output_path = os.path.join(output_dir, f"{mul_photo_basename}{output_suffix}.tif")
+    scene_metadata_path = os.path.join(
+        output_dir,
+        f"{mul_photo_basename}{output_suffix}_metadata.json",
+    )
+    if not (os.path.isfile(scene_output_path) and os.path.isfile(scene_metadata_path)):
+        return False
+    if run_alignment:
+        aligned_output_path = os.path.join(
+            output_dir,
+            f"{mul_photo_basename}{output_suffix}{alignment_output_suffix}.tif",
+        )
+        if not os.path.isfile(aligned_output_path):
+            return False
+    return True
+
+
 def _count_mask_pixels(mask_path: str, mask_value: int = 1) -> int:
     import rasterio
 
@@ -378,6 +403,19 @@ def run_workflow(args: argparse.Namespace) -> int:
                 mul_photo_basename = found_default_file.get("mul_photo_basename")
                 pan_photo_basename = found_default_file.get("pan_photo_basename")
                 print(f"Processing: {mul_photo_basename or pan_photo_basename}")
+
+                if args.skip_existing and mul_photo_basename and _scene_outputs_complete(
+                    output_dir=args.output_dir,
+                    mul_photo_basename=mul_photo_basename,
+                    output_suffix=args.output_suffix,
+                    run_alignment=args.run_alignment,
+                    alignment_output_suffix=args.alignment_output_suffix,
+                ):
+                    print(
+                        f"Skipping scene: existing completed outputs found for {mul_photo_basename}"
+                    )
+                    continue
+
                 scene_started_utc = datetime.utcnow().isoformat() + "Z"
 
                 required = (
@@ -1033,6 +1071,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-suffix",
         default="_final",
         help="Suffix appended to final scene output filenames before .tif extension.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Skip scenes with an existing final metadata JSON and output TIFF. "
+            "If alignment is enabled, aligned output must also exist."
+        ),
     )
     parser.add_argument(
         "--scratch-dir",

@@ -30,6 +30,7 @@ scratch_dir: /tmp
 
 output_dir: /path/to/outputs/worldview
 output_suffix: _final
+skip_existing: false
 
 run_atmospheric_correction: true
 run_pansharpen: true
