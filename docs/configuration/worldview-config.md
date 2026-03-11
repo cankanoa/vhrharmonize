@@ -113,7 +113,7 @@ alignment_log_to_console: false
 - `alignment_fixed_band_index` selects the fixed raster band for registration metric.
 - `alignment_registration_mode: structural_wv3_lidar` mirrors the WV/LiDAR structural workflow.
 - `alignment_clip_fixed_to_moving: true` allows using very large fixed rasters by clipping to overlap.
-- `alignment_output_on_moving_grid` should remain `false` for `structural_wv3_lidar` mode.
+- `alignment_output_on_moving_grid: true` writes aligned output back to the original moving-image grid/resolution.
 
 ## Run
 

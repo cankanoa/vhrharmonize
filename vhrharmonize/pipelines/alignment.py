@@ -186,10 +186,6 @@ def align_image_pair(
         raise ValueError("output_on_moving_grid is currently supported only when tiling=False.")
     if registration_mode not in {"default", "structural_wv3_lidar"}:
         raise ValueError("registration_mode must be one of: default, structural_wv3_lidar")
-    if registration_mode == "structural_wv3_lidar" and output_on_moving_grid:
-        raise ValueError(
-            "registration_mode=structural_wv3_lidar currently requires --no-output-on-moving-grid."
-        )
 
     temp_ctx = None
     work_dir: str
@@ -262,8 +258,10 @@ def align_image_pair(
                 count=moving_src.count,
                 dtype=moving_src.dtypes[0],
                 nodata=out_nodata,
-                compress="lzw",
+                compress="deflate",
+                predictor=2,
                 tiled=True,
+                interleave="band",
                 BIGTIFF="IF_SAFER",
             )
         else:
@@ -272,8 +270,10 @@ def align_image_pair(
                 count=moving_src.count,
                 dtype=moving_src.dtypes[0],
                 nodata=out_nodata,
-                compress="lzw",
+                compress="deflate",
+                predictor=2,
                 tiled=True,
+                interleave="band",
                 BIGTIFF="IF_SAFER",
                 width=int(fixed_domain_window.width),
                 height=int(fixed_domain_window.height),
@@ -296,7 +296,7 @@ def align_image_pair(
         else:
             core_windows = [fixed_domain_window]
 
-        with rasterio.open(output_image_path, "w", **out_profile) as out_dst:
+        with rasterio.open(output_image_path, "w+", **out_profile) as out_dst:
             # Preserve radiometric/band metadata from moving image and clear stale stats
             # that can cause misleading display stretches in GIS viewers.
             try:
@@ -595,22 +595,34 @@ def align_image_pair(
                             src_arr = warped_src.read(1).astype(np.float32)
                             src_transform = warped_src.transform
                             src_crs = warped_src.crs or fixed_src.crs
-                        remapped = np.full((moving_src.height, moving_src.width), out_nodata, dtype=np.float32)
+                        # Reproject only into the moving-image overlap window rather than
+                        # allocating a full-scene destination array per band.
+                        remapped = np.full(
+                            (int(moving_window.height), int(moving_window.width)),
+                            out_nodata,
+                            dtype=np.float32,
+                        )
                         reproject(
                             source=src_arr.astype(np.float32),
                             destination=remapped,
                             src_transform=src_transform,
                             src_crs=src_crs,
                             src_nodata=out_nodata,
-                            dst_transform=moving_src.transform,
+                            dst_transform=moving_src.window_transform(moving_window),
                             dst_crs=moving_src.crs,
                             dst_nodata=out_nodata,
                             resampling=Resampling.bilinear,
                         )
-                        existing = out_dst.read(b)
+                        # Use the source moving raster as the background instead of
+                        # reading back from the partially written compressed output.
+                        existing = moving_src.read(b, window=moving_window).astype(np.float32)
                         valid = remapped != out_nodata
-                        combined = np.where(valid, remapped, existing.astype(np.float32))
-                        out_dst.write(combined.astype(out_profile["dtype"]), b)
+                        combined = np.where(valid, remapped, existing)
+                        out_dst.write(
+                            combined.astype(out_profile["dtype"]),
+                            b,
+                            window=moving_window,
+                        )
                     else:
                         out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_out_window)
 
