@@ -1343,10 +1343,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error("--alignment-tile-buffer must be >= 0.")
         if args.alignment_min_valid_fraction <= 0 or args.alignment_min_valid_fraction > 1:
             parser.error("--alignment-min-valid-fraction must be in (0, 1].")
-        if args.alignment_registration_mode == "structural_wv3_lidar" and args.alignment_output_on_moving_grid:
-            parser.error(
-                "--alignment-output-on-moving-grid must be disabled when --alignment-registration-mode=structural_wv3_lidar."
-            )
         if args.alignment_temp_dir and not os.path.isdir(args.alignment_temp_dir):
             parser.error(f"--alignment-temp-dir does not exist or is not a directory: {args.alignment_temp_dir}")
     try:
