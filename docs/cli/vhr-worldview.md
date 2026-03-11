@@ -52,6 +52,7 @@ vhr-worldview \
 
 - `--output-dir`: final scene output folder
 - `--output-suffix`: filename suffix for scene outputs
+- `--skip-existing`: skip scenes whose final metadata JSON and output TIFF already exist
 - `--atmospheric-method`: choose `flaash`, `py6s`, or `none`
 - `--skip-flaash` + `--existing-flaash-input`: resume from existing FLAASH output
 - `--py6s-*`: Py6S atmosphere/aerosol/output controls
@@ -121,6 +122,18 @@ The command enforces:
 - required path pairing for existing ortho inputs
 - mutual exclusion for `--cloud-mask-method` and `--cloud-mask-command`
 - `/mnt/<drive>/...` scratch only when FLAASH pathing requires Windows ENVI interop
+
+## Skip Existing
+
+`--skip-existing` uses the per-scene metadata JSON as the completion marker.
+
+- a scene is skipped only if both:
+  - `<scene><output_suffix>.tif`
+  - `<scene><output_suffix>_metadata.json`
+  exist
+- if `run_alignment` is enabled, the aligned output TIFF must also exist for the scene to be skipped
+
+This is intentionally stricter than checking only the TIFF, so partial/crashed runs are less likely to be treated as complete.
 
 ## Defaults
 

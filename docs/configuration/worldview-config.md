@@ -39,6 +39,7 @@ scratch_dir: /mnt/d/test_data/scratch
 
 output_dir: /mnt/d/test_data/out/scenes
 output_suffix: _final
+skip_existing: false
 
 run_atmospheric_correction: true
 run_pansharpen: true
@@ -98,6 +99,8 @@ alignment_log_to_console: false
   - values are computed as bbox sample-grid mean on scene date (with configurable +/- day search).
 - `scratch_dir` is used for scene intermediates.
 - `output_dir` controls final scene output location.
+- `skip_existing: true` skips scenes only when the final metadata JSON and final output TIFF already exist.
+  - if alignment is enabled, the aligned TIFF must also exist
 - `run_atmospheric_correction` defaults to `true`; set to `false` to skip atmospheric correction.
 - `run_pansharpen` defaults to `true`; set to `false` to stop at orthorectified multispectral output.
 - `run_cloud_mask` defaults to `true`; set to `false` to skip cloud masking without removing cloud settings.
