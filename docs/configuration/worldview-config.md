@@ -57,7 +57,7 @@ cloud_mask_omnicloud_kwargs_json:
 run_alignment: false
 alignment_fixed_image: /mnt/d/lidar/mean_intensity_mosaic.tif
 alignment_output_suffix: _aligned
-alignment_moving_band_index: 6
+alignment_moving_band_index: 0
 alignment_fixed_band_index: 0
 alignment_registration_mode: structural_wv3_lidar
 alignment_parameter_map: rigid
@@ -66,7 +66,7 @@ alignment_tile_size: 1000
 alignment_tile_buffer: 100
 alignment_clip_fixed_to_moving: true
 alignment_enforce_mutual_valid_mask: true
-alignment_output_on_moving_grid: false
+alignment_output_on_moving_grid: true
 alignment_moving_nodata: -9999
 alignment_fixed_nodata: -9999
 # alignment_output_nodata: -9999
@@ -109,7 +109,7 @@ alignment_log_to_console: false
   - a JSON string (same format used by CLI flag).
 - `run_alignment` defaults to `false`; set `true` to align final scene output to a fixed raster.
 - `alignment_fixed_image` is required when `run_alignment: true`.
-- `alignment_moving_band_index` selects the moving (scene output) band for registration metric.
+- `alignment_moving_band_index` selects the moving (scene output) band for registration metric. Default is `0`; for many WV/LiDAR runs you may want to set this explicitly to `6`.
 - `alignment_fixed_band_index` selects the fixed raster band for registration metric.
 - `alignment_registration_mode: structural_wv3_lidar` mirrors the WV/LiDAR structural workflow.
 - `alignment_clip_fixed_to_moving: true` allows using very large fixed rasters by clipping to overlap.

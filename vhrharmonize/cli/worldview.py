@@ -1151,7 +1151,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--alignment-moving-band-index",
         type=int,
-        default=6,
+        default=0,
         help="0-based moving-image band index used for alignment metric.",
     )
     parser.add_argument(
@@ -1204,8 +1204,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--alignment-output-on-moving-grid",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Write alignment result on moving grid (default false for structural mode parity).",
+        default=True,
+        help="Write alignment result on moving grid (default: true).",
     )
     parser.add_argument(
         "--alignment-moving-nodata",

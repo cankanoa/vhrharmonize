@@ -75,7 +75,11 @@ vhr-worldview \
 - `--alignment-fixed-band-index`: 0-based fixed image band used for registration metric
 - `--alignment-registration-mode`: `default` or `structural_wv3_lidar`
 - `--alignment-clip-fixed-to-moving`: clip fixed domain to moving extent before alignment
-- `--alignment-output-on-moving-grid`: optional moving-grid output (disabled by default for `structural_wv3_lidar`)
+- `--alignment-output-on-moving-grid`: write aligned output on moving-image grid/resolution (default: enabled)
+
+Alignment mode notes:
+- `default`: raw-band elastix registration
+- `structural_wv3_lidar`: common-grid structural registration path for optical-to-LiDAR alignment
 
 ## Py6S Output Units
 

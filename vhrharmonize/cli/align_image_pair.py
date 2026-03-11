@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Align a moving image (A) to a fixed image (B). "
-            "Default behavior is tile-wise registration with overlap buffer."
+            "Default behavior is structural WV/LiDAR alignment on full extent."
         ),
     )
     parser.add_argument("--moving-image", required=True, help="Path to moving image A (will be warped).")
@@ -39,8 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-tiling",
-        action="store_true",
-        help="Disable tiling and run registration on the full image extent.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Disable/enable tiling (default: no tiling, full-extent registration).",
     )
     parser.add_argument(
         "--tile-size",
@@ -98,8 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--clip-fixed-to-moving",
-        action="store_true",
-        help="Clip fixed image domain to moving-image bounds before alignment.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Clip fixed image domain to moving-image bounds before alignment (default: enabled).",
     )
     parser.add_argument(
         "--output-on-moving-grid",
@@ -113,16 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--enforce-mutual-valid-mask",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "Use only pixels valid in both fixed and moving images for both elastix masks "
-            "(default: false)."
+            "(default: true)."
         ),
     )
     parser.add_argument(
         "--registration-mode",
         choices=["default", "structural_wv3_lidar"],
-        default="default",
+        default="structural_wv3_lidar",
         help=(
             "Registration strategy. `default` uses raw bands; "
             "`structural_wv3_lidar` mirrors the elastix-wrapper flow "
