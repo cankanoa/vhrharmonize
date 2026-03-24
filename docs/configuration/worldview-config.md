@@ -117,6 +117,10 @@ alignment_log_to_console: false
 - `alignment_registration_mode: structural_wv3_lidar` mirrors the WV/LiDAR structural workflow.
 - `alignment_clip_fixed_to_moving: true` allows using very large fixed rasters by clipping to overlap.
 - `alignment_output_on_moving_grid: true` writes aligned output back to the original moving-image grid/resolution.
+- `alignment_temp_dir` should preferably point to a native Linux filesystem path for
+  large alignment runs.
+- `alignment_keep_temp_dir: true` is useful while validating alignment runs, because
+  it preserves per-band intermediates and the serialized transform files.
 
 ## Run
 

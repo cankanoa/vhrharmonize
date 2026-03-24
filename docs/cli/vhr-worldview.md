@@ -77,10 +77,15 @@ vhr-worldview \
 - `--alignment-registration-mode`: `default` or `structural_wv3_lidar`
 - `--alignment-clip-fixed-to-moving`: clip fixed domain to moving extent before alignment
 - `--alignment-output-on-moving-grid`: write aligned output on moving-image grid/resolution (default: enabled)
+- `--alignment-temp-dir`: temp directory for elastix/transformix artifacts
+- `--alignment-keep-temp-dir`: retain alignment temp files for inspection/debugging
 
 Alignment mode notes:
 - `default`: raw-band elastix registration
 - `structural_wv3_lidar`: common-grid structural registration path for optical-to-LiDAR alignment
+
+For large scenes, prefer `alignment_temp_dir` on a native Linux filesystem rather
+than a mounted external path.
 
 ## Py6S Output Units
 

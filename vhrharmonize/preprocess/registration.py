@@ -1,5 +1,7 @@
 """Image registration utilities."""
 
+import subprocess
+import sys
 from typing import Any, Optional, Sequence, Union
 
 
@@ -133,6 +135,71 @@ def apply_elastix_transform(
     return output_image_path
 
 
+def write_transform_parameter_files(
+    transform_parameter_object: Any,
+    output_prefix: str,
+) -> list[str]:
+    """Write an elastix transform parameter object to parameter files."""
+    count = int(transform_parameter_object.GetNumberOfParameterMaps())
+    parameter_files = [f"{output_prefix}_{idx:03d}.txt" for idx in range(count)]
+    itk = _require_itk()
+    itk.ParameterObject.WriteParameterFiles(transform_parameter_object, parameter_files)
+    return parameter_files
+
+
+def _apply_elastix_transform_from_parameter_files(
+    moving_image_path: str,
+    output_image_path: str,
+    parameter_files: Sequence[str],
+    *,
+    reference_image_path: Optional[str] = None,
+    log_to_console: bool = False,
+) -> str:
+    """Apply transformix using serialized parameter files."""
+    itk = _require_itk()
+    parameter_object = itk.ParameterObject.New()
+    itk.ParameterObject.ReadParameterFiles(parameter_object, list(parameter_files))
+    return apply_elastix_transform(
+        moving_image_path=moving_image_path,
+        output_image_path=output_image_path,
+        transform_parameter_object=parameter_object,
+        reference_image_path=reference_image_path,
+        log_to_console=log_to_console,
+    )
+
+
+def apply_elastix_transform_subprocess(
+    moving_image_path: str,
+    output_image_path: str,
+    parameter_files: Sequence[str],
+    *,
+    reference_image_path: Optional[str] = None,
+    log_to_console: bool = False,
+) -> str:
+    """Apply transformix in a fresh Python subprocess for process isolation."""
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from vhrharmonize.preprocess.registration import "
+            "_apply_elastix_transform_from_parameter_files; "
+            "import sys; "
+            "_apply_elastix_transform_from_parameter_files("
+            "moving_image_path=sys.argv[1], "
+            "output_image_path=sys.argv[2], "
+            "parameter_files=sys.argv[3:-1], "
+            "reference_image_path=None if sys.argv[-1] == '__NONE__' else sys.argv[-1], "
+            f"log_to_console={bool(log_to_console)!r})"
+        ),
+        moving_image_path,
+        output_image_path,
+        *parameter_files,
+        reference_image_path if reference_image_path is not None else "__NONE__",
+    ]
+    subprocess.run(command, check=True)
+    return output_image_path
+
+
 def run_elastix_registration(
     fixed_image_path: str,
     moving_image_path: str,
@@ -182,5 +249,7 @@ def run_elastix_registration(
 __all__ = [
     "estimate_elastix_transform",
     "apply_elastix_transform",
+    "apply_elastix_transform_subprocess",
     "run_elastix_registration",
+    "write_transform_parameter_files",
 ]

@@ -14,8 +14,9 @@ from rasterio.warp import reproject
 from rasterio.windows import Window, from_bounds
 
 from vhrharmonize.preprocess.registration import (
-    apply_elastix_transform,
+    apply_elastix_transform_subprocess,
     estimate_elastix_transform,
+    write_transform_parameter_files,
 )
 
 
@@ -84,7 +85,38 @@ def _write_single_band_tif(
         "crs": crs,
         "transform": transform,
         "nodata": nodata,
-        "compress": "lzw",
+        "bigtiff": "yes",
+    }
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(data, 1)
+
+
+def _write_single_band_output_tif(
+    path: str,
+    data: np.ndarray,
+    *,
+    crs,
+    transform,
+    dtype: str,
+    nodata: Optional[float],
+) -> None:
+    """Write a compact GeoTIFF for non-ITK intermediate/final raster outputs."""
+    profile = {
+        "driver": "GTiff",
+        "count": 1,
+        "height": int(data.shape[0]),
+        "width": int(data.shape[1]),
+        "dtype": dtype,
+        "crs": crs,
+        "transform": transform,
+        "nodata": nodata,
+        "bigtiff": "yes",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "compress": "deflate",
+        "predictor": 2,
+        "interleave": "band",
     }
     with rasterio.open(path, "w", **profile) as dst:
         dst.write(data, 1)
@@ -535,12 +567,18 @@ def align_image_pair(
                     skipped_tiles += 1
                     continue
 
+                serialized_transform_files = write_transform_parameter_files(
+                    transform_parameter_object,
+                    os.path.join(tile_dir, "transform"),
+                )
+
                 row0 = int(core_fixed_window.row_off - fixed_window.row_off)
                 col0 = int(core_fixed_window.col_off - fixed_window.col_off)
                 row1 = row0 + int(core_fixed_window.height)
                 col1 = col0 + int(core_fixed_window.width)
                 fixed_mask_core = fixed_mask_for_elastix[row0:row1, col0:col1] > 0
 
+                aligned_band_paths: List[str] = []
                 for b in range(1, moving_src.count + 1):
                     moving_band_path = os.path.join(tile_dir, f"moving_band_{b:03d}.tif")
                     moving_band_data = moving_src.read(b, window=moving_window).astype(np.float32)
@@ -578,10 +616,10 @@ def align_image_pair(
                     )
 
                     transformed_band_path = os.path.join(tile_dir, f"warped_band_{b:03d}.tif")
-                    apply_elastix_transform(
+                    apply_elastix_transform_subprocess(
                         moving_image_path=moving_band_path,
                         output_image_path=transformed_band_path,
-                        transform_parameter_object=transform_parameter_object,
+                        parameter_files=serialized_transform_files,
                         reference_image_path=fixed_reg_path,
                         log_to_console=log_to_console,
                     )
@@ -592,39 +630,74 @@ def align_image_pair(
                         warped_core = np.where(fixed_mask_core, warped_core, out_nodata)
                     if output_on_moving_grid and not tiling:
                         with rasterio.open(transformed_band_path) as warped_src:
-                            src_arr = warped_src.read(1).astype(np.float32)
                             src_transform = warped_src.transform
                             src_crs = warped_src.crs or fixed_src.crs
-                        # Reproject only into the moving-image overlap window rather than
-                        # allocating a full-scene destination array per band.
-                        remapped = np.full(
-                            (int(moving_window.height), int(moving_window.width)),
-                            out_nodata,
-                            dtype=np.float32,
-                        )
-                        reproject(
-                            source=src_arr.astype(np.float32),
-                            destination=remapped,
-                            src_transform=src_transform,
-                            src_crs=src_crs,
-                            src_nodata=out_nodata,
-                            dst_transform=moving_src.window_transform(moving_window),
-                            dst_crs=moving_src.crs,
-                            dst_nodata=out_nodata,
-                            resampling=Resampling.bilinear,
-                        )
-                        # Use the source moving raster as the background instead of
-                        # reading back from the partially written compressed output.
-                        existing = moving_src.read(b, window=moving_window).astype(np.float32)
-                        valid = remapped != out_nodata
-                        combined = np.where(valid, remapped, existing)
+                            aligned_band_path = os.path.join(tile_dir, f"aligned_band_{b:03d}.tif")
+                            aligned_profile = {
+                                "driver": "GTiff",
+                                "count": 1,
+                                "height": int(moving_window.height),
+                                "width": int(moving_window.width),
+                                "dtype": out_profile["dtype"],
+                                "crs": moving_src.crs,
+                                "transform": moving_src.window_transform(moving_window),
+                                "nodata": out_nodata,
+                                "bigtiff": "yes",
+                                "tiled": True,
+                                "blockxsize": 256,
+                                "blockysize": 256,
+                                "compress": "deflate",
+                                "predictor": 2,
+                                "interleave": "band",
+                            }
+                            with rasterio.open(aligned_band_path, "w", **aligned_profile) as aligned_dst:
+                                for _, block_window in aligned_dst.block_windows(1):
+                                    remapped_block = np.full(
+                                        (int(block_window.height), int(block_window.width)),
+                                        out_nodata,
+                                        dtype=np.float32,
+                                    )
+                                    reproject(
+                                        source=rasterio.band(warped_src, 1),
+                                        destination=remapped_block,
+                                        src_transform=src_transform,
+                                        src_crs=src_crs,
+                                        src_nodata=out_nodata,
+                                        dst_transform=aligned_dst.window_transform(block_window),
+                                        dst_crs=moving_src.crs,
+                                        dst_nodata=out_nodata,
+                                        resampling=Resampling.bilinear,
+                                    )
+                                    source_block_window = Window(
+                                        col_off=int(moving_window.col_off + block_window.col_off),
+                                        row_off=int(moving_window.row_off + block_window.row_off),
+                                        width=int(block_window.width),
+                                        height=int(block_window.height),
+                                    )
+                                    existing_block = moving_src.read(
+                                        b,
+                                        window=source_block_window,
+                                    ).astype(np.float32)
+                                    valid = remapped_block != out_nodata
+                                    combined = np.where(valid, remapped_block, existing_block)
+                                    aligned_dst.write(
+                                        combined.astype(out_profile["dtype"]),
+                                        1,
+                                        window=block_window,
+                                    )
+                        aligned_band_paths.append(aligned_band_path)
+                    else:
+                        out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_out_window)
+
+                if output_on_moving_grid and not tiling:
+                    for b, aligned_band_path in enumerate(aligned_band_paths, start=1):
+                        with rasterio.open(aligned_band_path) as aligned_src:
+                            aligned_band = aligned_src.read(1)
                         out_dst.write(
-                            combined.astype(out_profile["dtype"]),
+                            aligned_band.astype(out_profile["dtype"]),
                             b,
                             window=moving_window,
                         )
-                    else:
-                        out_dst.write(warped_core.astype(out_profile["dtype"]), b, window=core_out_window)
 
                 success_tiles += 1
 

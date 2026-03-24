@@ -68,6 +68,24 @@ vhr-align-image-pair \
   --output-on-moving-grid
 ```
 
+For large scenes, keep elastix temp artifacts on a native Linux filesystem instead
+of a mounted external/Windows path:
+
+```bash
+vhr-align-image-pair \
+  --moving-image /data/worldview_cloudmasked.tif \
+  --fixed-image /data/mean_intensity_mosaic.tif \
+  --output-image /data/worldview_aligned.tif \
+  --registration-mode structural_wv3_lidar \
+  --moving-band-index 6 \
+  --fixed-band-index 0 \
+  --clip-fixed-to-moving \
+  --enforce-mutual-valid-mask \
+  --output-on-moving-grid \
+  --keep-temp-dir \
+  --temp-dir /home/$USER/tmp_align
+```
+
 ## Real-World Example
 
 With current defaults, the following WV/LiDAR alignment only needs the non-default
@@ -81,20 +99,56 @@ vhr-align-image-pair \
   --moving-band-index 6
 ```
 
+Current tested full command pattern for larger Big Island scenes:
+
+```bash
+vhr-align-image-pair \
+  --moving-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked.tif \
+  --fixed-image /mnt/x/PROJECTS_2/Big_Island/ChangeHI_Trees/Dry_Forest/Data/Raster/mean_intensity/mean_intensity_mosaic.tif \
+  --output-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked_aligned_test2.tif \
+  --registration-mode structural_wv3_lidar \
+  --moving-band-index 6 \
+  --fixed-band-index 0 \
+  --clip-fixed-to-moving \
+  --enforce-mutual-valid-mask \
+  --output-on-moving-grid \
+  --keep-temp-dir \
+  --temp-dir /home/manumea/tmp_align
+```
+
 Expected completion output looks like:
 
 ```json
 {
-  "output_image_path": "/mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/17SEP06212820-M1BS-200011893447_01_P001_cloud_masked_aligned.tif",
+  "output_image_path": "/mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked_aligned_test2.tif",
   "total_tiles": 1,
   "successful_tiles": 1,
   "skipped_tiles": 0,
-  "temp_dir": null
+  "temp_dir": "/home/manumea/tmp_align/vhr_align_<random>"
 }
 ```
 
 `Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.`
 messages can appear from transformix intermediate files and are not by themselves a failure.
+
+## Temp Storage Notes
+
+- `--temp-dir` controls where elastix/transformix tile artifacts are written.
+- For large scenes, prefer a native Linux path such as `/home/<user>/tmp_align`.
+- Using a mounted external or Windows path for temp artifacts is not recommended for
+  this workflow.
+- `--keep-temp-dir` is useful while validating a run; it preserves:
+  - registration rasters (`fixed_reg.tif`, `moving_reg.tif`)
+  - masks
+  - per-band transformed rasters
+  - per-band aligned moving-grid rasters
+
+## Performance Notes
+
+- `structural_wv3_lidar` estimates one transform from the selected registration
+  bands, then applies that same transform to all moving-image bands.
+- In current implementation, moving-grid reprojection is performed blockwise to
+  reduce memory pressure on large scenes.
 
 ## Masking behavior
 
