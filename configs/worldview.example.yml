@@ -23,7 +23,7 @@ workflow:
 
 atmospheric_correction:
   atmospheric_method: py6s
-  atmospheric_correction_output_suffix: _atmospheric
+  atmospheric_correction_output_suffix: _py6s
   # atmospheric_correction_output_dir: /path/to/atmospheric_outputs
 
   fetch_atmosphere:
