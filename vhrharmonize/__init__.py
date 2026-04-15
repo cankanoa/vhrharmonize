@@ -3,7 +3,7 @@
 from importlib import import_module
 
 _EXPORTS = {
-    "find_files": (".providers.worldview.files", "find_files"),
+    "find_files": (".providers.worldview", "find_files"),
     "shp_to_gpkg": (".io.geospatial", "shp_to_gpkg"),
     "get_image_largest_value": (".io.geospatial", "get_image_largest_value"),
     "get_image_percentile_value": (".io.geospatial", "get_image_percentile_value"),
@@ -36,6 +36,8 @@ _EXPORTS = {
         ".preprocess.radiometric_normalization",
         "radiometric_normalization",
     ),
+    "align_image_pair": (".preprocess.alignment", "align_image_pair"),
+    "AlignmentResult": (".preprocess.alignment", "AlignmentResult"),
     "tile_image": (".io.tiling", "tile_image"),
     "run_elastix_registration": (
         ".preprocess.coregistration",

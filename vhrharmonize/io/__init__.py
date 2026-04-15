@@ -21,6 +21,11 @@ _EXPORTS = {
     "scale_gcps_geojson": (".geospatial", "scale_gcps_geojson"),
     "translate_gcp_image_to_origin": (".geospatial", "translate_gcp_image_to_origin"),
     "tile_image": (".tiling", "tile_image"),
+    "StepOutputPlan": (".workflow_utils", "StepOutputPlan"),
+    "build_output_path_from_input": (".workflow_utils", "build_output_path_from_input"),
+    "plan_step_outputs": (".workflow_utils", "plan_step_outputs"),
+    "resolve_output_dir": (".workflow_utils", "resolve_output_dir"),
+    "resolve_relative_to_input": (".workflow_utils", "resolve_relative_to_input"),
 }
 
 __all__ = list(_EXPORTS.keys())

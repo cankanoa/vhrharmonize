@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-from vhrharmonize.logging_utils import log
+from vhrharmonize.preprocess.helpers import log
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from scipy.ndimage import binary_dilation
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
 
-from vhrharmonize.logging_utils import log
+from vhrharmonize.preprocess.helpers import log
 
 
 @dataclass(frozen=True)

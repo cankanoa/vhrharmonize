@@ -6,8 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from vhrharmonize.providers.worldview.files import parse_worldview_basename
-from vhrharmonize.providers.worldview.metadata import WorldViewMetadata
+from vhrharmonize.providers.worldview import WorldViewMetadata, parse_worldview_basename
 
 _WV_BAND_ORDER = [
     "BAND_C",

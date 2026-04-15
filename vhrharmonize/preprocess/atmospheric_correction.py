@@ -13,8 +13,8 @@ import numpy as np
 import rasterio
 from tqdm import tqdm
 
-from vhrharmonize.logging_utils import log
 from vhrharmonize.preprocess.fetch_external_data import fetch_power_atmosphere_for_bbox
+from vhrharmonize.preprocess.helpers import log
 
 
 @dataclass(frozen=True)

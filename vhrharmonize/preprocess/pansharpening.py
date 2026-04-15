@@ -2,7 +2,7 @@ import numpy as np
 import orthority as oty
 import rasterio
 
-from vhrharmonize.logging_utils import log
+from vhrharmonize.preprocess.helpers import log
 
 
 def pansharpen_image(

@@ -13,7 +13,7 @@ from vhrharmonize.preprocess.fetch_external_data import (
     fetch_modis_water_vapor_for_bbox,
     init_ee_client,
 )
-from vhrharmonize.providers.worldview.files import find_files, parse_worldview_basename
+from vhrharmonize.providers.worldview import find_files, parse_worldview_basename
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(MODULE_DIR))

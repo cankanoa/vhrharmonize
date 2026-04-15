@@ -7,7 +7,7 @@ shared:
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
   dem_file_path: /path/to/dem/Hawaii_SRTM_GL1Ellip.tif # WG84 ellipsoidal height
-  # output_dir: ./outputs/worldview
+  # output_dir: ./outputs/worldview # Defaults to two folders aov
   output_suffix: _final
   skip_existing: true
   last_run_step: raw

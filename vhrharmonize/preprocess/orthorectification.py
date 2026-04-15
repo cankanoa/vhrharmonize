@@ -7,7 +7,7 @@ from typing import Union, Tuple
 import orthority as oty
 import pyproj
 
-from vhrharmonize.logging_utils import log
+from vhrharmonize.preprocess.helpers import log
 
 
 def resolve_output_resolution_for_crs(

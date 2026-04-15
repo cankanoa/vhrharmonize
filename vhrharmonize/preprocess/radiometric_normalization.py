@@ -6,7 +6,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from vhrharmonize.logging_utils import log
+from vhrharmonize.preprocess.helpers import log
 
 
 def _load_spectralmatch_pipeline() -> Callable[..., Any]:

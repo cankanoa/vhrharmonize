@@ -13,12 +13,12 @@ from rasterio.enums import Resampling
 from rasterio.warp import reproject
 from rasterio.windows import Window, from_bounds
 
-from vhrharmonize.logging_utils import log
 from vhrharmonize.preprocess.coregistration import (
     apply_elastix_transform_subprocess,
     estimate_elastix_transform,
     write_transform_parameter_files,
 )
+from vhrharmonize.preprocess.helpers import log
 
 
 @dataclass

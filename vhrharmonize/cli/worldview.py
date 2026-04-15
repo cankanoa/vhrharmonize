@@ -17,31 +17,32 @@ from typing import Dict, List, Optional
 
 import geopandas as gpd
 
+from vhrharmonize.cli.cli_helpers import load_yaml_config
 from vhrharmonize.io.geospatial import get_image_percentile_value, shp_to_gpkg
-from vhrharmonize.logging_utils import log
+from vhrharmonize.io.workflow_utils import (
+    build_output_path_from_input,
+    plan_step_outputs,
+    resolve_output_dir,
+    resolve_relative_to_input,
+)
 from vhrharmonize.preprocess.atmospheric_correction import run_flaash, run_py6s
+from vhrharmonize.preprocess.alignment import align_image_pair
 from vhrharmonize.preprocess.cloudmasking import cloudmask_raster
 from vhrharmonize.preprocess.fetch_external_data import (
     fetch_modis_water_vapor_for_bbox,
     fetch_power_atmosphere_for_bbox,
 )
+from vhrharmonize.preprocess.helpers import log
 from vhrharmonize.preprocess.orthorectification import (
     gcp_refined_rpc_orthorectification,
     resolve_output_resolution_for_crs,
 )
 from vhrharmonize.preprocess.pansharpening import pansharpen_image
 from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
-from vhrharmonize.providers.worldview.files import (
+from vhrharmonize.providers.worldview import (
     WorldViewImage,
     WorldViewScene,
     load_worldview_scenes_from_tif_files,
-)
-from vhrharmonize.pipelines.alignment import align_image_pair
-from vhrharmonize.workflow_utils import (
-    build_output_path_from_input,
-    plan_step_outputs,
-    resolve_output_dir,
-    resolve_relative_to_input,
 )
 
 RASTER_STEP_ORDER = [
@@ -222,18 +223,8 @@ def _apply_unknown_prefixed_args(args: argparse.Namespace, unknown_args: List[st
         idx += 1
 
 
-def _load_yaml_config(config_yaml_path: str) -> Dict:
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError(
-            "PyYAML is required for --config-yaml. Install it with `pip install pyyaml`."
-        ) from exc
-
-    with open(config_yaml_path, "r", encoding="utf-8") as f:
-        loaded = yaml.safe_load(f) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError("Config YAML root must be a mapping/dictionary.")
+def _load_worldview_yaml_config(config_yaml_path: str) -> Dict:
+    loaded = load_yaml_config(config_yaml_path)
 
     def _flatten_mapping(mapping: Dict, out: Dict) -> None:
         for key, value in mapping.items():
@@ -298,10 +289,15 @@ def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
 
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
     input_folder = scene.root_folder_path
-    scene_key = scene.primary_basename or f"{scene.scene_id}_{scene.catalog_id}"
+    default_final_output_dir = os.path.join(input_folder, "Processed")
     return {
         "temp_root": resolve_relative_to_input(args.temp_dir, input_folder),
-        "scene_work": resolve_output_dir(None, input_folder=input_folder, temp_dir=args.temp_dir, step_name=os.path.join("_scene", scene_key)),
+        "scene_work": resolve_output_dir(
+            None,
+            input_folder=input_folder,
+            temp_dir=args.temp_dir,
+            step_name="shared",
+        ),
         "fetch_atmosphere": resolve_output_dir(args.fetch_atmosphere_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="fetch_atmosphere"),
         "atmospheric_correction": resolve_output_dir(args.atmospheric_correction_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="atmospheric_correction"),
         "orthorectification": resolve_output_dir(args.orthorectification_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="orthorectification"),
@@ -310,7 +306,12 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
         "cloud_mask_mask": resolve_output_dir(args.cloud_mask_mask_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="cloud_mask_mask"),
         "alignment": resolve_output_dir(args.alignment_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="alignment"),
         "radiometric_normalization": resolve_output_dir(args.radiometric_normalization_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="radiometric_normalization"),
-        "final": resolve_output_dir(args.output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="final"),
+        "final": resolve_output_dir(
+            args.output_dir if args.output_dir not in (None, "") else default_final_output_dir,
+            input_folder=input_folder,
+            temp_dir=args.temp_dir,
+            step_name="final",
+        ),
     }
 
 
@@ -1116,7 +1117,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
-        config_defaults = _normalize_config_defaults(_load_yaml_config(config_args.config_yaml))
+        config_defaults = _normalize_config_defaults(_load_worldview_yaml_config(config_args.config_yaml))
 
     parser = build_parser()
     if config_defaults:

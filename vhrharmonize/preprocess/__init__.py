@@ -3,6 +3,7 @@
 from importlib import import_module
 
 _EXPORTS = {
+    "log": (".helpers", "log"),
     "atmospheric_correction": (".atmospheric_correction", "atmospheric_correction"),
     "run_py6s": (".atmospheric_correction", "run_py6s"),
     "run_flaash": (".atmospheric_correction", "run_flaash"),
@@ -25,6 +26,8 @@ _EXPORTS = {
         "apply_binary_cloud_mask_to_image",
     ),
     "radiometric_normalization": (".radiometric_normalization", "radiometric_normalization"),
+    "align_image_pair": (".alignment", "align_image_pair"),
+    "AlignmentResult": (".alignment", "AlignmentResult"),
     "tile_image": ("..io.tiling", "tile_image"),
     "estimate_elastix_transform": (".coregistration", "estimate_elastix_transform"),
     "apply_elastix_transform": (".coregistration", "apply_elastix_transform"),

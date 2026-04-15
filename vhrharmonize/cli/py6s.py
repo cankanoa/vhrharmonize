@@ -10,6 +10,8 @@ import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from vhrharmonize.cli.cli_helpers import load_yaml_config
+
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
     if not raw_values:
@@ -21,24 +23,6 @@ def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
             if value:
                 parsed.append(value)
     return parsed
-
-
-def _load_yaml_config(config_yaml_path: str) -> Dict:
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError(
-            "PyYAML is required for --config-yaml. Install it with `pip install pyyaml`."
-        ) from exc
-
-    with open(config_yaml_path, "r", encoding="utf-8") as f:
-        loaded = yaml.safe_load(f) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError("Config YAML root must be a mapping/dictionary.")
-    normalized = {}
-    for key, value in loaded.items():
-        normalized[key.replace("-", "_")] = value
-    return normalized
 
 
 def _normalize_config_defaults(config_defaults: Dict) -> Dict:
@@ -76,8 +60,7 @@ def run_py6s_only(args: argparse.Namespace) -> int:
         gcp_refined_rpc_orthorectification,
         resolve_output_resolution_for_crs,
     )
-    from vhrharmonize.providers.worldview.files import find_files
-    from vhrharmonize.providers.worldview.metadata import load_worldview_metadata
+    from vhrharmonize.providers.worldview import find_files, load_worldview_metadata
     from vhrharmonize.providers.standardized import StandardizedMetadata
 
     filter_basenames = _parse_filter_basenames(args.filter_basename)
@@ -287,7 +270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
-        config_defaults = _normalize_config_defaults(_load_yaml_config(config_args.config_yaml))
+        config_defaults = _normalize_config_defaults(load_yaml_config(config_args.config_yaml))
 
     parser = build_parser()
     if config_defaults:
