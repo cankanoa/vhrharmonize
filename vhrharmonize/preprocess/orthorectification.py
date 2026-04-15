@@ -1,11 +1,26 @@
-import pyproj
-import os
-import orthority as oty
 import json
-
+import os
 from tempfile import NamedTemporaryFile
 from osgeo import gdal
 from typing import Union, Tuple
+
+import orthority as oty
+import pyproj
+
+from vhrharmonize.logging_utils import log
+
+
+def resolve_output_resolution_for_crs(
+    output_epsg: int,
+    product_resolution: Union[float, None],
+):
+    """Return a safe output resolution for the requested target CRS."""
+    if product_resolution is None:
+        return None
+    crs = pyproj.CRS.from_epsg(int(output_epsg))
+    if crs.is_geographic:
+        return None
+    return product_resolution
 
 
 def gcp_refined_rpc_orthorectification(
@@ -17,8 +32,10 @@ def gcp_refined_rpc_orthorectification(
     output_nodata_value=None,
     dtype=None,
     output_resolution: Union[float, Tuple[float, float]]=None,
+    log_to_console: bool = False,
     ):
     """Orthorectify an image using RPC metadata, with optional GCP-based RPC refinement."""
+    log("Running orthorectification", enabled=log_to_console, step="orthorectification")
 
     # Set resolution of output raster
     if isinstance(output_resolution, float):
@@ -136,12 +153,13 @@ def gcp_refined_rpc_orthorectification(
 
     # Clean up the temporary file
     os.remove(temp_image_path)
-    print(f"Orthorectified image saved to {output_image_path}")
+    log("Wrote output", enabled=log_to_console, step="orthorectification")
 
 
 def qgis_gcps_to_csv(
     input_gcp_path,
-    output_epsg=None
+    output_epsg=None,
+    log_to_console: bool = False,
     ):
 
     """
@@ -159,17 +177,11 @@ def qgis_gcps_to_csv(
 
     # Initialize transformer if output_epsg is provided
     if output_epsg is not None:
-        try:
-            # Assumption: Input map coordinates are in WGS84 (EPSG:4326)
-            transformer = pyproj.Transformer.from_crs(
-                "EPSG:4326",          # Input CRS
-                f"EPSG:{output_epsg}",# Output CRS
-                always_xy=True
-            )
-            print(f"Initialized transformer from EPSG:4326 to EPSG:{output_epsg}.")
-        except Exception as e:
-            print(f"Error initializing transformer: {e}")
-            return output_csv_text
+        transformer = pyproj.Transformer.from_crs(
+            "EPSG:4326",
+            f"EPSG:{output_epsg}",
+            always_xy=True
+        )
     else:
         transformer = None
 
@@ -187,27 +199,16 @@ def qgis_gcps_to_csv(
 
             parts = stripped_line.split(',')
             if len(parts) >= 8:
-                try:
-                    mapX = float(parts[0])
-                    mapY = float(parts[1])
-                    sourceX = float(parts[2])
-                    sourceY = float(parts[3])
-                    # The remaining parts are enable, dX, dY, residual
-                except ValueError:
-                    print(f"Line {line_number}: Invalid numeric values. Skipping line.")
-                    continue
+                mapX = float(parts[0])
+                mapY = float(parts[1])
+                sourceX = float(parts[2])
+                sourceY = float(parts[3])
 
                 # Transform map coordinates if transformer is available
                 if transformer:
-                    try:
-                        transformed_mapX, transformed_mapY = transformer.transform(mapX, mapY)
-                        mapX_str = f"{transformed_mapX}"
-                        mapY_str = f"{transformed_mapY}"
-                    except Exception as e:
-                        print(f"Line {line_number}: Error transforming coordinates ({mapX}, {mapY}): {e}")
-                        # Optionally, skip this GCP or retain original coordinates
-                        mapX_str = f"{mapX}"
-                        mapY_str = f"{mapY}"
+                    transformed_mapX, transformed_mapY = transformer.transform(mapX, mapY)
+                    mapX_str = f"{transformed_mapX}"
+                    mapY_str = f"{transformed_mapY}"
                 else:
                     mapX_str = f"{mapX}"
                     mapY_str = f"{mapY}"
@@ -219,10 +220,9 @@ def qgis_gcps_to_csv(
                 # Append to CSV text
                 output_csv_text += f"{mapX_str},{mapY_str},{sourceX_str},{sourceY_str},0\n"
             else:
-                print(f"Line {line_number}: Insufficient columns. Expected at least 8, got {len(parts)}. Skipping line.")
                 continue
 
-    print("Converted QGIS GCP file to GDAL-compatible CSV text.")
+    log("Converted QGIS GCP text to CSV", enabled=log_to_console, step="orthorectification")
     return output_csv_text
 
 
@@ -250,7 +250,8 @@ def qgis_gcps_to_geojson(
     file_name,
     dem_file_path,
     output_geojson_path,
-    force_positive_pixel_values=False
+    force_positive_pixel_values=False,
+    log_to_console: bool = False,
     ):
     """Convert a QGIS GCP text file into Orthority-compatible GeoJSON control points."""
 
@@ -270,12 +271,16 @@ def qgis_gcps_to_geojson(
         # Convert lon/lat into pixel coords within the DEM
         x_pixel = int((lon - dem_transform[0]) / dem_transform[1])
         y_pixel = int((lat - dem_transform[3]) / dem_transform[5])
-        try:
-            elevation = dem_band.ReadAsArray(x_pixel, y_pixel, 1, 1)[0, 0]
-            no_data = dem_band.GetNoDataValue()
-            return float(elevation) if elevation != no_data else 0.0
-        except:
+        if (
+            x_pixel < 0
+            or y_pixel < 0
+            or x_pixel >= dem_dataset.RasterXSize
+            or y_pixel >= dem_dataset.RasterYSize
+        ):
             return 0.0
+        elevation = dem_band.ReadAsArray(x_pixel, y_pixel, 1, 1)[0, 0]
+        no_data = dem_band.GetNoDataValue()
+        return float(elevation) if elevation != no_data else 0.0
 
     # Open the input image
     image_dataset = gdal.Open(input_image_path)
@@ -295,27 +300,21 @@ def qgis_gcps_to_geojson(
             continue
 
         values = line.split(",")
-        try:
-            # map_x, map_y are geographic coords (long, lat)
-            map_x = float(values[0])
-            map_y = float(values[1])
-            pixel_x = float(values[2])
-            pixel_y = float(values[3])
-
-            elevation = get_elevation(map_x, map_y)
-
-            # Convert from geographic (lon, lat) to pixel coords
-            success, (px, py, pz) = geo_to_image_coords(image_dataset, pixel_x, pixel_y)
-            if not success:
-                print(f"Transformation failed for {pixel_x}, {pixel_y}")
-                continue
-
-            if force_positive_pixel_values:
-                px, py = abs(px), abs(py)
-
-        except (IndexError, ValueError) as e:
-            print(f"Skipping line due to error: {e}")
+        if len(values) < 4:
             continue
+        map_x = float(values[0])
+        map_y = float(values[1])
+        pixel_x = float(values[2])
+        pixel_y = float(values[3])
+
+        elevation = get_elevation(map_x, map_y)
+
+        success, (px, py, pz) = geo_to_image_coords(image_dataset, pixel_x, pixel_y)
+        if not success:
+            continue
+
+        if force_positive_pixel_values:
+            px, py = abs(px), abs(py)
 
         feature = {
             "type": "Feature",
@@ -336,7 +335,7 @@ def qgis_gcps_to_geojson(
 
     with open(output_geojson_path, "w") as f:
         json.dump(geojson, f, indent=4)
-    print(f"GeoJSON saved to {output_geojson_path}")
+    log("Wrote GCP GeoJSON", enabled=log_to_console, step="orthorectification")
 
     # Cleanup
     dem_dataset = None

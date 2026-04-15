@@ -1,4 +1,4 @@
-"""Image registration utilities."""
+"""Image coregistration utilities."""
 
 import subprocess
 import sys
@@ -181,7 +181,7 @@ def apply_elastix_transform_subprocess(
         sys.executable,
         "-c",
         (
-            "from vhrharmonize.preprocess.registration import "
+            "from vhrharmonize.preprocess.coregistration import "
             "_apply_elastix_transform_from_parameter_files; "
             "import sys; "
             "_apply_elastix_transform_from_parameter_files("

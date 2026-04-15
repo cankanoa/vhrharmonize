@@ -33,7 +33,7 @@ Additional providers and sensors (for example, Planet) are being added.
 
 ### 1. Requirements
 
-- Python `>=3.9` (3.11+ recommended)
+- Python `>=3.9`
 - GDAL-compatible environment
 - `6S` executable for Py6S workflows (default)
 - ENVI Task Engine only for FLAASH workflows

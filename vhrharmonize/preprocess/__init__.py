@@ -4,11 +4,18 @@ from importlib import import_module
 
 _EXPORTS = {
     "atmospheric_correction": (".atmospheric_correction", "atmospheric_correction"),
+    "run_py6s": (".atmospheric_correction", "run_py6s"),
+    "run_flaash": (".atmospheric_correction", "run_flaash"),
     "gcp_refined_rpc_orthorectification": (
         ".orthorectification",
         "gcp_refined_rpc_orthorectification",
     ),
+    "resolve_output_resolution_for_crs": (
+        ".orthorectification",
+        "resolve_output_resolution_for_crs",
+    ),
     "pansharpen_image": (".pansharpening", "pansharpen_image"),
+    "cloudmask_raster": (".cloudmasking", "cloudmask_raster"),
     "create_cloud_mask_with_omnicloudmask": (
         ".cloudmasking",
         "create_cloud_mask_with_omnicloudmask",
@@ -17,12 +24,11 @@ _EXPORTS = {
         ".cloudmasking",
         "apply_binary_cloud_mask_to_image",
     ),
-    "apply_rrn": (".radiometric_normalization", "apply_rrn"),
-    "apply_arn": (".radiometric_normalization", "apply_arn"),
-    "tile_image": (".tiling", "tile_image"),
-    "estimate_elastix_transform": (".registration", "estimate_elastix_transform"),
-    "apply_elastix_transform": (".registration", "apply_elastix_transform"),
-    "run_elastix_registration": (".registration", "run_elastix_registration"),
+    "radiometric_normalization": (".radiometric_normalization", "radiometric_normalization"),
+    "tile_image": ("..io.tiling", "tile_image"),
+    "estimate_elastix_transform": (".coregistration", "estimate_elastix_transform"),
+    "apply_elastix_transform": (".coregistration", "apply_elastix_transform"),
+    "run_elastix_registration": (".coregistration", "run_elastix_registration"),
 }
 
 __all__ = list(_EXPORTS.keys())

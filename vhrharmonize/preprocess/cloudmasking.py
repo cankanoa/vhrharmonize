@@ -1,5 +1,6 @@
 import os
-from typing import Iterable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Optional, Sequence
 
 import numpy as np
 import rasterio
@@ -7,6 +8,71 @@ from affine import Affine
 from scipy.ndimage import binary_dilation
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
+
+from vhrharmonize.logging_utils import log
+
+
+@dataclass(frozen=True)
+class CloudMaskResult:
+    """Summary of cloud mask generation and application."""
+
+    output_mask_path: str
+    output_raster_path: str
+    mask_pixel_count: int
+
+
+def cloudmask_raster(
+    input_image_path: str,
+    output_raster_path: str,
+    output_mask_path: str,
+    *,
+    red_band_index: int,
+    green_band_index: int,
+    nir_band_index: int,
+    cloud_classes: Sequence[int] = (1, 2, 3),
+    buffer_pixels: int = 0,
+    omnicloud_kwargs: Optional[dict] = None,
+    inference_resolution_m: Optional[float] = 10.0,
+    cloud_mask_value: int = 1,
+    output_nodata_value: Optional[float] = None,
+    allow_mask_reprojection: bool = True,
+    log_to_console: bool = False,
+) -> CloudMaskResult:
+    """Create a cloud mask and apply it to a raster."""
+    log("Running cloud mask", enabled=log_to_console, step="cloudmask")
+    create_cloud_mask_with_omnicloudmask(
+        input_image_path,
+        output_mask_path,
+        red_band_index=red_band_index,
+        green_band_index=green_band_index,
+        nir_band_index=nir_band_index,
+        cloud_classes=cloud_classes,
+        buffer_pixels=buffer_pixels,
+        omnicloud_kwargs=omnicloud_kwargs,
+        inference_resolution_m=inference_resolution_m,
+        log_to_console=log_to_console,
+    )
+    apply_binary_cloud_mask_to_image(
+        input_image_path,
+        output_mask_path,
+        output_raster_path,
+        cloud_mask_value=cloud_mask_value,
+        output_nodata_value=output_nodata_value,
+        allow_mask_reprojection=allow_mask_reprojection,
+        log_to_console=log_to_console,
+    )
+
+    mask_pixel_count = 0
+    with rasterio.open(output_mask_path) as src:
+        for _, window in src.block_windows(1):
+            block = src.read(1, window=window)
+            mask_pixel_count += int((block == cloud_mask_value).sum())
+
+    return CloudMaskResult(
+        output_mask_path=output_mask_path,
+        output_raster_path=output_raster_path,
+        mask_pixel_count=mask_pixel_count,
+    )
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -64,6 +130,7 @@ def create_cloud_mask_with_omnicloudmask(
     buffer_pixels: int = 0,
     omnicloud_kwargs: Optional[dict] = None,
     inference_resolution_m: Optional[float] = 10.0,
+    log_to_console: bool = False,
 ) -> str:
     """
     Run OmniCloudMask on an input raster and write a binary cloud mask.
@@ -125,7 +192,6 @@ def create_cloud_mask_with_omnicloudmask(
                 return arr
 
             left, top = src.transform.c, src.transform.f
-            px_w, px_h = abs(src.transform.a), abs(src.transform.e)
             right = left + src.width * src.transform.a
             bottom = top + src.height * src.transform.e
             out_w = max(1, int((right - left) / float(inference_resolution_m)))
@@ -140,8 +206,10 @@ def create_cloud_mask_with_omnicloudmask(
                 width=out_w,
                 transform=Affine.from_gdal(*out_gt),
             )
-            print(
-                f"Downsampling cloudmask inference input from ~{px_w:.3f} to {inference_resolution_m:.3f} map units"
+            log(
+                f"Downsampling inference input to {inference_resolution_m:.3f} map units",
+                enabled=log_to_console,
+                step="cloudmask",
             )
         else:
             rgbn = src.read([red_band_index, green_band_index, nir_band_index]).astype(np.float32)
@@ -160,9 +228,7 @@ def create_cloud_mask_with_omnicloudmask(
             retry_kwargs.setdefault("batch_size", 1)
             retry_kwargs.setdefault("patch_size", 768)
             retry_kwargs.setdefault("patch_overlap", 192)
-            print(
-                "OmniCloudMask CUDA OOM encountered. Retrying on CPU with conservative tiling."
-            )
+            log("Retrying on CPU after CUDA OOM", enabled=log_to_console, step="cloudmask")
             raw_mask = predict_from_array(rgbn, **retry_kwargs)
 
         class_mask = _normalize_omnicloud_output(raw_mask)
@@ -183,6 +249,7 @@ def apply_binary_cloud_mask_to_image(
     cloud_mask_value: int = 1,
     output_nodata_value: Optional[float] = None,
     allow_mask_reprojection: bool = True,
+    log_to_console: bool = False,
 ) -> str:
     """
     Apply a binary cloud mask to an image by assigning NoData to masked pixels.
@@ -230,4 +297,13 @@ def apply_binary_cloud_mask_to_image(
         if mask_reader is not mask_src:
             mask_reader.close()
 
+    log("Wrote mask and masked raster", enabled=log_to_console, step="cloudmask")
     return output_image_path
+
+
+__all__ = [
+    "CloudMaskResult",
+    "cloudmask_raster",
+    "create_cloud_mask_with_omnicloudmask",
+    "apply_binary_cloud_mask_to_image",
+]

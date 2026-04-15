@@ -1,3 +1,3 @@
-# `vhrharmonize.preprocess.tiling`
+# `vhrharmonize.io.tiling`
 
-::: vhrharmonize.preprocess.tiling
+::: vhrharmonize.io.tiling

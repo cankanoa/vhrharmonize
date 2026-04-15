@@ -20,6 +20,7 @@ _EXPORTS = {
     ),
     "scale_gcps_geojson": (".geospatial", "scale_gcps_geojson"),
     "translate_gcp_image_to_origin": (".geospatial", "translate_gcp_image_to_origin"),
+    "tile_image": (".tiling", "tile_image"),
 }
 
 __all__ = list(_EXPORTS.keys())

@@ -33,8 +33,8 @@ nav:
       - preprocess.orthorectification: api/preprocess-orthorectification.md
       - preprocess.pansharpening: api/preprocess-pansharpening.md
       - preprocess.cloudmasking: api/preprocess-cloudmasking.md
-      - preprocess.registration: api/preprocess-registration.md
-      - preprocess.tiling: api/preprocess-tiling.md
+      - preprocess.coregistration: api/preprocess-registration.md
+      - io.tiling: api/preprocess-tiling.md
       - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
       - preprocess.data_preparation: api/data_prep.md
       - io.geospatial: api/utils.md

@@ -9,9 +9,8 @@ The package now follows a layered structure to support multi-provider VHR prepro
   - orthorectification
   - pansharpening
   - cloudmasking
-  - registration
-  - tiling
-  - radiometric normalization (RRN/ARN)
+  - coregistration
+  - radiometric normalization
 - `vhrharmonize/providers`: provider adapters (`worldview`, `planet` scaffold)
 - `vhrharmonize/pipelines`: orchestration layer for scene workflows
 - `vhrharmonize/cli`: command entrypoints
@@ -23,10 +22,7 @@ The package now follows a layered structure to support multi-provider VHR prepro
   - `preprocess.atmospheric_correction.FLAASHCorrector`
   - `preprocess.atmospheric_correction.Py6SCorrector`
 - Relative radiometric normalization:
-  - `preprocess.radiometric_normalization.apply_rrn(...)`
-  - `preprocess.radiometric_normalization.spectralmatch_rrn(...)` (scaffold backend)
-- Absolute radiometric normalization:
-  - `preprocess.radiometric_normalization.apply_arn(...)` (scaffold)
+  - `preprocess.radiometric_normalization.radiometric_normalization(...)`
 
 ## Packaging
 
