@@ -194,7 +194,43 @@ def _scene_root_for_path(path: str) -> str:
     return directory
 
 
-def _companion_files_for_stem(directory: str, basename: str) -> Dict[str, Optional[str]]:
+def _find_worldview_shp_file(
+    image_directory: str,
+    scene_root: str,
+    basename: str,
+) -> Optional[str]:
+    for candidate in sorted(os.listdir(image_directory)):
+        candidate_path = os.path.join(image_directory, candidate)
+        if not os.path.isfile(candidate_path):
+            continue
+        if os.path.splitext(candidate)[1].lower() != ".shp":
+            continue
+        if basename in os.path.splitext(candidate)[0]:
+            return candidate_path
+
+    gis_files_directory = None
+    for candidate in sorted(os.listdir(scene_root)):
+        candidate_path = os.path.join(scene_root, candidate)
+        if os.path.isdir(candidate_path) and candidate.upper() == "GIS_FILES":
+            gis_files_directory = candidate_path
+            break
+
+    if gis_files_directory is None:
+        return None
+
+    for candidate in sorted(os.listdir(gis_files_directory)):
+        candidate_path = os.path.join(gis_files_directory, candidate)
+        if not os.path.isfile(candidate_path):
+            continue
+        if os.path.splitext(candidate)[1].lower() != ".shp":
+            continue
+        if basename in os.path.splitext(candidate)[0]:
+            return candidate_path
+
+    return None
+
+
+def _companion_files_for_stem(directory: str, scene_root: str, basename: str) -> Dict[str, Optional[str]]:
     companions = {"imd_file": None, "tif_file": None, "shp_file": None, "til_file": None}
     for candidate in os.listdir(directory):
         candidate_path = os.path.join(directory, candidate)
@@ -208,10 +244,9 @@ def _companion_files_for_stem(directory: str, basename: str) -> Dict[str, Option
             companions["imd_file"] = candidate_path
         elif ext == ".tif":
             companions["tif_file"] = candidate_path
-        elif ext == ".shp":
-            companions["shp_file"] = candidate_path
         elif ext == ".til":
             companions["til_file"] = candidate_path
+    companions["shp_file"] = _find_worldview_shp_file(directory, scene_root, basename)
     return companions
 
 
@@ -230,8 +265,12 @@ def discover_worldview_scene_tree_from_tif_files(
         if allowed and filename_parts.basename not in allowed:
             continue
 
-        companions = _companion_files_for_stem(os.path.dirname(tif_file), filename_parts.basename)
         scene_root = _scene_root_for_path(tif_file)
+        companions = _companion_files_for_stem(
+            os.path.dirname(tif_file),
+            scene_root,
+            filename_parts.basename,
+        )
         scene_bucket = scene_tree.setdefault(filename_parts.scene_id, {})
         scene = scene_bucket.setdefault(
             filename_parts.catalog_id,
