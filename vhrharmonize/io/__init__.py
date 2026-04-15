@@ -25,6 +25,7 @@ _EXPORTS = {
     "build_output_path_from_input": (".workflow_utils", "build_output_path_from_input"),
     "plan_step_outputs": (".workflow_utils", "plan_step_outputs"),
     "resolve_output_dir": (".workflow_utils", "resolve_output_dir"),
+    "resolve_temp_dir": (".workflow_utils", "resolve_temp_dir"),
     "resolve_relative_to_input": (".workflow_utils", "resolve_relative_to_input"),
 }
 

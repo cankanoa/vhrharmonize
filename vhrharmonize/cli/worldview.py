@@ -23,6 +23,7 @@ from vhrharmonize.io.workflow_utils import (
     build_output_path_from_input,
     plan_step_outputs,
     resolve_output_dir,
+    resolve_temp_dir,
     resolve_relative_to_input,
 )
 from vhrharmonize.preprocess.atmospheric_correction import run_flaash, run_py6s
@@ -290,26 +291,75 @@ def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
     input_folder = scene.root_folder_path
     default_final_output_dir = os.path.join(input_folder, "Processed")
+    resolved_temp_root = resolve_temp_dir(args.temp_dir, input_folder=input_folder)
     return {
-        "temp_root": resolve_relative_to_input(args.temp_dir, input_folder),
+        "temp_root": resolved_temp_root,
         "scene_work": resolve_output_dir(
             None,
-            input_folder=input_folder,
-            temp_dir=args.temp_dir,
+            temp_dir=resolved_temp_root,
             step_name="shared",
         ),
-        "fetch_atmosphere": resolve_output_dir(args.fetch_atmosphere_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="fetch_atmosphere"),
-        "atmospheric_correction": resolve_output_dir(args.atmospheric_correction_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="atmospheric_correction"),
-        "orthorectification": resolve_output_dir(args.orthorectification_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="orthorectification"),
-        "pansharpen": resolve_output_dir(args.pansharpen_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="pansharpen"),
-        "cloud_mask": resolve_output_dir(args.cloud_mask_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="cloud_mask"),
-        "cloud_mask_mask": resolve_output_dir(args.cloud_mask_mask_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="cloud_mask_mask"),
-        "alignment": resolve_output_dir(args.alignment_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="alignment"),
-        "radiometric_normalization": resolve_output_dir(args.radiometric_normalization_output_dir, input_folder=input_folder, temp_dir=args.temp_dir, step_name="radiometric_normalization"),
+        "fetch_atmosphere": resolve_output_dir(
+            resolve_relative_to_input(args.fetch_atmosphere_output_dir, input_folder)
+            if args.fetch_atmosphere_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="fetch_atmosphere",
+        ),
+        "atmospheric_correction": resolve_output_dir(
+            resolve_relative_to_input(args.atmospheric_correction_output_dir, input_folder)
+            if args.atmospheric_correction_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="atmospheric_correction",
+        ),
+        "orthorectification": resolve_output_dir(
+            resolve_relative_to_input(args.orthorectification_output_dir, input_folder)
+            if args.orthorectification_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="orthorectification",
+        ),
+        "pansharpen": resolve_output_dir(
+            resolve_relative_to_input(args.pansharpen_output_dir, input_folder)
+            if args.pansharpen_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="pansharpen",
+        ),
+        "cloud_mask": resolve_output_dir(
+            resolve_relative_to_input(args.cloud_mask_output_dir, input_folder)
+            if args.cloud_mask_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="cloud_mask",
+        ),
+        "cloud_mask_mask": resolve_output_dir(
+            resolve_relative_to_input(args.cloud_mask_mask_output_dir, input_folder)
+            if args.cloud_mask_mask_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="cloud_mask_mask",
+        ),
+        "alignment": resolve_output_dir(
+            resolve_relative_to_input(args.alignment_output_dir, input_folder)
+            if args.alignment_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="alignment",
+        ),
+        "radiometric_normalization": resolve_output_dir(
+            resolve_relative_to_input(args.radiometric_normalization_output_dir, input_folder)
+            if args.radiometric_normalization_output_dir not in (None, "")
+            else None,
+            temp_dir=resolved_temp_root,
+            step_name="radiometric_normalization",
+        ),
         "final": resolve_output_dir(
-            args.output_dir if args.output_dir not in (None, "") else default_final_output_dir,
-            input_folder=input_folder,
-            temp_dir=args.temp_dir,
+            resolve_relative_to_input(args.output_dir, input_folder)
+            if args.output_dir not in (None, "")
+            else default_final_output_dir,
+            temp_dir=resolved_temp_root,
             step_name="final",
         ),
     }
@@ -1052,7 +1102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cloud-mask-mask-output-dir")
     parser.add_argument("--alignment-output-dir")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--temp-dir", default="/tmp")
+    parser.add_argument("--temp-dir")
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--run-atmospheric-correction", action=argparse.BooleanOptionalAction, default=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
@@ -24,19 +25,26 @@ def resolve_relative_to_input(path: str, input_folder: str) -> str:
     return os.path.normpath(os.path.join(input_folder, path))
 
 
+def resolve_temp_dir(configured_dir: Optional[str], *, input_folder: str) -> str:
+    """Resolve a workflow temp directory, creating a real temp folder when unset."""
+    if configured_dir in (None, ""):
+        return tempfile.mkdtemp(prefix="vhrharmonize_")
+    resolved_dir = resolve_relative_to_input(str(configured_dir), input_folder)
+    os.makedirs(resolved_dir, exist_ok=True)
+    return resolved_dir
+
+
 def resolve_output_dir(
     configured_dir: Optional[str],
     *,
-    input_folder: str,
     temp_dir: str,
     step_name: str,
 ) -> str:
     """Resolve and create an output directory for a workflow step."""
-    resolved_temp_dir = resolve_relative_to_input(temp_dir, input_folder)
     output_dir = (
-        os.path.join(resolved_temp_dir, step_name)
+        os.path.join(temp_dir, step_name)
         if configured_dir in (None, "")
-        else resolve_relative_to_input(str(configured_dir), input_folder)
+        else configured_dir
     )
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
@@ -98,5 +106,6 @@ __all__ = [
     "build_output_path_from_input",
     "plan_step_outputs",
     "resolve_output_dir",
+    "resolve_temp_dir",
     "resolve_relative_to_input",
 ]
