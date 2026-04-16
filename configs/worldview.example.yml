@@ -1,5 +1,5 @@
 shared:
-  #temp_dir: /temp/folder
+  #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
   epsg: 6635
   nodata_value: -9999
   dtype: int16
