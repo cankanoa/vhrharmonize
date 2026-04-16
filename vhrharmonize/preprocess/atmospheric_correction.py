@@ -332,7 +332,12 @@ class Py6SCorrector:
 
             nodata = src.nodata if nodata_override is None else float(nodata_override)
             profile = src.profile.copy()
-            profile.update(dtype=output_dtype, nodata=nodata, compress="lzw")
+            profile.update(
+                dtype=output_dtype,
+                nodata=nodata,
+                compress="lzw",
+                BIGTIFF="IF_SAFER",
+            )
             input_tags = src.tags()
             input_rpc_tags = src.tags(ns="RPC")
             input_gcps, input_gcps_crs = src.gcps
