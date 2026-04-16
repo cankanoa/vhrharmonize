@@ -2,6 +2,12 @@
 
 Standalone cloud-mask runner for an existing raster using OmniCloudMask.
 
+Install extras with:
+
+```bash
+pip install -e ".[cloud]"
+```
+
 ## Usage
 
 ```bash

@@ -1,13 +1,13 @@
 shared:
-  temp_dir: /tmp
+  #temp_dir: /temp/folder
   epsg: 6635
   nodata_value: -9999
   dtype: int16
   log_to_console: true
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
-  dem_file_path: /path/to/dem/Hawaii_SRTM_GL1Ellip.tif # WG84 ellipsoidal height
-  # output_dir: ./outputs/worldview # Defaults to two folders aov
+  dem_file_path: /path/to/dem.tif # WG84 ellipsoidal height (can download here: https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1)
+  # output_dir: ./outputs/worldview # Defaults to the root folder of the image in a 'processed' folder (e.g. './processed')
   output_suffix: _final
   skip_existing: true
   last_run_step: raw

@@ -1,3 +1,3 @@
-# `vhrharmonize.providers.worldview.files`
+# `vhrharmonize.providers.worldview`
 
-::: vhrharmonize.providers.worldview.files
+::: vhrharmonize.providers.worldview

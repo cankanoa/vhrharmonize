@@ -2,13 +2,16 @@
 
 Runs full-scene WorldView preprocessing:
 
-1. Scene discovery from input directory (uses `Root*.txt` overrides if present)
-2. Atmospheric correction (`flaash`, `py6s`, or `none`)
-3. Orthorectification (default RPC)
-4. Pansharpening
-5. Optional cloud masking (inferred from orthorectified MS and applied to current workflow output)
-6. Optional alignment to a fixed/reference raster
-7. Write final full-scene output(s)
+1. Recursive scene discovery from `--input-file-glob`
+2. WorldView MUL/PAN pairing plus IMD parsing
+3. Optional atmosphere fetch
+4. Atmospheric correction (`flaash`, `py6s`, or `none`)
+5. Orthorectification (default RPC)
+6. Pansharpening
+7. Optional cloud masking
+8. Optional alignment to a fixed/reference raster
+9. Optional radiometric normalization
+10. Write final scene output(s)
 
 ## Typical Usage
 
@@ -44,7 +47,7 @@ vhr-worldview \
 
 ## Required Inputs
 
-- `--input-dir` (repeatable) unless set in config
+- `--input-file-glob` (repeatable) unless set in config
 - `--dem-file-path` unless set in config
 - `--envi-engine-path` only when `--atmospheric-method=flaash` and not using `--skip-flaash`
 
@@ -52,8 +55,10 @@ vhr-worldview \
 
 - `--output-dir`: final scene output folder
 - `--output-suffix`: filename suffix for scene outputs
-- `--skip-existing`: skip scenes whose final metadata JSON and output TIFF already exist
+- `--skip-existing`: skip scenes when the final output TIFF already exists
+- `--last-run-step`: resume the raster chain from an existing step output
 - `--atmospheric-method`: choose `flaash`, `py6s`, or `none`
+- `--run-fetch-atmosphere` / `--no-run-fetch-atmosphere`
 - `--skip-flaash` + `--existing-flaash-input`: resume from existing FLAASH output
 - `--py6s-*`: Py6S atmosphere/aerosol/output controls
 - `--py6s-visibility`: optional visibility mode (km), used instead of `--py6s-aot550`
@@ -71,6 +76,7 @@ vhr-worldview \
 - `--cloud-mask-inference-resolution-m`: resolution used for OmniCloudMask inference input (default `10.0`)
 - `--cloud-mask-command`: run external command template on full-scene image
 - `--run-alignment` / `--no-run-alignment`: enable or skip final alignment stage
+- `--run-radiometric-normalization` / `--no-run-radiometric-normalization`
 - `--alignment-fixed-image`: required fixed/reference raster when alignment is enabled
 - `--alignment-moving-band-index`: 0-based moving image band used for registration metric
 - `--alignment-fixed-band-index`: 0-based fixed image band used for registration metric
@@ -83,6 +89,7 @@ vhr-worldview \
 Alignment mode notes:
 - `default`: raw-band elastix registration
 - `structural_wv3_lidar`: common-grid structural registration path for optical-to-LiDAR alignment
+  - despite the name, this is a generic structural edge-based mode, not a WorldView-only implementation
 
 For large scenes, prefer `alignment_temp_dir` on a native Linux filesystem rather
 than a mounted external path.
@@ -118,27 +125,14 @@ than a mounted external path.
   - https://nctec.co/wp-content/uploads/2018/01/2018_03_28_DigitalGlobe_Radiometric_Use_of_WorldView-2_Imagery_RevA.pdf
   - https://dg-cms-uploads-production.s3.amazonaws.com/uploads/document/file/95/Radiometric_Use_of_WorldView-3_Imagery.pdf
 
-## Validation Rules
-
-The command enforces:
-
-- valid DEM percentile range
-- scratch directory existence
-- required path pairing for existing ortho inputs
-- mutual exclusion for `--cloud-mask-method` and `--cloud-mask-command`
-- `/mnt/<drive>/...` scratch only when FLAASH pathing requires Windows ENVI interop
-
 ## Skip Existing
 
-`--skip-existing` uses the per-scene metadata JSON as the completion marker.
+`--skip-existing` works in two layers:
 
-- a scene is skipped only if both:
-  - `<scene><output_suffix>.tif`
-  - `<scene><output_suffix>_metadata.json`
-  exist
-- if `run_alignment` is enabled, the aligned output TIFF must also exist for the scene to be skipped
+- per step, expected output filenames are planned first and only missing outputs are processed
+- before running the scene at all, the workflow checks whether the final output TIFF already exists and skips the whole scene if it does
 
-This is intentionally stricter than checking only the TIFF, so partial/crashed runs are less likely to be treated as complete.
+This means intermediate temp outputs can be safely removed without breaking scene-level skip behavior.
 
 ## Defaults
 

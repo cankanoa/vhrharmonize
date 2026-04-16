@@ -15,7 +15,7 @@ The transform is estimated per tile on a single selected band, then applied to a
 
 ## Requirements
 
-- `itk-elastix` installed (for example: `pip install -e ".[elastix]"`)
+- `itk-elastix` installed (for example: `pip install -e ".[align]"`)
 - both rasters must have a defined CRS
 - both rasters must currently use the same CRS
 - both rasters should spatially overlap in that CRS
@@ -51,6 +51,7 @@ vhr-align-image-pair \
 
 - `default`: raw-band elastix registration. Use this when both rasters are comparable radiometrically and you want a generic registration path.
 - `structural_wv3_lidar`: intended for optical-to-LiDAR alignment. It builds structural proxy images on a common fixed-grid ROI and runs a chained `translation -> rigid` transform estimate, then applies that geometric transform to the original moving bands.
+  - despite the name, this is a generic structural edge-based mode, not a WorldView-only implementation
 
 ## Recommended WV/LiDAR Usage
 

@@ -900,8 +900,8 @@ def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> 
 
 
 def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Namespace) -> bool:
-    final_image_path, final_metadata_path = _final_output_paths(state, args)
-    return os.path.isfile(final_image_path) and os.path.isfile(final_metadata_path)
+    final_image_path, _ = _final_output_paths(state, args)
+    return os.path.isfile(final_image_path)
 
 
 def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, scene_started_utc: str) -> None:

@@ -12,11 +12,14 @@ cp configs/worldview.example.yml configs/worldview.yml
 
 `vhr-worldview` runs the main end-to-end workflow for each discovered scene:
 
-- scene/file discovery and metadata loading
+- recursive TIFF discovery, WorldView scene grouping, and metadata loading
+- optional atmosphere fetch
 - atmospheric correction (`py6s`, `flaash`, or `none`; default `py6s`)
 - RPC orthorectification (MS and PAN)
 - pansharpening
 - optional cloud masking (if enabled in args/config)
+- optional alignment
+- optional radiometric normalization
 - final output write to your configured output directory
 
 ```bash
@@ -71,4 +74,23 @@ vhr-py6s \
   --output-suffix _py6s \
   --py6s-atmosphere-profile user \
   --py6s-auto-atmos-source nasa_power
+```
+
+### Run FLAASH directly (optional)
+
+```bash
+vhr-flaash \
+  --params-json-file outputs/flaash_params.json \
+  --output-params-path outputs/flaash_params_used.json \
+  --envi-engine-path /path/to/taskengine.exe
+```
+
+### Run radiometric normalization directly (optional)
+
+```bash
+vhr-radiometric-normalization \
+  rrn \
+  --input-image /data/image_a.tif \
+  --input-image /data/image_b.tif \
+  --output-image /data/out/normalized.tif
 ```

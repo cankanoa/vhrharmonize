@@ -24,7 +24,7 @@ Additional providers and sensors (for example, Planet) are being added.
 - Pansharpening
 - Optional cloud masking with OmniCloudMask
 - Tile utilities and tile-aware pairwise alignment (elastix)
-- Batch scene discovery + metadata/override processing
+- WorldView scene discovery, IMD parsing, and standardized metadata mapping
 - CLI and library-first interfaces
 
 ---
@@ -53,17 +53,22 @@ cd vhrharmonize
 pip install -e .
 ```
 
-Optional extras:
+Optional extras by step:
 
 ```bash
-pip install -e ".[cloud]"      # omnicloudmask
-pip install -e ".[elastix]"    # itk-elastix
-pip install -e ".[py6s]"       # backward-compat extra; Py6S is included in base install
-pip install -e ".[spectralmatch]"
+pip install -e ".[fetch-atmosphere]"            # requests
+pip install -e ".[cloud]"                       # omnicloudmask + scipy + gdal
+pip install -e ".[py6s]"                        # Py6S + tqdm
+pip install -e ".[flaash]"                      # envipyengine + gdal + tqdm
+pip install -e ".[orthorectification]"          # orthority + gdal + pyproj
+pip install -e ".[pansharpen]"                  # orthority
+pip install -e ".[align]"                       # itk-elastix
+pip install -e ".[radiometric-normalization]"   # spectralmatch
 pip install -e ".[docs]"
+pip install -e ".[all]"
 ```
 
-For conda users, install 6S with:
+For conda users, install 6S separately when using Py6S:
 
 ```bash
 mamba install -n vhrharmonize -c conda-forge py6s sixs
@@ -81,9 +86,13 @@ Primary CLI commands:
 ```bash
 vhr-worldview --help
 vhr-fetch-modis-water-vapor --help
+vhr-flaash --help
 vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
+vhr-orthorectification --help
+vhr-radiometric-normalization --help
+vhr-py6s --help
 ```
 
 Docs site:

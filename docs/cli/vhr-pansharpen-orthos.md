@@ -2,6 +2,12 @@
 
 Pansharpenes existing orthorectified multispectral and panchromatic rasters.
 
+Install extras with:
+
+```bash
+pip install -e ".[pansharpen]"
+```
+
 ## Usage
 
 ```bash

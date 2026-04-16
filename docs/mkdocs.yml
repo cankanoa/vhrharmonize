@@ -16,9 +16,12 @@ nav:
       - Overview: cli/overview.md
       - vhr-worldview: cli/vhr-worldview.md
       - vhr-fetch-modis-water-vapor: cli/vhr-fetch-modis-water-vapor.md
+      - vhr-flaash: cli/vhr-flaash.md
       - vhr-cloudmask-raster: cli/vhr-cloudmask-raster.md
       - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
       - vhr-align-image-pair: cli/vhr-align-image-pair.md
+      - vhr-orthorectification: cli/vhr-orthorectification.md
+      - vhr-radiometric-normalization: cli/vhr-radiometric-normalization.md
       - vhr-py6s: cli/vhr-py6s.md
   - Configuration:
       - WorldView Config: configuration/worldview-config.md
@@ -34,18 +37,15 @@ nav:
       - preprocess.pansharpening: api/preprocess-pansharpening.md
       - preprocess.cloudmasking: api/preprocess-cloudmasking.md
       - preprocess.coregistration: api/preprocess-registration.md
+      - preprocess.alignment: api/pipelines-alignment.md
       - io.tiling: api/preprocess-tiling.md
       - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
       - preprocess.data_preparation: api/data_prep.md
       - io.geospatial: api/utils.md
+      - io.workflow_utils: api/pipelines-config.md
       - analysis.statistics: api/calculate_statistics.md
-      - providers.worldview.files: api/find_files.md
-      - providers.worldview.discover: api/providers-worldview-discover.md
-      - providers.worldview.metadata: api/providers-worldview-metadata.md
-      - pipelines.alignment: api/pipelines-alignment.md
-      - pipelines.worldview: api/pipelines-worldview.md
-      - pipelines.config: api/pipelines-config.md
-      - pipelines.scene: api/pipelines-scene.md
+      - providers.worldview: api/find_files.md
+      - preprocess.helpers: api/providers-worldview-discover.md
   - Notes:
       - FLAASH Tuning Findings: notes/flaash_tuning_findings.md
       - FLAASH Params Info: flaash_params_info.txt

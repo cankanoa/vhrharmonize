@@ -20,9 +20,6 @@ vhr-fetch-modis-water-vapor \
 
 - JSON report (`--output-json`)
 - CSV report (`--output-csv`)
-- Optional write-back into `Root_WV.txt`:
-  - `--write-root-overrides`
-  - `--write-atmosphere-overrides`
 
 ## Notes
 
