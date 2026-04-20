@@ -1,3 +1,3 @@
-# `vhrharmonize.providers.worldview.discover`
+# `vhrharmonize.preprocess.helpers`
 
-::: vhrharmonize.providers.worldview.discover
+::: vhrharmonize.preprocess.helpers

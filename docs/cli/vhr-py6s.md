@@ -26,7 +26,7 @@ vhr-py6s \
 
 ## Key Inputs
 
-- `--input-dir` (repeatable): input root(s) containing WorldView scene structure
+- `--input-dir` (repeatable): input root(s) scanned recursively for WorldView TIFFs
 - `--filter-basename`: optional specific scene basename(s)
 - `--output-dir`: output folder for Py6S rasters and metadata reports
 - `--output-suffix`: output filename suffix

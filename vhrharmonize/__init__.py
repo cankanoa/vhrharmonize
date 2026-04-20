@@ -3,9 +3,7 @@
 from importlib import import_module
 
 _EXPORTS = {
-    "find_files": (".providers.worldview.files", "find_files"),
-    "find_roots": (".providers.worldview.files", "find_roots"),
-    "get_metadata_from_files": (".providers.worldview.files", "get_metadata_from_files"),
+    "find_files": (".providers.worldview", "find_files"),
     "shp_to_gpkg": (".io.geospatial", "shp_to_gpkg"),
     "get_image_largest_value": (".io.geospatial", "get_image_largest_value"),
     "get_image_percentile_value": (".io.geospatial", "get_image_percentile_value"),
@@ -20,25 +18,37 @@ _EXPORTS = {
     ),
     "pansharpen_image": (".preprocess.pansharpening", "pansharpen_image"),
     "run_flaash": (".preprocess.atmospheric_correction", "run_flaash"),
+    "run_py6s": (".preprocess.atmospheric_correction", "run_py6s"),
     "create_cloud_mask_with_omnicloudmask": (
         ".preprocess.cloudmasking",
         "create_cloud_mask_with_omnicloudmask",
     ),
+    "cloudmask_raster": (".preprocess.cloudmasking", "cloudmask_raster"),
     "apply_binary_cloud_mask_to_image": (
         ".preprocess.cloudmasking",
         "apply_binary_cloud_mask_to_image",
     ),
-    "tile_image": (".preprocess.tiling", "tile_image"),
+    "resolve_output_resolution_for_crs": (
+        ".preprocess.orthorectification",
+        "resolve_output_resolution_for_crs",
+    ),
+    "radiometric_normalization": (
+        ".preprocess.radiometric_normalization",
+        "radiometric_normalization",
+    ),
+    "align_image_pair": (".preprocess.alignment", "align_image_pair"),
+    "AlignmentResult": (".preprocess.alignment", "AlignmentResult"),
+    "tile_image": (".io.tiling", "tile_image"),
     "run_elastix_registration": (
-        ".preprocess.registration",
+        ".preprocess.coregistration",
         "run_elastix_registration",
     ),
     "estimate_elastix_transform": (
-        ".preprocess.registration",
+        ".preprocess.coregistration",
         "estimate_elastix_transform",
     ),
     "apply_elastix_transform": (
-        ".preprocess.registration",
+        ".preprocess.coregistration",
         "apply_elastix_transform",
     ),
 }

@@ -35,20 +35,14 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyproj>=3.7",
-    "orthority>=0.5.1",
-    "gdal>=3.11",
     "rasterio>=1.4.3",
-    "envipyengine>=1.0.9",
-    "matplotlib>=3.10",
-    "requests>=2.32.3",
     "numpy>=2.2",
-    "scipy>=1.15",
     "geopandas>=1.0.1",
     "shapely>=2.1",
-    "pyforestscan",
     "pyyaml",
-    "Py6S",
+    "gdal>=3.11",
+    "pyproj>=3.7",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
@@ -61,20 +55,38 @@ dependencies = [
 #    "pre-commit>=4.1.0"
 #]
 
+fetch-atmosphere = [
+    "requests>=2.32.3"
+]
+
 cloud = [
-    "omnicloudmask"
+    "omnicloudmask",
+    "scipy>=1.15",
 ]
 
 py6s = [
-    "Py6S"
+    "Py6S",
 ]
 
-spectralmatch = [
+flaash = [
+    "envipyengine>=1.0.9",
+]
+
+orthorectification = [
+    "orthority>=0.5.1",
+]
+
+pansharpen = [
+    "orthority>=0.5.1",
+]
+
+radiometric-normalization = [
     "spectralmatch"
 ]
 
-elastix = [
-    "itk-elastix>=0.19.2"
+align = [
+    "itk-elastix>=0.19.2",
+    "pyforestscan",
 ]
 
 docs = [
@@ -90,6 +102,11 @@ docs = [
 
 all = [
     "omnicloudmask",
+    "scipy>=1.15",
+    "requests>=2.32.3",
+    "Py6S",
+    "envipyengine>=1.0.9",
+    "orthority>=0.5.1",
     "spectralmatch",
     "itk-elastix>=0.19.2"
 ]
@@ -106,3 +123,6 @@ vhr-pansharpen-orthos = "vhrharmonize.cli.pansharpen:main"
 vhr-align-image-pair = "vhrharmonize.cli.align_image_pair:main"
 vhr-py6s = "vhrharmonize.cli.py6s:main"
 vhr-planet = "vhrharmonize.cli.planet:main"
+vhr-flaash = "vhrharmonize.cli.flaash:main"
+vhr-orthorectification = "vhrharmonize.cli.orthorectification:main"
+vhr-radiometric-normalization = "vhrharmonize.cli.radiometric_normalization:main"

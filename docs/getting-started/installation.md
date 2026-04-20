@@ -3,15 +3,12 @@
 ## System Requirements
 
 - Python `>=3.9`
-- GDAL-compatible environment
-- `6S` executable for Py6S workflows (default atmospheric method)
-- ENVI Task Engine only if using FLAASH workflows
+- A GDAL-compatible environment for raster-heavy steps
+- `6S` executable only when using Py6S workflows
+- ENVI Task Engine only when using FLAASH workflows
 
-Optional:
-
-- OmniCloudMask support: install with `.[cloud]`
-- Documentation tooling: install with `.[docs]`
-- Elastix registration support: install with `.[elastix]`
+The base install now keeps only widely shared Python dependencies. Step-specific
+packages are installed through extras.
 
 Recommended conda setup for Py6S + 6S:
 
@@ -33,28 +30,52 @@ With cloud masking extras:
 pip install -e ".[cloud]"
 ```
 
-With Py6S atmospheric correction extras (not required; included in base install):
+With external atmosphere fetch extras:
+
+```bash
+pip install -e ".[fetch-atmosphere]"
+```
+
+With Py6S atmospheric correction extras:
 
 ```bash
 pip install -e ".[py6s]"
 ```
 
-With spectralmatch normalization extras:
+With FLAASH extras:
 
 ```bash
-pip install -e ".[spectralmatch]"
+pip install -e ".[flaash]"
 ```
 
-With elastix registration extras:
+With orthorectification extras:
 
 ```bash
-pip install -e ".[elastix]"
+pip install -e ".[orthorectification]"
 ```
 
-If you created your env from `environment.yml`, install elastix support separately:
+With pansharpening extras:
 
 ```bash
-pip install itk-elastix>=0.19.2
+pip install -e ".[pansharpen]"
+```
+
+With radiometric normalization extras:
+
+```bash
+pip install -e ".[radiometric-normalization]"
+```
+
+With elastix alignment extras:
+
+```bash
+pip install -e ".[align]"
+```
+
+With everything:
+
+```bash
+pip install -e ".[all]"
 ```
 
 With docs extras:
@@ -68,9 +89,12 @@ pip install -e ".[docs]"
 ```bash
 vhr-worldview --help
 vhr-fetch-modis-water-vapor --help
+vhr-flaash --help
 vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
+vhr-orthorectification --help
+vhr-radiometric-normalization --help
 vhr-py6s --help
 ```
 

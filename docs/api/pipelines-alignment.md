@@ -1,3 +1,3 @@
-# `vhrharmonize.pipelines.alignment`
+# `vhrharmonize.preprocess.alignment`
 
-::: vhrharmonize.pipelines.alignment
+::: vhrharmonize.preprocess.alignment

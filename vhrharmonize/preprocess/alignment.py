@@ -13,11 +13,12 @@ from rasterio.enums import Resampling
 from rasterio.warp import reproject
 from rasterio.windows import Window, from_bounds
 
-from vhrharmonize.preprocess.registration import (
+from vhrharmonize.preprocess.coregistration import (
     apply_elastix_transform_subprocess,
     estimate_elastix_transform,
     write_transform_parameter_files,
 )
+from vhrharmonize.preprocess.helpers import log
 
 
 @dataclass
@@ -187,6 +188,7 @@ def align_image_pair(
         raise ValueError("output_on_moving_grid is currently supported only when tiling=False.")
     if registration_mode not in {"default", "structural_wv3_lidar"}:
         raise ValueError("registration_mode must be one of: default, structural_wv3_lidar")
+    log("Running alignment", enabled=log_to_console, step="alignment")
 
     temp_ctx = None
     work_dir: str
@@ -298,17 +300,6 @@ def align_image_pair(
             core_windows = [fixed_domain_window]
 
         with rasterio.open(output_image_path, "w+", **out_profile) as out_dst:
-            # Preserve radiometric/band metadata from moving image and clear stale stats
-            # that can cause misleading display stretches in GIS viewers.
-            try:
-                out_dst.colorinterp = moving_src.colorinterp
-            except Exception:
-                pass
-            try:
-                out_dst.scales = moving_src.scales
-                out_dst.offsets = moving_src.offsets
-            except Exception:
-                pass
             for b in range(1, moving_src.count + 1):
                 desc = moving_src.descriptions[b - 1]
                 if desc:
@@ -516,25 +507,20 @@ def align_image_pair(
                     nodata=0,
                 )
 
-                try:
-                    effective_parameter_files = parameter_file_paths
-                    effective_parameter_map = parameter_map
-                    if structural_mode and not parameter_file_paths:
-                        effective_parameter_map = ["translation", "rigid"]
-                    transform_parameter_object = estimate_elastix_transform(
-                        fixed_image_path=fixed_reg_path,
-                        moving_image_path=moving_reg_path,
-                        parameter_map=effective_parameter_map,
-                        parameter_file_paths=effective_parameter_files,
-                        force_nearest_resample=structural_mode,
-                        fixed_mask_path=fixed_mask_path,
-                        moving_mask_path=moving_mask_path,
-                        log_to_console=log_to_console,
-                    )
-                except Exception as exc:
-                    print(f"Skipping tile {tile_idx}: elastix registration failed: {exc}")
-                    skipped_tiles += 1
-                    continue
+                effective_parameter_files = parameter_file_paths
+                effective_parameter_map = parameter_map
+                if structural_mode and not parameter_file_paths:
+                    effective_parameter_map = ["translation", "rigid"]
+                transform_parameter_object = estimate_elastix_transform(
+                    fixed_image_path=fixed_reg_path,
+                    moving_image_path=moving_reg_path,
+                    parameter_map=effective_parameter_map,
+                    parameter_file_paths=effective_parameter_files,
+                    force_nearest_resample=structural_mode,
+                    fixed_mask_path=fixed_mask_path,
+                    moving_mask_path=moving_mask_path,
+                    log_to_console=log_to_console,
+                )
 
                 serialized_transform_files = write_transform_parameter_files(
                     transform_parameter_object,
@@ -651,6 +637,7 @@ def align_image_pair(
     else:
         kept_temp = work_dir
 
+    log("Wrote output", enabled=log_to_console, step="alignment")
     return AlignmentResult(
         output_image_path=output_image_path,
         total_tiles=total_tiles,

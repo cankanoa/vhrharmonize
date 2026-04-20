@@ -1,6 +1,8 @@
+import numpy as np
 import orthority as oty
 import rasterio
-import numpy as np
+
+from vhrharmonize.preprocess.helpers import log
 
 
 def pansharpen_image(
@@ -8,20 +10,29 @@ def pansharpen_image(
     input_high_resolution_path,
     output_image_path,
     change_nodata_value = None,
+    log_to_console: bool = False,
     ):
     """Pansharpen a multispectral raster with a higher-resolution panchromatic raster."""
-
+    log("Running pansharpen", enabled=log_to_console, step="pansharpen")
     pan_sharp = oty.PanSharpen(input_high_resolution_path, input_low_resolution_path)
     pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
 
     if change_nodata_value is not None:
-        _change_nodata_value(output_image_path, change_nodata_value, -32768)
+        _change_nodata_value(
+            output_image_path,
+            change_nodata_value,
+            -32768,
+            log_to_console=log_to_console,
+        )
+    log("Wrote output", enabled=log_to_console, step="pansharpen")
 
 
 def _change_nodata_value(
     input_image_path,
     new_nodata_value,
-    old_nodata
+    old_nodata,
+    *,
+    log_to_console: bool = False,
     ):
 
     """
@@ -32,8 +43,6 @@ def _change_nodata_value(
     :param new_nodata_value: Value to use as the new NoData.
     :param old_nodata: The pixel value currently used as NoData.
     """
-    print(f"Replacing {old_nodata} -> {new_nodata_value} (block-wise)")
-
     replaced_any = False
     with rasterio.open(input_image_path, "r+") as src:
         for band_idx in range(1, src.count + 1):
@@ -51,5 +60,5 @@ def _change_nodata_value(
         # GTiff stores a single dataset nodata (TIFFTAG_GDAL_NODATA).
         src.nodata = new_nodata_value
 
-    if not replaced_any:
-        print("No pixels matched old nodata value")
+    if replaced_any:
+        log("Updated nodata values", enabled=log_to_console, step="pansharpen")

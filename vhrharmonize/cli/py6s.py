@@ -6,10 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional
+
+from vhrharmonize.cli.cli_helpers import load_yaml_config
 
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
@@ -24,68 +25,12 @@ def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
     return parsed
 
 
-def _load_yaml_config(config_yaml_path: str) -> Dict:
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError(
-            "PyYAML is required for --config-yaml. Install it with `pip install pyyaml`."
-        ) from exc
-
-    with open(config_yaml_path, "r", encoding="utf-8") as f:
-        loaded = yaml.safe_load(f) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError("Config YAML root must be a mapping/dictionary.")
-    normalized = {}
-    for key, value in loaded.items():
-        normalized[key.replace("-", "_")] = value
-    return normalized
-
-
 def _normalize_config_defaults(config_defaults: Dict) -> Dict:
     normalized = dict(config_defaults)
     for list_key in ("input_dir", "filter_basename"):
         if list_key in normalized and isinstance(normalized[list_key], str):
             normalized[list_key] = [normalized[list_key]]
     return normalized
-
-
-def _parse_worldview_datetime_from_basename(photo_basename: str) -> datetime:
-    month_map = {
-        "JAN": 1,
-        "FEB": 2,
-        "MAR": 3,
-        "APR": 4,
-        "MAY": 5,
-        "JUN": 6,
-        "JUL": 7,
-        "AUG": 8,
-        "SEP": 9,
-        "OCT": 10,
-        "NOV": 11,
-        "DEC": 12,
-    }
-    m = re.match(r"^(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})(\d{2})-", photo_basename)
-    if not m:
-        raise ValueError(f"Could not parse acquisition datetime from basename: {photo_basename}")
-    return datetime(
-        year=2000 + int(m.group(3)),
-        month=month_map[m.group(2)],
-        day=int(m.group(1)),
-        hour=int(m.group(4)),
-        minute=int(m.group(5)),
-        second=int(m.group(6)),
-    )
-
-
-def _resolve_scene_datetime(mul_imd_data: Dict, mul_photo_basename: str) -> datetime:
-    raw = mul_imd_data.get("ACQUISITION_DATETIME_UTC")
-    if isinstance(raw, str) and raw.strip():
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            pass
-    return _parse_worldview_datetime_from_basename(mul_photo_basename)
 
 
 def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, float]:
@@ -107,76 +52,25 @@ def _write_json(path: str, payload: Dict) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def _build_py6s_kwargs(
-    mul_imd_data: Dict[str, float],
-    mul_photo_basename: str,
-    *,
-    atmosphere_profile: str,
-    aerosol_profile: str,
-    aot550: float,
-    visibility_km: Optional[float],
-    water_vapor: float,
-    ozone: float,
-    sixs_executable: Optional[str],
-    output_scale_factor: Optional[float],
-    output_dtype: str,
-    use_imd_radiance_calibration: bool,
-    use_worldview_gain_offset_adjustment: bool,
-) -> Dict:
-    dt = _resolve_scene_datetime(mul_imd_data, mul_photo_basename)
-    py6s_kwargs = {
-        "solar_zenith": mul_imd_data.get("SOLAR_ZENITH"),
-        "solar_azimuth": mul_imd_data.get("SOLAR_AZIMUTH"),
-        "view_zenith": mul_imd_data.get("VIEW_ZENITH", mul_imd_data.get("LOS_ZENITH")),
-        "view_azimuth": mul_imd_data.get("LOS_AZIMUTH"),
-        "day": dt.day,
-        "month": dt.month,
-        "ground_elevation_km": 0.0,
-        "atmosphere_profile": atmosphere_profile,
-        "aerosol_profile": aerosol_profile,
-        "aot550": aot550,
-        "visibility_km": visibility_km,
-        "water_vapor": water_vapor,
-        "ozone": ozone,
-        "sixs_executable": sixs_executable,
-        "output_scale_factor": output_scale_factor,
-        "output_dtype": output_dtype,
-    }
-    dn_to_radiance_factors = mul_imd_data.get("worldview_dn_to_radiance_factors")
-    if use_imd_radiance_calibration and dn_to_radiance_factors:
-        if use_worldview_gain_offset_adjustment:
-            gains = mul_imd_data.get("worldview_dn_to_radiance_gains")
-            if gains and len(gains) >= len(dn_to_radiance_factors):
-                dn_to_radiance_factors = [
-                    float(dn_to_radiance_factors[idx]) * float(gains[idx])
-                    for idx in range(len(dn_to_radiance_factors))
-                ]
-        py6s_kwargs["dn_to_radiance_factors"] = dn_to_radiance_factors
-        dn_to_radiance_offsets = mul_imd_data.get("worldview_dn_to_radiance_offsets")
-        if use_worldview_gain_offset_adjustment and dn_to_radiance_offsets:
-            py6s_kwargs["dn_to_radiance_offsets"] = dn_to_radiance_offsets
-    return py6s_kwargs
-
-
 def run_py6s_only(args: argparse.Namespace) -> int:
-    from vhrharmonize.preprocess.atmospheric_correction import atmospheric_correction
-    from vhrharmonize.preprocess.orthorectification import gcp_refined_rpc_orthorectification
-    from vhrharmonize.providers.worldview.files import (
-        find_files,
-        find_roots,
-        get_metadata_from_files,
+    from vhrharmonize.preprocess.atmospheric_correction import (
+        run_py6s,
     )
+    from vhrharmonize.preprocess.orthorectification import (
+        gcp_refined_rpc_orthorectification,
+        resolve_output_resolution_for_crs,
+    )
+    from vhrharmonize.providers.worldview import find_files, load_worldview_metadata
+    from vhrharmonize.providers.standardized import StandardizedMetadata
 
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     os.makedirs(args.output_dir, exist_ok=True)
 
     for input_folder in args.input_dir:
         print(f"Scanning input folder: {input_folder}")
-        root_paths = find_roots(input_folder)
-
-        for root_folder_path, root_file_path in root_paths:
-            found_default_files = find_files(root_folder_path, root_file_path, filter_basenames)
-            for _, found_default_file in found_default_files.items():
+        found_default_files = find_files(input_folder, filter_basenames)
+        for _, found_default_file in found_default_files.items():
+                root_folder_path = found_default_file.get("root_folder_path")
                 mul_photo_basename = found_default_file.get("mul_photo_basename")
                 print(f"Processing: {mul_photo_basename}")
                 required = ("mul_imd_file", "mul_tif_file", "mul_shp_file")
@@ -187,80 +81,36 @@ def run_py6s_only(args: argparse.Namespace) -> int:
                 mul_imd_file = found_default_file["mul_imd_file"]
                 mul_tif_file = found_default_file["mul_tif_file"]
                 mul_shp_path = found_default_file["mul_shp_file"]
-                _, _, mul_imd_data = get_metadata_from_files(root_file_path, mul_imd_file, mul_photo_basename)
+                mul_worldview_metadata = load_worldview_metadata(
+                    mul_imd_file,
+                    photo_basename=mul_photo_basename,
+                )
+                mul_metadata = StandardizedMetadata.from_worldview_metadata(mul_worldview_metadata)
 
-                effective_aot550 = args.py6s_aot550
-                effective_wv = args.py6s_water_vapor
-                effective_ozone = args.py6s_ozone
-                auto_estimate = None
-                if (
-                    args.py6s_auto_atmos_source == "nasa_power"
-                    and args.py6s_atmosphere_profile.strip().lower() == "user"
-                ):
-                    from vhrharmonize.preprocess.atmosphere_nasa import fetch_power_atmosphere_for_bbox
-
-                    try:
-                        scene_dt = _resolve_scene_datetime(mul_imd_data, mul_photo_basename)
-                        min_lon, min_lat, max_lon, max_lat = _scene_bbox_wgs84_from_shp(mul_shp_path)
-                        estimate = fetch_power_atmosphere_for_bbox(
-                            day_utc=scene_dt.date(),
-                            min_lon=min_lon,
-                            min_lat=min_lat,
-                            max_lon=max_lon,
-                            max_lat=max_lat,
-                            grid_size=args.py6s_auto_atmos_grid_size,
-                            search_days=args.py6s_auto_atmos_search_days,
-                            timeout_s=args.py6s_auto_atmos_timeout_s,
-                            endpoint=args.py6s_auto_atmos_power_endpoint,
-                        )
-                        if estimate.aot550 is not None:
-                            effective_aot550 = float(estimate.aot550)
-                        if estimate.water_vapor is not None:
-                            effective_wv = float(estimate.water_vapor)
-                        if estimate.ozone_cm_atm is not None:
-                            effective_ozone = float(estimate.ozone_cm_atm)
-                        auto_estimate = {
-                            "source": estimate.source,
-                            "date_used": estimate.date_used,
-                            "sample_count": estimate.sample_count,
-                            "aot550": estimate.aot550,
-                            "water_vapor": estimate.water_vapor,
-                            "ozone_cm_atm": estimate.ozone_cm_atm,
-                        }
-                        print(
-                            "Auto-updated Py6S atmosphere from NASA POWER "
-                            f"(date={estimate.date_used}, samples={estimate.sample_count}): "
-                            f"aot550={effective_aot550:.4f}, water_vapor={effective_wv:.4f}, ozone={effective_ozone:.4f}"
-                        )
-                    except Exception as exc:
-                        auto_estimate = {"error": str(exc)}
-                        print(
-                            "Warning: failed to auto-fetch atmosphere from NASA POWER; "
-                            f"using configured values. ({exc})"
-                        )
-
-                py6s_kwargs = _build_py6s_kwargs(
-                    mul_imd_data,
-                    mul_photo_basename,
+                py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
+                scene_bbox = _scene_bbox_wgs84_from_shp(mul_shp_path)
+                py6s_result = run_py6s(
+                    input_raster=mul_tif_file,
+                    output_raster=py6s_output_path,
+                    metadata=mul_metadata,
+                    ground_elevation_km=0.0,
                     atmosphere_profile=args.py6s_atmosphere_profile,
                     aerosol_profile=args.py6s_aerosol_profile,
-                    aot550=effective_aot550,
+                    aot550=args.py6s_aot550,
                     visibility_km=args.py6s_visibility,
-                    water_vapor=effective_wv,
-                    ozone=effective_ozone,
+                    water_vapor=args.py6s_water_vapor,
+                    ozone=args.py6s_ozone,
                     sixs_executable=args.py6s_executable,
                     output_scale_factor=args.py6s_output_scale_factor,
                     output_dtype=args.py6s_output_dtype,
                     use_imd_radiance_calibration=args.py6s_use_imd_radiance_calibration,
                     use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
-                )
-
-                py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
-                atmospheric_correction(
-                    mul_tif_file,
-                    py6s_output_path,
-                    method="py6s",
-                    **py6s_kwargs,
+                    auto_atmos_source=args.py6s_auto_atmos_source,
+                    bbox_wgs84=scene_bbox,
+                    auto_atmos_grid_size=args.py6s_auto_atmos_grid_size,
+                    auto_atmos_search_days=args.py6s_auto_atmos_search_days,
+                    auto_atmos_timeout_s=args.py6s_auto_atmos_timeout_s,
+                    auto_atmos_power_endpoint=args.py6s_auto_atmos_power_endpoint,
                 )
                 final_output_path = py6s_output_path
                 if args.epsg is not None:
@@ -280,6 +130,10 @@ def run_py6s_only(args: argparse.Namespace) -> int:
                         args.epsg,
                         output_nodata_value=None,
                         dtype=args.py6s_output_dtype,
+                        output_resolution=resolve_output_resolution_for_crs(
+                            args.epsg,
+                            mul_metadata.product_resolution,
+                        ),
                     )
                     if args.keep_intermediate_py6s:
                         final_output_path = ortho_output_path
@@ -303,8 +157,8 @@ def run_py6s_only(args: argparse.Namespace) -> int:
                         "mul_imd_file": mul_imd_file,
                         "mul_tif_file": mul_tif_file,
                         "mul_shp_file": mul_shp_path,
-                        "root_file_path": root_file_path,
                     },
+                    "standardized_metadata": mul_metadata.to_dict(),
                     "py6s": {
                         "configured": {
                             "atmosphere_profile": args.py6s_atmosphere_profile,
@@ -320,12 +174,9 @@ def run_py6s_only(args: argparse.Namespace) -> int:
                             "auto_atmos_source": args.py6s_auto_atmos_source,
                         },
                         "effective": {
-                            "aot550": effective_aot550,
-                            "visibility_km": args.py6s_visibility,
-                            "water_vapor": effective_wv,
-                            "ozone": effective_ozone,
+                            **py6s_result.effective_params,
                         },
-                        "auto_atmos_estimate": auto_estimate,
+                        "auto_atmos_estimate": py6s_result.auto_atmos_estimate,
                     },
                     "orthorectification": {
                         "enabled": args.epsg is not None,
@@ -419,7 +270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
-        config_defaults = _normalize_config_defaults(_load_yaml_config(config_args.config_yaml))
+        config_defaults = _normalize_config_defaults(load_yaml_config(config_args.config_yaml))
 
     parser = build_parser()
     if config_defaults:

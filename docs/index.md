@@ -9,7 +9,8 @@ Core capabilities:
 - RPC orthorectification
 - Pansharpening
 - Optional cloud masking with OmniCloudMask
-- Metadata processing tools for automated workflows, including scene discovery
+- Pairwise alignment with elastix
+- WorldView discovery, IMD parsing, and standardized metadata handling
 
 Primary execution path is the `vhr-worldview` CLI, which runs the full-scene workflow and writes final scene outputs.
 
@@ -26,13 +27,21 @@ Primary execution path is the `vhr-worldview` CLI, which runs the full-scene wor
 ```bash
 vhr-worldview --help
 vhr-fetch-modis-water-vapor --help
+vhr-flaash --help
 vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
+vhr-align-image-pair --help
+vhr-orthorectification --help
+vhr-radiometric-normalization --help
+vhr-py6s --help
 ```
 
 ## Project Structure
 
 - `vhrharmonize/`: reusable Python package
+- `vhrharmonize/providers/`: provider-specific parsing and discovery
+- `vhrharmonize/preprocess/`: reusable processing steps
+- `vhrharmonize/io/`: shared geospatial and output-planning helpers
 - `vhrharmonize/cli/`: packaged CLI implementations
 - `configs/`: current config templates
 - `docs/`: MkDocs source

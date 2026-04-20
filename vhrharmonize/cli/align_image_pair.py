@@ -7,7 +7,7 @@ import os
 import sys
 from typing import Optional
 
-from vhrharmonize.pipelines.alignment import align_image_pair
+from vhrharmonize.preprocess.alignment import align_image_pair
 
 
 def build_parser() -> argparse.ArgumentParser:

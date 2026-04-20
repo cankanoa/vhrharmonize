@@ -6,14 +6,17 @@ The package now follows a layered structure to support multi-provider VHR prepro
 
 - `vhrharmonize/preprocess`: step-focused preprocessing modules
   - atmospheric correction
+  - alignment
   - orthorectification
   - pansharpening
   - cloudmasking
-  - registration
-  - tiling
-  - radiometric normalization (RRN/ARN)
-- `vhrharmonize/providers`: provider adapters (`worldview`, `planet` scaffold)
-- `vhrharmonize/pipelines`: orchestration layer for scene workflows
+  - coregistration
+  - radiometric normalization
+- `vhrharmonize/providers`: provider adapters
+  - `worldview.py`: WorldView file discovery and IMD parsing
+  - `planet.py`: placeholder provider module
+  - `standardized.py`: provider-neutral metadata model
+- `vhrharmonize/io`: geospatial IO plus output-planning helpers
 - `vhrharmonize/cli`: command entrypoints
 
 ## New Extension Points
@@ -23,17 +26,19 @@ The package now follows a layered structure to support multi-provider VHR prepro
   - `preprocess.atmospheric_correction.FLAASHCorrector`
   - `preprocess.atmospheric_correction.Py6SCorrector`
 - Relative radiometric normalization:
-  - `preprocess.radiometric_normalization.apply_rrn(...)`
-  - `preprocess.radiometric_normalization.spectralmatch_rrn(...)` (scaffold backend)
-- Absolute radiometric normalization:
-  - `preprocess.radiometric_normalization.apply_arn(...)` (scaffold)
+  - `preprocess.radiometric_normalization.radiometric_normalization(...)`
 
 ## Packaging
 
 - Type marker: `vhrharmonize/py.typed`
 - Extras:
-  - `.[py6s]` (backward-compat alias; Py6S is in base dependencies)
-  - `.[spectralmatch]`
+  - `.[fetch-atmosphere]`
   - `.[cloud]`
+  - `.[py6s]`
+  - `.[flaash]`
+  - `.[orthorectification]`
+  - `.[pansharpen]`
+  - `.[align]`
+  - `.[radiometric-normalization]`
   - `.[docs]`
   - `.[all]`

@@ -1,3 +1,3 @@
-# `vhrharmonize.pipelines.config`
+# `vhrharmonize.io.workflow_utils`
 
-::: vhrharmonize.pipelines.config
+::: vhrharmonize.io.workflow_utils

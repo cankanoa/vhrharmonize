@@ -1,3 +1,3 @@
-# `vhrharmonize.preprocess.registration`
+# `vhrharmonize.preprocess.coregistration`
 
-::: vhrharmonize.preprocess.registration
+::: vhrharmonize.preprocess.coregistration
