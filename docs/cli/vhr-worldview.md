@@ -48,8 +48,14 @@ vhr-worldview \
 ## Required Inputs
 
 - `--input-file-glob` (repeatable) unless set in config
-- `--dem-file-path` unless set in config
 - `--envi-engine-path` only when `--atmospheric-method=flaash` and not using `--skip-flaash`
+
+## DEM Input
+
+- `--dem-file-path` defaults to `online`
+  - this downloads an OpenTopography SRTM GL1 ellipsoidal DEM into the temp dir
+  - set `--dem-online-api-key` or `OPENTOPOGRAPHY_API_KEY`
+- you can also point `--dem-file-path` at a local DEM in WGS84 ellipsoidal height
 
 ## Common Options
 
@@ -58,6 +64,10 @@ vhr-worldview \
   - if unset, the default output base is `../Processed` from the MUL image folder
 - `--skip-existing`: skip scenes when the final output TIFF already exists
 - `--last-run-step`: resume the raster chain from an existing step output
+- `--dem-online-api-key`: OpenTopography API key for `--dem-file-path online`
+- `--dem-online-source`: global DEM dataset name (default `SRTMGL1_Ellip`)
+- `--dem-online-api-endpoint`: OpenTopography global DEM API endpoint
+- `--dem-online-timeout-s`: DEM download timeout in seconds
 - `--atmospheric-method`: choose `flaash`, `py6s`, or `none`
 - `--run-fetch-atmosphere` / `--no-run-fetch-atmosphere`
 - `--save-fetch-atmosphere`: `temp`, `output`, or a custom folder
@@ -151,6 +161,8 @@ Each raster step uses the same storage rule:
 - any other value is treated as a custom folder, and the step name is appended to it
 
 If `temp_dir` is unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`.
+
+When `dem_file_path=online`, the workflow downloads a WGS84 ellipsoidal-height DEM for each scene into `<temp_dir>/dem` and then uses that local file for atmospheric correction and orthorectification.
 
 There is no extra final copy stage anymore. The scene's final raster is the output from the last enabled raster step, and the metadata JSON is written beside that raster.
 

@@ -28,6 +28,9 @@ from vhrharmonize.preprocess.atmospheric_correction import run_flaash, run_py6s
 from vhrharmonize.preprocess.alignment import align_image_pair
 from vhrharmonize.preprocess.cloudmasking import cloudmask_raster
 from vhrharmonize.preprocess.fetch_external_data import (
+    DEFAULT_OPENTOPOGRAPHY_DEMTYPE,
+    DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT,
+    download_opentopography_dem_for_bbox,
     fetch_modis_water_vapor_for_bbox,
     fetch_power_atmosphere_for_bbox,
 )
@@ -64,6 +67,7 @@ class SceneWorkflowState:
     current_files: List[str]
     current_step: str = "raw"
     pan_ortho_path: Optional[str] = None
+    dem_file_path: Optional[str] = None
     fetch_atmosphere_result: Optional[Dict] = None
     py6s_effective_params: Optional[Dict] = None
     py6s_auto_atmos_estimate: Optional[Dict] = None
@@ -247,6 +251,40 @@ def _resolve_fetch_atmosphere_source(args: argparse.Namespace) -> str:
     if args.atmospheric_method == "flaash":
         return "modis_gee"
     return "nasa_power"
+
+
+def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Namespace) -> Optional[str]:
+    if state.dem_file_path:
+        return state.dem_file_path
+    if args.dem_file_path in (None, ""):
+        return None
+
+    mul_image = _require_scene_image(state.scene, "mul")
+    mul_folder = os.path.dirname(mul_image.tif_file)
+    dem_value = str(args.dem_file_path).strip()
+    if dem_value.lower() != "online":
+        resolved_dem_path = resolve_relative_to_input(dem_value, mul_folder)
+        state.dem_file_path = resolved_dem_path
+        return resolved_dem_path
+
+    dem_dir = os.path.join(state.step_dirs["temp_root"], "dem")
+    os.makedirs(dem_dir, exist_ok=True)
+    dem_output_path = os.path.join(dem_dir, f"{mul_image.basename}_dem.tif")
+    if not os.path.isfile(dem_output_path):
+        download_opentopography_dem_for_bbox(
+            min_lon=state.scene_bbox_wgs84[0],
+            min_lat=state.scene_bbox_wgs84[1],
+            max_lon=state.scene_bbox_wgs84[2],
+            max_lat=state.scene_bbox_wgs84[3],
+            output_tif_path=dem_output_path,
+            api_key=args.dem_online_api_key,
+            demtype=args.dem_online_source,
+            endpoint=args.dem_online_api_endpoint,
+            timeout_s=args.dem_online_timeout_s,
+            log_to_console=args.log_to_console,
+        )
+    state.dem_file_path = dem_output_path
+    return dem_output_path
 
 
 def _write_json(path: str, payload: Dict) -> None:
@@ -579,6 +617,9 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
     mul_image = state.scene.mul_image
     if mul_image is None or mul_image.standardized_metadata is None or mul_image.shp_file is None:
         raise ValueError("WorldView scene is missing multispectral inputs for atmospheric correction.")
+    resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
+    if resolved_dem_file_path is None:
+        raise ValueError("DEM file path is required for atmospheric correction.")
 
     plan = plan_step_outputs(
         state.current_files,
@@ -627,7 +668,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
             input_raster=input_raster,
             output_raster=output_raster,
             metadata=mul_image.standardized_metadata,
-            dem_file_path=args.dem_file_path,
+            dem_file_path=resolved_dem_file_path,
             footprint_vector_path=mul_gpkg_path,
             envi_engine_path=args.envi_engine_path,
             convert_paths_for_windows=True,
@@ -644,7 +685,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         mul_gpkg_path = os.path.join(state.step_dirs["scene_work"], f"{mul_image.basename}.gpkg")
         shp_to_gpkg(mul_image.shp_file, mul_gpkg_path, args.footprint_epsg)
         ground_elevation_m = get_image_percentile_value(
-            args.dem_file_path,
+            resolved_dem_file_path,
             percentile=args.flaash_dem_ground_percentile,
             mask=mul_gpkg_path,
         )
@@ -686,6 +727,9 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
     pan_image = state.scene.pan_image
     if mul_image is None or pan_image is None:
         raise ValueError("WorldView scene is missing multispectral or panchromatic image.")
+    resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
+    if resolved_dem_file_path is None:
+        raise ValueError("DEM file path is required for orthorectification.")
 
     if args.existing_mul_ortho_input:
         state.current_files = _register_step_outputs(state, "orthorectification", [args.existing_mul_ortho_input])
@@ -700,7 +744,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             gcp_refined_rpc_orthorectification(
                 input_path,
                 output_path,
-                args.dem_file_path,
+                resolved_dem_file_path,
                 args.epsg,
                 output_nodata_value=args.nodata_value,
                 dtype=args.dtype,
@@ -726,7 +770,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 gcp_refined_rpc_orthorectification(
                     input_path,
                     output_path,
-                    args.dem_file_path,
+                    resolved_dem_file_path,
                     args.epsg,
                     output_nodata_value=args.nodata_value,
                     dtype=args.dtype,
@@ -860,7 +904,9 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
             parameter_map=args.alignment_parameter_map,
             moving_nodata=args.alignment_moving_nodata,
             fixed_nodata=args.alignment_fixed_nodata,
-            output_nodata=args.alignment_output_nodata,
+            output_nodata=args.alignment_output_nodata
+            if args.alignment_output_nodata is not None
+            else args.nodata_value,
             min_valid_fraction=args.alignment_min_valid_fraction,
             temp_dir=resolved_alignment_temp_dir,
             keep_temp_dir=args.alignment_keep_temp_dir,
@@ -919,6 +965,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
     pan_image = state.scene.pan_image
     if mul_image is None or pan_image is None:
         raise ValueError("WorldView scene is missing required images for metadata reporting.")
+    resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
     final_scene_path, scene_metadata_path = _final_output_paths(state, args)
     payload = {
         "scene": {
@@ -937,7 +984,8 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "pan_imd_file": pan_image.imd_file,
             "pan_tif_file": pan_image.tif_file,
             "pan_shp_file": pan_image.shp_file,
-            "dem_file_path": args.dem_file_path,
+            "dem_file_path": resolved_dem_file_path,
+            "dem_file_path_requested": args.dem_file_path,
         },
         "standardized_metadata": {
             "mul": mul_image.standardized_metadata.to_dict() if mul_image.standardized_metadata else None,
@@ -1049,7 +1097,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recursive glob used to find input tif files, for example '/data/**/*.tif'.",
     )
     parser.add_argument("--input-dir", dest="input_file_glob", action="append", help=argparse.SUPPRESS)
-    parser.add_argument("--dem-file-path", help="DEM GeoTIFF path in WGS84 ellipsoidal height.")
+    parser.add_argument(
+        "--dem-file-path",
+        default="online",
+        help="DEM GeoTIFF path in WGS84 ellipsoidal height, or 'online' to download SRTM GL1 ellipsoidal to the temp dir.",
+    )
+    parser.add_argument("--dem-online-api-key")
+    parser.add_argument("--dem-online-source", default=DEFAULT_OPENTOPOGRAPHY_DEMTYPE)
+    parser.add_argument("--dem-online-api-endpoint", default=DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT)
+    parser.add_argument("--dem-online-timeout-s", type=float, default=120.0)
     parser.add_argument("--envi-engine-path", help="Path to ENVI taskengine executable.")
     parser.add_argument("--atmospheric-method", choices=["flaash", "py6s", "none"], default="py6s")
     parser.add_argument("--epsg", type=int, default=4326)
@@ -1078,7 +1134,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--py6s-executable")
     parser.add_argument("--py6s-use-imd-radiance-calibration", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--py6s-use-worldview-gain-offset-adjustment", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--py6s-auto-atmos-source", choices=["none", "nasa_power"], default="none")
+    parser.add_argument("--py6s-auto-atmos-source", choices=["none", "nasa_power"], default="nasa_power")
     parser.add_argument("--py6s-auto-atmos-grid-size", type=int, default=3)
     parser.add_argument("--py6s-auto-atmos-search-days", type=int, default=1)
     parser.add_argument("--py6s-auto-atmos-timeout-s", type=float, default=30.0)
@@ -1092,7 +1148,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--orthorectification-output-suffix", default="_ortho")
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
-    parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--temp-dir")
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
@@ -1201,6 +1257,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-search-days must be >= 0.")
     if args.fetch_atmosphere_timeout_s <= 0:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
+    if args.dem_online_timeout_s <= 0:
+        parser.error("--dem-online-timeout-s must be > 0.")
     if args.alignment_tile_size <= 0:
         parser.error("--alignment-tile-size must be > 0.")
     if args.alignment_tile_buffer < 0:

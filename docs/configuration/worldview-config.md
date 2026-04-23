@@ -14,7 +14,9 @@ cp configs/worldview.example.yml configs/worldview.yml
 shared:
   input_file_glob:
     - /data/worldview/**/*.tif
-  dem_file_path: /data/dem.tif
+  dem_file_path: online
+  # dem_online_api_key: your-opentopography-api-key
+  # dem_online_source: SRTMGL1_Ellip
   epsg: 6635
   nodata_value: -9999
   dtype: int16
@@ -88,6 +90,10 @@ radiometric_normalization:
 - `output_dir` is the base output location used when a step has `save_<step>: output`.
   - if unset, the default output base is `../Processed` from the MUL image folder
   - relative output paths resolve from the MUL image folder
+- `dem_file_path` defaults to `online`.
+  - this downloads an OpenTopography SRTM GL1 ellipsoidal DEM into the workflow temp directory
+  - set `dem_online_api_key` or the `OPENTOPOGRAPHY_API_KEY` environment variable
+  - you can still provide a local DEM path instead
 - `temp_dir` is optional.
   - if unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`
   - if set, `save_<step>: temp` writes under that directory

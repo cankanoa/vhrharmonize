@@ -8,6 +8,12 @@ Create a local config from the tracked template, then adjust paths for your mach
 cp configs/worldview.example.yml configs/worldview.yml
 ```
 
+If you keep the default `dem_file_path: online`, set an OpenTopography API key first:
+
+```bash
+export OPENTOPOGRAPHY_API_KEY=your_key_here
+```
+
 ## 2. Run full-scene preprocessing
 
 `vhr-worldview` runs the main end-to-end workflow for each discovered scene:

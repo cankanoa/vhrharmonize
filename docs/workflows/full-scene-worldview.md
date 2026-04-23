@@ -11,6 +11,9 @@ This describes the execution behavior of `vhr-worldview`.
 5. Parse IMD metadata and map it into standardized metadata
 6. For each scene:
    - optionally skip immediately when the final output TIFF already exists
+   - resolve the DEM path
+     - use the configured local DEM, or
+     - download an OpenTopography SRTM GL1 ellipsoidal DEM into the temp dir when `dem_file_path=online`
    - optionally fetch atmosphere values
    - optionally run atmospheric correction (`py6s`, `flaash`, or `none`)
    - optionally orthorectify multispectral and panchromatic imagery
