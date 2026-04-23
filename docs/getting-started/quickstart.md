@@ -20,7 +20,8 @@ cp configs/worldview.example.yml configs/worldview.yml
 - optional cloud masking (if enabled in args/config)
 - optional alignment
 - optional radiometric normalization
-- final output write to your configured output directory
+- step outputs written according to each `save_*` setting
+- final raster taken from the last enabled raster step
 
 ```bash
 vhr-worldview --config-yaml configs/worldview.yml

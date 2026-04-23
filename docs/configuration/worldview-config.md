@@ -20,18 +20,25 @@ shared:
   dtype: int16
   log_to_console: false
   skip_existing: true
-  # output_dir: ./Processed
+  # output_dir: ../Processed
   # temp_dir: ./temp
 
 workflow:
   last_run_step: raw
   run_fetch_atmosphere: false
+  save_fetch_atmosphere: temp
   run_atmospheric_correction: true
+  save_atmospheric_correction: temp
   run_orthorectification: true
+  save_orthorectification: temp
   run_pansharpen: true
+  save_pansharpen: temp
   run_cloud_mask: true
+  save_cloud_mask: output
   run_alignment: false
+  save_alignment: temp
   run_radiometric_normalization: false
+  save_radiometric_normalization: temp
 
 atmospheric_correction:
   atmospheric_method: py6s
@@ -78,17 +85,26 @@ radiometric_normalization:
 
 - `input_file_glob` is the main discovery input and is searched recursively for `.tif` files.
 - YAML sections are flattened by the CLI, so nested sections are for readability and organization.
-- `output_dir` controls final scene output location.
-  - if unset, final outputs default to `<scene root>/Processed`
-  - relative output paths resolve from the scene root
+- `output_dir` is the base output location used when a step has `save_<step>: output`.
+  - if unset, the default output base is `../Processed` from the MUL image folder
+  - relative output paths resolve from the MUL image folder
 - `temp_dir` is optional.
   - if unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`
-  - if set, intermediate step folders are created under that directory unless overridden per step
+  - if set, `save_<step>: temp` writes under that directory
+- every raster step has a matching `save_<step>` setting.
+  - `temp` writes to `<temp_dir>/<step_name>`
+  - `output` writes to `<output_dir>/<step_name>`
+  - any other value is treated as a custom folder path, and the step name is appended to it
 - `skip_existing: true` skips a whole scene when the final output TIFF already exists.
   - per-step output planning still skips only the missing outputs within each step
 - `last_run_step` lets the workflow resume from an already completed raster stage.
 - `run_fetch_atmosphere` controls the optional prefetch step for external atmosphere values.
 - `run_radiometric_normalization` is the last step in the chain when enabled.
+- by default, only `save_cloud_mask` uses `output`.
+  - the other `save_*` values default to `temp`
+- there is no separate final-copy stage.
+  - the scene's final raster is whatever the last enabled raster step produced
+  - the scene metadata JSON is written beside that raster
 - `envi_engine_path` is only required when `atmospheric_method: flaash`.
 - Py6S output defaults to scaled reflectance (`int16` with factor `10000`).
   - `reflectance = pixel_value / py6s_output_scale_factor`

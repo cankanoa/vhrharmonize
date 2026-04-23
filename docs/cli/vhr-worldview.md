@@ -11,7 +11,7 @@ Runs full-scene WorldView preprocessing:
 7. Optional cloud masking
 8. Optional alignment to a fixed/reference raster
 9. Optional radiometric normalization
-10. Write final scene output(s)
+10. Write scene metadata beside the last enabled step output
 
 ## Typical Usage
 
@@ -53,12 +53,20 @@ vhr-worldview \
 
 ## Common Options
 
-- `--output-dir`: final scene output folder
-- `--output-suffix`: filename suffix for scene outputs
+- `--output-dir`: base output folder used when a step has `save_<step>=output`
+  - relative paths resolve from the MUL image folder
+  - if unset, the default output base is `../Processed` from the MUL image folder
 - `--skip-existing`: skip scenes when the final output TIFF already exists
 - `--last-run-step`: resume the raster chain from an existing step output
 - `--atmospheric-method`: choose `flaash`, `py6s`, or `none`
 - `--run-fetch-atmosphere` / `--no-run-fetch-atmosphere`
+- `--save-fetch-atmosphere`: `temp`, `output`, or a custom folder
+- `--save-atmospheric-correction`: `temp`, `output`, or a custom folder
+- `--save-orthorectification`: `temp`, `output`, or a custom folder
+- `--save-pansharpen`: `temp`, `output`, or a custom folder
+- `--save-cloud-mask`: `temp`, `output`, or a custom folder
+- `--save-alignment`: `temp`, `output`, or a custom folder
+- `--save-radiometric-normalization`: `temp`, `output`, or a custom folder
 - `--skip-flaash` + `--existing-flaash-input`: resume from existing FLAASH output
 - `--py6s-*`: Py6S atmosphere/aerosol/output controls
 - `--py6s-visibility`: optional visibility mode (km), used instead of `--py6s-aot550`
@@ -133,6 +141,23 @@ than a mounted external path.
 - before running the scene at all, the workflow checks whether the final output TIFF already exists and skips the whole scene if it does
 
 This means intermediate temp outputs can be safely removed without breaking scene-level skip behavior.
+
+## Output Model
+
+Each raster step uses the same storage rule:
+
+- `save_<step>=temp` writes to `<temp_dir>/<step_name>`
+- `save_<step>=output` writes to `<output_dir>/<step_name>`
+- any other value is treated as a custom folder, and the step name is appended to it
+
+If `temp_dir` is unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`.
+
+There is no extra final copy stage anymore. The scene's final raster is the output from the last enabled raster step, and the metadata JSON is written beside that raster.
+
+Default save behavior:
+
+- `save_cloud_mask=output`
+- all other `save_*` settings default to `temp`
 
 ## Defaults
 
