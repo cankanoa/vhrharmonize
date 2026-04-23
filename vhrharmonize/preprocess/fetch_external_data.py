@@ -13,6 +13,67 @@ from vhrharmonize.preprocess.helpers import log
 
 
 # ---------------------------------------------------------------------------
+# DEM
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT = "https://portal.opentopography.org/API/globaldem"
+DEFAULT_OPENTOPOGRAPHY_DEMTYPE = "SRTMGL1_Ellip"
+
+
+def download_opentopography_dem_for_bbox(
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    output_tif_path: str,
+    api_key: Optional[str] = None,
+    demtype: str = DEFAULT_OPENTOPOGRAPHY_DEMTYPE,
+    endpoint: str = DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT,
+    timeout_s: float = 120.0,
+    log_to_console: bool = False,
+) -> str:
+    """Download an OpenTopography DEM subset for a WGS84 bbox."""
+    if min_lon > max_lon or min_lat > max_lat:
+        raise ValueError("Invalid bbox bounds.")
+    api_key = api_key or os.environ.get("OPENTOPOGRAPHY_API_KEY") or os.environ.get("OT_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "OpenTopography API key is required for dem_file_path='online'. "
+            "Set --dem-online-api-key or OPENTOPOGRAPHY_API_KEY."
+        )
+
+    os.makedirs(os.path.dirname(output_tif_path) or ".", exist_ok=True)
+    params = {
+        "demtype": demtype,
+        "south": f"{min_lat:.8f}",
+        "north": f"{max_lat:.8f}",
+        "west": f"{min_lon:.8f}",
+        "east": f"{max_lon:.8f}",
+        "outputFormat": "GTiff",
+        "API_Key": api_key,
+    }
+    log(
+        f"Downloading {demtype} DEM from OpenTopography",
+        enabled=log_to_console,
+        step="dem",
+    )
+    response = requests.get(endpoint, params=params, timeout=timeout_s)
+    response.raise_for_status()
+
+    content_type = (response.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        raise ValueError(f"OpenTopography DEM request returned JSON instead of GeoTIFF: {response.text}")
+    if "text/html" in content_type:
+        raise ValueError("OpenTopography DEM request returned HTML instead of GeoTIFF.")
+
+    with open(output_tif_path, "wb") as handle:
+        handle.write(response.content)
+    return output_tif_path
+
+
+# ---------------------------------------------------------------------------
 # NASA POWER
 # ---------------------------------------------------------------------------
 
@@ -546,7 +607,10 @@ def fetch_modis_water_vapor_for_bbox(
 
 __all__ = [
     "AtmosphereEstimate",
+    "DEFAULT_OPENTOPOGRAPHY_DEMTYPE",
+    "DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT",
     "ModisWaterVaporEstimate",
+    "download_opentopography_dem_for_bbox",
     "fetch_modis_water_vapor_for_bbox",
     "fetch_power_atmosphere_for_bbox",
     "init_ee_client",

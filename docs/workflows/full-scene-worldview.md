@@ -11,6 +11,9 @@ This describes the execution behavior of `vhr-worldview`.
 5. Parse IMD metadata and map it into standardized metadata
 6. For each scene:
    - optionally skip immediately when the final output TIFF already exists
+   - resolve the DEM path
+     - use the configured local DEM, or
+     - download an OpenTopography SRTM GL1 ellipsoidal DEM into the temp dir when `dem_file_path=online`
    - optionally fetch atmosphere values
    - optionally run atmospheric correction (`py6s`, `flaash`, or `none`)
    - optionally orthorectify multispectral and panchromatic imagery
@@ -18,7 +21,7 @@ This describes the execution behavior of `vhr-worldview`.
    - optionally cloud-mask the current raster
    - optionally align to a fixed/reference raster
    - optionally run radiometric normalization
-   - copy/write the final raster to the final output folder
+   - treat the last enabled raster step output as the final raster
    - write a scene metadata report JSON
 
 ## Scene Model
@@ -38,12 +41,20 @@ The scene root is determined from the image path:
 
 ## Output Model
 
-- intermediate step outputs live under per-step folders
+- intermediate and final step outputs live under per-step folders
 - when `temp_dir` is unset, a real temporary directory is created automatically
-- when `temp_dir` is set, step folders are created under that directory unless a step-specific output dir overrides them
-- final outputs default to `<scene root>/Processed` when `output_dir` is unset
-- each final raster also writes a sidecar metadata report:
-  - `<scene_basename><output_suffix>_metadata.json`
+- when `temp_dir` is set, any step with `save_<step>=temp` writes under that directory
+- `output_dir` is the base used when a step has `save_<step>=output`
+  - if unset, it defaults to `../Processed` from the MUL image folder
+  - relative paths resolve from the MUL image folder
+- each step follows the same save rule:
+  - `temp` -> `<temp_dir>/<step_name>`
+  - `output` -> `<output_dir>/<step_name>`
+  - custom path -> `<custom_path>/<step_name>`
+- by default, only cloud-mask saves to `output`
+- all other raster steps default to `temp`
+- the final raster is the output of the last enabled raster step
+- each final raster also writes a sidecar metadata report in the same folder
 
 ## Skip Existing
 

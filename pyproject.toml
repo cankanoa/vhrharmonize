@@ -40,6 +40,7 @@ dependencies = [
     "geopandas>=1.0.1",
     "shapely>=2.1",
     "pyyaml",
+    "requests>=2.32.3",
     "gdal>=3.11",
     "pyproj>=3.7",
     "tqdm",
@@ -54,10 +55,6 @@ dependencies = [
 #    "black>=23.0.0",
 #    "pre-commit>=4.1.0"
 #]
-
-fetch-atmosphere = [
-    "requests>=2.32.3"
-]
 
 cloud = [
     "omnicloudmask",

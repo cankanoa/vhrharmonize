@@ -1,42 +1,50 @@
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
-  epsg: 6635
-  nodata_value: -9999
-  dtype: int16
-  log_to_console: true
+  epsg: 6635 # Output CRS for orthorectified products
+  nodata_value: -9999 # Shared nodata value used by raster-writing steps
+  dtype: int16 # Shared output dtype for raster-writing steps
+  log_to_console: true # true | false
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
-  dem_file_path: /path/to/dem.tif # WG84 ellipsoidal height (can download here: https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1)
-  # output_dir: ./outputs/worldview # Defaults to the root folder of the image in a 'processed' folder (e.g. './processed')
-  output_suffix: _final
-  skip_existing: true
-  last_run_step: raw
+  dem_file_path: online # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
+  # dem_online_api_key: your-opentopography-api-key # Or set OPENTOPOGRAPHY_API_KEY in the environment
+  # dem_online_source: SRTMGL1_Ellip
+  # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
+  # dem_online_timeout_s: 120.0
+  # output_dir: ../Processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
+  skip_existing: true # true | false
+  last_run_step: raw # raw | atmospheric_correction | orthorectification | pansharpen | cloud_mask | alignment | radiometric_normalization
 
 workflow:
-  run_fetch_atmosphere: true
+  run_fetch_atmosphere: true # true | false
+  save_fetch_atmosphere: temp # temp | output | ./custom_relative | /custom/absolute
   run_atmospheric_correction: true
+  save_atmospheric_correction: temp
   run_orthorectification: true
+  save_orthorectification: temp
   run_pansharpen: true
+  save_pansharpen: temp
   run_cloud_mask: true
+  save_cloud_mask: output
   run_alignment: false
+  save_alignment: temp
   run_radiometric_normalization: false
+  save_radiometric_normalization: temp
 
 atmospheric_correction:
-  atmospheric_method: py6s
-  atmospheric_correction_output_suffix: _py6s
-  # atmospheric_correction_output_dir: /path/to/atmospheric_outputs
+  atmospheric_method: py6s # py6s | flaash | none
+  atmospheric_correction_output_suffix: _py6s # Filename suffix for this step
 
   fetch_atmosphere:
-    fetch_atmosphere_source: auto
-    fetch_atmosphere_grid_size: 3
-    fetch_atmosphere_search_days: 1
-    fetch_atmosphere_timeout_s: 30.0
-    fetch_atmosphere_power_endpoint: https://power.larc.nasa.gov/api/temporal/daily/point
-    fetch_atmosphere_hours_window: 24
+    fetch_atmosphere_source: auto # auto | nasa_power | modis_gee
+    fetch_atmosphere_grid_size: 3 # Number of sample points per bbox side
+    fetch_atmosphere_search_days: 1 # Search +/- this many days for matching atmosphere data
+    fetch_atmosphere_timeout_s: 30.0 # HTTP timeout in seconds
+    fetch_atmosphere_power_endpoint: https://power.larc.nasa.gov/api/temporal/daily/point # NASA POWER endpoint
+    fetch_atmosphere_hours_window: 24 # MODIS/GEE scene-time search window in hours
     # fetch_atmosphere_ee_project: your-ee-project
     # fetch_atmosphere_env_file: /path/to/.env
-    fetch_atmosphere_output_suffix: _atmosphere
-    # fetch_atmosphere_output_dir: /path/to/fetch_atmosphere_outputs
+    fetch_atmosphere_output_suffix: _atmosphere # Filename suffix for fetched atmosphere JSON
 
   flaash:
     # Required only when atmospheric_method: flaash
@@ -94,39 +102,35 @@ atmospheric_correction:
     # flaash_param_WATER_RASTER_URI: /path/to/water_mask.tif
 
   py6s:
-    py6s_atmosphere_profile: user
-    py6s_aerosol_profile: maritime
-    py6s_aot550: 0.2
+    py6s_atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter
+    py6s_aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric
+    py6s_aot550: 0.2 # Used when visibility is not set
     # py6s_visibility: 40.0
-    py6s_water_vapor: 2.5
-    py6s_ozone: 0.3
+    py6s_water_vapor: 2.5 # g/cm^2
+    py6s_ozone: 0.3 # cm-atm
     # py6s_executable: /usr/local/bin/sixsV1.1
-    py6s_output_scale_factor: 10000.0
-    py6s_output_dtype: int16
-    py6s_use_imd_radiance_calibration: true
-    py6s_use_worldview_gain_offset_adjustment: true
-    py6s_auto_atmos_source: nasa_power
-    py6s_auto_atmos_grid_size: 3
-    py6s_auto_atmos_search_days: 1
-    py6s_auto_atmos_timeout_s: 30.0
+    py6s_output_scale_factor: 10000.0 # Reflectance scale factor applied before writing
+    py6s_output_dtype: int16 # Output dtype for Py6S rasters
+    py6s_use_imd_radiance_calibration: true # true | false
+    py6s_use_worldview_gain_offset_adjustment: true # true | false
+    py6s_auto_atmos_source: nasa_power # none | nasa_power
+    py6s_auto_atmos_grid_size: 3 # Number of sample points per bbox side
+    py6s_auto_atmos_search_days: 1 # Search +/- this many days for matching atmosphere data
+    py6s_auto_atmos_timeout_s: 30.0 # HTTP timeout in seconds
 
 orthorectification:
-  orthorectification_output_suffix: _ortho
-  orthorectification_pan_output_suffix: _pan_ortho
-  # orthorectification_output_dir: /path/to/ortho_outputs
+  orthorectification_output_suffix: _ortho # Filename suffix for orthorectified multispectral output
+  orthorectification_pan_output_suffix: _pan_ortho # Filename suffix for orthorectified panchromatic output
 
 pansharpen:
-  pansharpen_output_suffix: _pansharpen
-  # pansharpen_output_dir: /path/to/pansharpen_outputs
+  pansharpen_output_suffix: _pansharpen # Filename suffix for pansharpened output
 
 cloud_mask:
-  cloud_mask_method: omnicloudmask
-  cloud_mask_output_suffix: _cloudmasked
-  cloud_mask_mask_suffix: _cloudmask
-  cloud_buffer_pixels: 10
-  cloud_mask_inference_resolution_m: 10.0
-  # cloud_mask_output_dir: /path/to/cloudmask_outputs
-  # cloud_mask_mask_output_dir: /path/to/cloudmask_mask_outputs
+  cloud_mask_method: omnicloudmask # omnicloudmask
+  cloud_mask_output_suffix: _cloudmasked # Filename suffix for masked image output
+  cloud_mask_mask_suffix: _cloudmask # Filename suffix for binary cloud mask output
+  cloud_buffer_pixels: 10 # Buffer cloud mask outward by this many pixels
+  cloud_mask_inference_resolution_m: 10.0 # Resolution used for OmniCloudMask inference
   # cloud_mask_omnicloud_kwargs_json:
   #   inference_device: cuda
   #   mosaic_device: cpu
@@ -135,37 +139,30 @@ cloud_mask:
   #   patch_overlap: 192
 
 alignment:
-  alignment_fixed_image: /path/to/fixed/reference_intensity.tif
-  alignment_output_suffix: _aligned
-  # alignment_output_dir: /path/to/alignment_outputs
-  alignment_moving_band_index: 0
-  alignment_fixed_band_index: 0
-  alignment_registration_mode: structural_wv3_lidar
-  alignment_parameter_map: rigid
-  alignment_no_tiling: true
-  alignment_tile_size: 1000
-  alignment_tile_buffer: 100
-  alignment_clip_fixed_to_moving: true
-  alignment_enforce_mutual_valid_mask: true
-  alignment_output_on_moving_grid: true
-  alignment_moving_nodata: -9999
-  alignment_fixed_nodata: -9999
-  # alignment_output_nodata: -9999
-  alignment_min_valid_fraction: 0.002
-  alignment_keep_temp_dir: false
-  alignment_log_to_console: false
+  alignment_fixed_image: /path/to/fixed/reference_intensity.tif # Required when run_alignment is true
+  alignment_output_suffix: _aligned # Filename suffix for aligned output
+  alignment_moving_band_index: 0 # 0-based band index from moving image
+  alignment_fixed_band_index: 0 # 0-based band index from fixed image
+  alignment_registration_mode: structural_wv3_lidar # default | structural_wv3_lidar
+  alignment_parameter_map: rigid # translation | rigid | affine | bspline
+  alignment_no_tiling: true # true | false
+  alignment_tile_size: 1000 # Tile width/height in pixels when tiling is enabled
+  alignment_tile_buffer: 100 # Tile overlap buffer in pixels
+  alignment_clip_fixed_to_moving: true # true | false
+  alignment_enforce_mutual_valid_mask: true # true | false
+  alignment_output_on_moving_grid: true # true | false
+  alignment_moving_nodata: -9999 # Nodata value for moving image
+  alignment_fixed_nodata: -9999 # Nodata value for fixed image
+  alignment_min_valid_fraction: 0.002 # Skip tiles with less valid overlap than this fraction
+  alignment_keep_temp_dir: false # true | false
+  alignment_log_to_console: false # true | false
 
 radiometric_normalization:
-  radiometric_normalization_method: spectralmatch
-  radiometric_normalization_output_suffix: _normalized
-  # radiometric_normalization_output_dir: /path/to/radiometric_outputs
+  radiometric_normalization_method: spectralmatch # spectralmatch
+  radiometric_normalization_output_suffix: _normalized # Filename suffix for normalized output
   # SpectralMatch pipeline kwargs:
   # https://spectralmatch.github.io/spectralmatch/api/pipeline/
   # Pass any SpectralMatch argument through using the `match_` prefix.
-  # Shared defaults are populated automatically from the top-level `shared` section:
-  # - shared_temp_dir <- temp_dir
-  # - shared_custom_nodata_value <- nodata_value
-  # - shared_output_dtype <- dtype
   # match_shared_temp_dir: /path/to/temp
   # match_delete_temp_dir: true
   # match_shared_debug_logs: false
