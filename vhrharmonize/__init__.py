@@ -39,18 +39,6 @@ _EXPORTS = {
     "align_image_pair": (".preprocess.alignment", "align_image_pair"),
     "AlignmentResult": (".preprocess.alignment", "AlignmentResult"),
     "tile_image": (".io.tiling", "tile_image"),
-    "run_elastix_registration": (
-        ".preprocess.coregistration",
-        "run_elastix_registration",
-    ),
-    "estimate_elastix_transform": (
-        ".preprocess.coregistration",
-        "estimate_elastix_transform",
-    ),
-    "apply_elastix_transform": (
-        ".preprocess.coregistration",
-        "apply_elastix_transform",
-    ),
 }
 
 __all__ = list(_EXPORTS.keys())

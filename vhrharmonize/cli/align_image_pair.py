@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Align one image (moving) to another image (fixed) using elastix."""
+"""Align one image (moving) to another image (fixed) using coregix."""
 
 import argparse
 import json
@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Align a moving image (A) to a fixed image (B). "
-            "Default behavior is structural WV/LiDAR alignment on full extent."
+            "Uses edge-proxy registration on full extent by default."
         ),
     )
     parser.add_argument("--moving-image", required=True, help="Path to moving image A (will be warped).")
@@ -38,32 +38,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional 0-based fixed-image band index for registration metric.",
     )
     parser.add_argument(
-        "--no-tiling",
+        "--use-edge-proxies",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Disable/enable tiling (default: no tiling, full-extent registration).",
+        help="Use edge-proxy images rather than raw intensities for registration (default: true).",
     )
     parser.add_argument(
-        "--tile-size",
+        "--split-factor",
         type=int,
-        default=1000,
-        help="Tile size in pixels when tiling is enabled (default: 1000).",
-    )
-    parser.add_argument(
-        "--tile-buffer",
-        type=int,
-        default=100,
-        help="Buffer/overlap in pixels around each tile for registration stability (default: 100).",
-    )
-    parser.add_argument(
-        "--parameter-map",
-        default="rigid",
-        help="Elastix default parameter map (e.g., rigid, affine, bspline).",
-    )
-    parser.add_argument(
-        "--parameter-file",
-        action="append",
-        help="Optional elastix parameter file path. Repeat for multi-stage registration.",
+        default=0,
+        help="Split the solve and apply domains into 2^k chunks (default: 0).",
     )
     parser.add_argument(
         "--moving-nodata",
@@ -84,52 +68,69 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-valid-fraction",
         type=float,
         default=0.01,
-        help="Minimum valid-mask fraction per tile required to run elastix (default: 0.01).",
+        help="Minimum valid-mask fraction required to run alignment (default: 0.01).",
     )
-    parser.add_argument("--temp-dir", help="Optional parent directory for temporary tile files.")
+    parser.add_argument(
+        "--solve-resolution",
+        type=float,
+        help="Optional target pixel size, in raster CRS units, for the registration solve.",
+    )
+    parser.add_argument("--temp-dir", help="Optional parent directory for temporary working files.")
     parser.add_argument(
         "--keep-temp-dir",
         action="store_true",
-        help="Keep temporary tile directory for debugging.",
-    )
-    parser.add_argument(
-        "--log-to-console",
-        action="store_true",
-        help="Enable verbose elastix logging.",
+        help="Keep the temporary working directory for debugging.",
     )
     parser.add_argument(
         "--clip-fixed-to-moving",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Clip fixed image domain to moving-image bounds before alignment (default: enabled).",
+        default=False,
+        help="Clip fixed image domain to moving-image bounds before alignment.",
     )
     parser.add_argument(
         "--output-on-moving-grid",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help=(
-            "Write aligned output on the moving-image grid (default: true). "
-            "Disable with --no-output-on-moving-grid to write on fixed-image grid."
-        ),
+        help="Write aligned output on the moving-image grid (default: true).",
+    )
+    parser.add_argument(
+        "--trim-edge-invalid",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="After alignment, set pixels adjacent to irregular exterior invalid boundaries to nodata.",
+    )
+    parser.add_argument(
+        "--edge-trim-depth",
+        type=int,
+        default=8,
+        help="Number of pixels to trim inward from each exterior invalid boundary (default: 8).",
+    )
+    parser.add_argument(
+        "--edge-trim-detection-band-index",
+        type=int,
+        default=0,
+        help="0-based band index used to detect edge artifacts (default: 0).",
+    )
+    parser.add_argument(
+        "--edge-trim-invalid-below",
+        type=float,
+        help="For edge trimming, treat values <= this threshold as invalid.",
+    )
+    parser.add_argument(
+        "--edge-trim-invalid-above",
+        type=float,
+        help="For edge trimming, treat values >= this threshold as invalid.",
     )
     parser.add_argument(
         "--enforce-mutual-valid-mask",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Use only pixels valid in both fixed and moving images for both elastix masks "
-            "(default: true)."
-        ),
+        default=False,
+        help="Use only pixels valid in both fixed and moving images for both masks.",
     )
     parser.add_argument(
-        "--registration-mode",
-        choices=["default", "structural_wv3_lidar"],
-        default="structural_wv3_lidar",
-        help=(
-            "Registration strategy. `default` uses raw bands; "
-            "`structural_wv3_lidar` mirrors the elastix-wrapper flow "
-            "(common-grid ROI + edge proxies + translation->rigid chain)."
-        ),
+        "--log-to-console",
+        action="store_true",
+        help="Enable alignment logging.",
     )
     return parser
 
@@ -149,12 +150,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--moving-band-index must be >= 0.")
     if args.fixed_band_index is not None and args.fixed_band_index < 0:
         parser.error("--fixed-band-index must be >= 0.")
-    if args.tile_size <= 0:
-        parser.error("--tile-size must be > 0.")
-    if args.tile_buffer < 0:
-        parser.error("--tile-buffer must be >= 0.")
     if args.min_valid_fraction <= 0 or args.min_valid_fraction > 1:
         parser.error("--min-valid-fraction must be in (0, 1].")
+    if args.solve_resolution is not None and args.solve_resolution <= 0:
+        parser.error("--solve-resolution must be > 0.")
+    if args.split_factor < 0:
+        parser.error("--split-factor must be >= 0.")
+    if args.edge_trim_depth <= 0:
+        parser.error("--edge-trim-depth must be > 0.")
+    if args.edge_trim_detection_band_index < 0:
+        parser.error("--edge-trim-detection-band-index must be >= 0.")
 
     result = align_image_pair(
         moving_image_path=args.moving_image,
@@ -163,32 +168,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         band_index=args.band_index,
         moving_band_index=args.moving_band_index,
         fixed_band_index=args.fixed_band_index,
-        tiling=not args.no_tiling,
-        tile_size=args.tile_size,
-        tile_buffer=args.tile_buffer,
-        parameter_map=args.parameter_map,
-        parameter_file_paths=args.parameter_file,
         moving_nodata=args.moving_nodata,
         fixed_nodata=args.fixed_nodata,
         output_nodata=args.output_nodata,
         min_valid_fraction=args.min_valid_fraction,
         temp_dir=args.temp_dir,
         keep_temp_dir=args.keep_temp_dir,
-        log_to_console=args.log_to_console,
+        split_factor=args.split_factor,
         clip_fixed_to_moving=args.clip_fixed_to_moving,
         output_on_moving_grid=args.output_on_moving_grid,
+        trim_edge_invalid=args.trim_edge_invalid,
+        edge_trim_depth=args.edge_trim_depth,
+        edge_trim_detection_band_index=args.edge_trim_detection_band_index,
+        edge_trim_invalid_below=args.edge_trim_invalid_below,
+        edge_trim_invalid_above=args.edge_trim_invalid_above,
         enforce_mutual_valid_mask=args.enforce_mutual_valid_mask,
-        registration_mode=args.registration_mode,
+        use_edge_proxies=args.use_edge_proxies,
+        solve_resolution=args.solve_resolution,
+        log_to_console=args.log_to_console,
     )
 
     print(
         json.dumps(
             {
                 "output_image_path": result.output_image_path,
-                "total_tiles": result.total_tiles,
-                "successful_tiles": result.successful_tiles,
-                "skipped_tiles": result.skipped_tiles,
-                "temp_dir": result.temp_dir,
             },
             indent=2,
         )

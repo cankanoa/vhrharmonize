@@ -69,7 +69,8 @@ This allows old intermediate temp folders to be deleted without breaking complet
 
 - alignment runs after cloud masking and before radiometric normalization
 - the moving image for alignment is the current workflow raster at that point
-- `alignment_registration_mode: structural_wv3_lidar` is a structural edge-based mode intended for optical-to-LiDAR style alignment, but the implementation itself is not WorldView-specific
+- alignment uses `coregix.align_image_pair(...)` through the shared wrapper
+- the workflow passes `split_factor`, `trim_edge_invalid`, `edge_trim_depth`, and `edge_trim_invalid_below`
 
 ## Operational Recommendations
 

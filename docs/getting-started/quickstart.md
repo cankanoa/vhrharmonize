@@ -63,7 +63,7 @@ vhr-pansharpen-orthos \
   --output /data/out/pansharp.tif
 ```
 
-### Align one image to another with elastix (optional)
+### Align one image to another with coregix (optional)
 
 ```bash
 vhr-align-image-pair \

@@ -1,24 +1,10 @@
 # `vhr-align-image-pair`
 
-Align a moving image (A) to a fixed/reference image (B) using elastix registration.
-
-Default behavior is the WV/LiDAR structural workflow on full extent:
-
-- `registration_mode: structural_wv3_lidar`
-- tiling disabled
-- fixed image clipped to moving extent
-- mutual valid mask enforced
-- output written on moving-image grid
-- registration band index: `0` (0-based) unless you set `--moving-band-index`
-
-The transform is estimated per tile on a single selected band, then applied to all bands for output.
+Align a moving image (A) to a fixed/reference image (B) using `coregix`.
 
 ## Requirements
 
-- `itk-elastix` installed (for example: `pip install -e ".[align]"`)
-- both rasters must have a defined CRS
-- both rasters must currently use the same CRS
-- both rasters should spatially overlap in that CRS
+- `coregix` installed (for example: `pip install -e ".[align]"`)
 
 ## Example
 
@@ -26,136 +12,39 @@ The transform is estimated per tile on a single selected band, then applied to a
 vhr-align-image-pair \
   --moving-image /data/image_a_cloudmasked.tif \
   --fixed-image /data/image_b_lidar.tif \
-  --output-image /data/out/image_a_aligned_to_b.tif
+  --output-image /data/out/image_a_aligned_to_b.tif \
+  --split-factor 2 \
+  --trim-edge-invalid \
+  --edge-trim-depth 8 \
+  --edge-trim-invalid-below -3000
 ```
 
 ## Important options
 
 - `--band-index`: 0-based band index used for registration metric
-- `--moving-band-index`: 0-based moving-image band index used for registration metric
-- `--fixed-band-index`: 0-based fixed-image band index used for registration metric
-- `--tile-size`: tile size in pixels
-- `--tile-buffer`: overlap/buffer in pixels around each tile
-- `--no-tiling` / `--tiling`: run on full extent or per-tile
-- `--parameter-map`: elastix default map (`rigid`, `affine`, `bspline`, ...)
-- `--parameter-file`: custom elastix parameter file (repeatable)
-- `--moving-nodata`, `--fixed-nodata`: nodata overrides for mask generation
-- `--output-nodata`: output nodata override
-- `--registration-mode`: `default` or `structural_wv3_lidar`
-- `--clip-fixed-to-moving`: limit fixed domain to overlap with moving image
-- `--enforce-mutual-valid-mask`: constrain both masks to shared valid area
-- `--output-on-moving-grid`: write result on moving-image grid/resolution
-- `--keep-temp-dir`: preserve temporary tile artifacts for debugging
-
-## Registration Modes
-
-- `default`: raw-band elastix registration. Use this when both rasters are comparable radiometrically and you want a generic registration path.
-- `structural_wv3_lidar`: intended for optical-to-LiDAR alignment. It builds structural proxy images on a common fixed-grid ROI and runs a chained `translation -> rigid` transform estimate, then applies that geometric transform to the original moving bands.
-  - despite the name, this is a generic structural edge-based mode, not a WorldView-only implementation
-
-## Recommended WV/LiDAR Usage
-
-```bash
-vhr-align-image-pair \
-  --moving-image /data/worldview_cloudmasked.tif \
-  --fixed-image /data/mean_intensity_mosaic.tif \
-  --output-image /data/worldview_aligned.tif \
-  --registration-mode structural_wv3_lidar \
-  --moving-band-index 6 \
-  --fixed-band-index 0 \
-  --no-tiling \
-  --clip-fixed-to-moving \
-  --enforce-mutual-valid-mask \
-  --output-on-moving-grid
-```
-
-For large scenes, keep elastix temp artifacts on a native Linux filesystem instead
-of a mounted external/Windows path:
-
-```bash
-vhr-align-image-pair \
-  --moving-image /data/worldview_cloudmasked.tif \
-  --fixed-image /data/mean_intensity_mosaic.tif \
-  --output-image /data/worldview_aligned.tif \
-  --registration-mode structural_wv3_lidar \
-  --moving-band-index 6 \
-  --fixed-band-index 0 \
-  --clip-fixed-to-moving \
-  --enforce-mutual-valid-mask \
-  --output-on-moving-grid \
-  --keep-temp-dir \
-  --temp-dir /home/$USER/tmp_align
-```
-
-## Real-World Example
-
-With current defaults, the following WV/LiDAR alignment only needs the non-default
-moving band selection:
-
-```bash
-vhr-align-image-pair \
-  --moving-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/17SEP06212820-M1BS-200011893447_01_P001_cloud_masked.tif \
-  --fixed-image /mnt/x/PROJECTS_2/Big_Island/ChangeHI_Trees/Dry_Forest/Data/Raster/mean_intensity/mean_intensity_mosaic.tif \
-  --output-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/17SEP06212820-M1BS-200011893447_01_P001_cloud_masked_aligned.tif \
-  --moving-band-index 6
-```
-
-Current tested full command pattern for larger Big Island scenes:
-
-```bash
-vhr-align-image-pair \
-  --moving-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked.tif \
-  --fixed-image /mnt/x/PROJECTS_2/Big_Island/ChangeHI_Trees/Dry_Forest/Data/Raster/mean_intensity/mean_intensity_mosaic.tif \
-  --output-image /mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked_aligned_test2.tif \
-  --registration-mode structural_wv3_lidar \
-  --moving-band-index 6 \
-  --fixed-band-index 0 \
-  --clip-fixed-to-moving \
-  --enforce-mutual-valid-mask \
-  --output-on-moving-grid \
-  --keep-temp-dir \
-  --temp-dir /home/manumea/tmp_align
-```
+- `--moving-band-index`: optional moving-image registration band
+- `--fixed-band-index`: optional fixed-image registration band
+- `--moving-nodata`, `--fixed-nodata`: optional nodata overrides
+- `--output-nodata`: optional output nodata override
+- `--min-valid-fraction`: required valid overlap fraction in the registration ROI
+- `--temp-dir`: optional parent directory for coregix working files
+- `--keep-temp-dir`: keep the coregix working directory
+- `--use-edge-proxies` / `--no-use-edge-proxies`
+- `--split-factor`: coregix split factor
+- `--clip-fixed-to-moving` / `--no-clip-fixed-to-moving`
+- `--output-on-moving-grid` / `--no-output-on-moving-grid`
+- `--trim-edge-invalid` / `--no-trim-edge-invalid`
+- `--edge-trim-depth`: number of edge pixels to trim
+- `--edge-trim-detection-band-index`: band used to detect edge artifacts
+- `--edge-trim-invalid-below`: threshold used to identify invalid edge values
+- `--edge-trim-invalid-above`: optional upper invalid threshold
+- `--enforce-mutual-valid-mask` / `--no-enforce-mutual-valid-mask`
+- `--solve-resolution`: optional target pixel size for the registration solve
 
 Expected completion output looks like:
 
 ```json
 {
-  "output_image_path": "/mnt/s/Satellite_Imagery/Big_Island/Processed_cloudmasked/19SEP09211403-M1BS-200011908666_01_P001_cloud_masked_aligned_test2.tif",
-  "total_tiles": 1,
-  "successful_tiles": 1,
-  "skipped_tiles": 0,
-  "temp_dir": "/home/manumea/tmp_align/vhr_align_<random>"
+  "output_image_path": "/data/out/image_a_aligned_to_b.tif"
 }
 ```
-
-`Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.`
-messages can appear from transformix intermediate files and are not by themselves a failure.
-
-## Temp Storage Notes
-
-- `--temp-dir` controls where elastix/transformix tile artifacts are written.
-- For large scenes, prefer a native Linux path such as `/home/<user>/tmp_align`.
-- Using a mounted external or Windows path for temp artifacts is not recommended for
-  this workflow.
-- `--keep-temp-dir` is useful while validating a run; it preserves:
-  - registration rasters (`fixed_reg.tif`, `moving_reg.tif`)
-  - masks
-  - per-band transformed rasters
-  - per-band aligned moving-grid rasters
-
-## Performance Notes
-
-- `structural_wv3_lidar` estimates one transform from the selected registration
-  bands, then applies that same transform to all moving-image bands.
-- In current implementation, moving-grid reprojection is performed blockwise to
-  reduce memory pressure on large scenes.
-
-## Masking behavior
-
-For robust matching with cloud-masked imagery, registration uses masks:
-
-- moving mask from valid data in moving tile
-- fixed mask from valid fixed pixels intersected with moving valid footprint
-
-This prevents cloud/no-data regions from dominating the registration metric.

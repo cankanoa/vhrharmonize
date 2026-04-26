@@ -36,7 +36,6 @@ nav:
       - preprocess.orthorectification: api/preprocess-orthorectification.md
       - preprocess.pansharpening: api/preprocess-pansharpening.md
       - preprocess.cloudmasking: api/preprocess-cloudmasking.md
-      - preprocess.coregistration: api/preprocess-registration.md
       - preprocess.alignment: api/pipelines-alignment.md
       - io.tiling: api/preprocess-tiling.md
       - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md

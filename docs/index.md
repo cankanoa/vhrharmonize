@@ -9,7 +9,7 @@ Core capabilities:
 - RPC orthorectification
 - Pansharpening
 - Optional cloud masking with OmniCloudMask
-- Pairwise alignment with elastix
+- Pairwise alignment with coregix
 - WorldView discovery, IMD parsing, and standardized metadata handling
 
 Primary execution path is the `vhr-worldview` CLI, which runs the full-scene workflow and writes final scene outputs.

@@ -21,6 +21,7 @@ shared:
   nodata_value: -9999
   dtype: int16
   log_to_console: false
+  keep_temp_dir: false
   skip_existing: true
   # output_dir: ../Processed
   # temp_dir: ./temp
@@ -75,7 +76,8 @@ cloud_mask:
 
 alignment:
   alignment_fixed_image: /data/fixed/reference.tif
-  alignment_registration_mode: structural_wv3_lidar
+  alignment_band_index: 0
+  alignment_split_factor: 2
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch
@@ -97,6 +99,8 @@ radiometric_normalization:
 - `temp_dir` is optional.
   - if unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`
   - if set, `save_<step>: temp` writes under that directory
+- `keep_temp_dir` is a shared workflow setting.
+  - alignment uses it to decide whether to retain `coregix` working files
 - every raster step has a matching `save_<step>` setting.
   - `temp` writes to `<temp_dir>/<step_name>`
   - `output` writes to `<output_dir>/<step_name>`
@@ -116,8 +120,16 @@ radiometric_normalization:
   - `reflectance = pixel_value / py6s_output_scale_factor`
 - Built-in cloud masking infers the mask from orthorectified multispectral imagery and applies it to the current workflow output.
 - `cloud_mask_omnicloud_kwargs_json` can be set in YAML as a mapping or from the CLI as a JSON string.
-- `alignment_registration_mode: structural_wv3_lidar` mirrors the WV/LiDAR structural workflow.
-  - despite the name, this mode is a generic structural edge-based registration path
+- alignment now uses `coregix` through the shared wrapper.
+- the alignment section now supports the full active `coregix.align_image_pair(...)` surface, including:
+  - band selection
+  - nodata overrides
+  - valid-overlap threshold
+  - temp-dir retention
+  - edge-proxy toggle
+  - chunking via `alignment_split_factor`
+  - edge trimming settings
+  - solve resolution
 - any `match_*` config keys are passed directly into the spectralmatch pipeline after stripping the `match_` prefix
 - any `flaash_param_*` config keys are passed directly into FLAASH after stripping the prefix and uppercasing the key
 

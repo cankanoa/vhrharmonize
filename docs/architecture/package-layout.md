@@ -10,7 +10,6 @@ The package now follows a layered structure to support multi-provider VHR prepro
   - orthorectification
   - pansharpening
   - cloudmasking
-  - coregistration
   - radiometric normalization
 - `vhrharmonize/providers`: provider adapters
   - `worldview.py`: WorldView file discovery and IMD parsing

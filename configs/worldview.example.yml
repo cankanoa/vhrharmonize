@@ -1,5 +1,6 @@
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
+  keep_temp_dir: false # true | false
   epsg: 6635 # Output CRS for orthorectified products
   nodata_value: -9999 # Shared nodata value used by raster-writing steps
   dtype: int16 # Shared output dtype for raster-writing steps
@@ -141,21 +142,24 @@ cloud_mask:
 alignment:
   alignment_fixed_image: /path/to/fixed/reference_intensity.tif # Required when run_alignment is true
   alignment_output_suffix: _aligned # Filename suffix for aligned output
-  alignment_moving_band_index: 0 # 0-based band index from moving image
-  alignment_fixed_band_index: 0 # 0-based band index from fixed image
-  alignment_registration_mode: structural_wv3_lidar # default | structural_wv3_lidar
-  alignment_parameter_map: rigid # translation | rigid | affine | bspline
-  alignment_no_tiling: true # true | false
-  alignment_tile_size: 1000 # Tile width/height in pixels when tiling is enabled
-  alignment_tile_buffer: 100 # Tile overlap buffer in pixels
-  alignment_clip_fixed_to_moving: true # true | false
-  alignment_enforce_mutual_valid_mask: true # true | false
+  alignment_band_index: 0 # 0-based band index used for registration metric
+  # alignment_moving_band_index: 0 # Optional override for moving-image registration band
+  # alignment_fixed_band_index: 0 # Optional override for fixed-image registration band
+  # alignment_moving_nodata: -9999 # Optional override nodata for moving image
+  # alignment_fixed_nodata: -9999 # Optional override nodata for fixed image
+  # alignment_output_nodata: -9999 # Optional override nodata for output image
+  alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
+  alignment_use_edge_proxies: true # true | false
+  alignment_split_factor: 2 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
+  alignment_clip_fixed_to_moving: false # true | false
   alignment_output_on_moving_grid: true # true | false
-  alignment_moving_nodata: -9999 # Nodata value for moving image
-  alignment_fixed_nodata: -9999 # Nodata value for fixed image
-  alignment_min_valid_fraction: 0.002 # Skip tiles with less valid overlap than this fraction
-  alignment_keep_temp_dir: false # true | false
-  alignment_log_to_console: false # true | false
+  alignment_trim_edge_invalid: true # true | false
+  alignment_edge_trim_depth: 8 # Number of edge pixels to trim
+  alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
+  alignment_edge_trim_invalid_below: -3000 # Values <= this are treated as invalid during edge trimming
+  # alignment_edge_trim_invalid_above: 65535 # Values >= this are treated as invalid during edge trimming
+  alignment_enforce_mutual_valid_mask: false # true | false
+  # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch

@@ -7,7 +7,7 @@ The project publishes these CLI entry points via `pyproject.toml`:
 - `vhr-flaash`: direct shared FLAASH runner
 - `vhr-cloudmask-raster`: standalone OmniCloudMask runner on a raster
 - `vhr-pansharpen-orthos`: standalone pansharpening from orthorectified inputs
-- `vhr-align-image-pair`: pairwise elastix alignment (tile-aware by default)
+- `vhr-align-image-pair`: pairwise alignment using `coregix`
 - `vhr-orthorectification`: direct orthorectification tools
 - `vhr-radiometric-normalization`: direct spectralmatch wrapper
 - `vhr-py6s`: Py6S-only atmospheric correction on discovered scenes

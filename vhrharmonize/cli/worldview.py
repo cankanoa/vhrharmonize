@@ -885,36 +885,32 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
         suffix=args.alignment_output_suffix,
         skip_existing=args.skip_existing,
     )
-    resolved_alignment_temp_dir = (
-        resolve_relative_to_input(args.alignment_temp_dir, state.scene.root_folder_path)
-        if args.alignment_temp_dir
-        else state.step_dirs["temp_root"]
-    )
     for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
         state.alignment_result = align_image_pair(
             moving_image_path=input_path,
             fixed_image_path=args.alignment_fixed_image,
             output_image_path=output_path,
-            band_index=0,
+            band_index=args.alignment_band_index,
             moving_band_index=args.alignment_moving_band_index,
             fixed_band_index=args.alignment_fixed_band_index,
-            tiling=not args.alignment_no_tiling,
-            tile_size=args.alignment_tile_size,
-            tile_buffer=args.alignment_tile_buffer,
-            parameter_map=args.alignment_parameter_map,
             moving_nodata=args.alignment_moving_nodata,
             fixed_nodata=args.alignment_fixed_nodata,
-            output_nodata=args.alignment_output_nodata
-            if args.alignment_output_nodata is not None
-            else args.nodata_value,
+            output_nodata=args.alignment_output_nodata if args.alignment_output_nodata is not None else args.nodata_value,
             min_valid_fraction=args.alignment_min_valid_fraction,
-            temp_dir=resolved_alignment_temp_dir,
-            keep_temp_dir=args.alignment_keep_temp_dir,
-            log_to_console=args.log_to_console or args.alignment_log_to_console,
+            temp_dir=state.step_dirs["temp_root"],
+            keep_temp_dir=args.keep_temp_dir,
+            split_factor=args.alignment_split_factor,
             clip_fixed_to_moving=args.alignment_clip_fixed_to_moving,
             output_on_moving_grid=args.alignment_output_on_moving_grid,
+            trim_edge_invalid=args.alignment_trim_edge_invalid,
+            edge_trim_depth=args.alignment_edge_trim_depth,
+            edge_trim_detection_band_index=args.alignment_edge_trim_detection_band_index,
+            edge_trim_invalid_below=args.alignment_edge_trim_invalid_below,
+            edge_trim_invalid_above=args.alignment_edge_trim_invalid_above,
             enforce_mutual_valid_mask=args.alignment_enforce_mutual_valid_mask,
-            registration_mode=args.alignment_registration_mode,
+            use_edge_proxies=args.alignment_use_edge_proxies,
+            solve_resolution=args.alignment_solve_resolution,
+            log_to_console=args.log_to_console,
         )
     state.current_files = _register_step_outputs(state, "alignment", plan.output_paths)
     state.current_step = "alignment"
@@ -1027,10 +1023,6 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
                 "result": (
                     {
                         "output_image_path": state.alignment_result.output_image_path,
-                        "total_tiles": state.alignment_result.total_tiles,
-                        "successful_tiles": state.alignment_result.successful_tiles,
-                        "skipped_tiles": state.alignment_result.skipped_tiles,
-                        "temp_dir": state.alignment_result.temp_dir,
                     }
                     if state.alignment_result
                     else None
@@ -1150,6 +1142,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--temp-dir")
+    parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-fetch-atmosphere", default="temp")
@@ -1193,23 +1186,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cloud-mask-mask-suffix", default="_cloudmask")
     parser.add_argument("--alignment-fixed-image")
     parser.add_argument("--alignment-output-suffix", default="_aligned")
-    parser.add_argument("--alignment-moving-band-index", type=int, default=0)
-    parser.add_argument("--alignment-fixed-band-index", type=int, default=0)
-    parser.add_argument("--alignment-registration-mode", choices=["default", "structural_wv3_lidar"], default="structural_wv3_lidar")
-    parser.add_argument("--alignment-parameter-map", default="rigid")
-    parser.add_argument("--alignment-no-tiling", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--alignment-tile-size", type=int, default=1000)
-    parser.add_argument("--alignment-tile-buffer", type=int, default=100)
-    parser.add_argument("--alignment-clip-fixed-to-moving", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--alignment-enforce-mutual-valid-mask", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--alignment-output-on-moving-grid", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--alignment-moving-nodata", type=float, default=-9999)
-    parser.add_argument("--alignment-fixed-nodata", type=float, default=-9999)
+    parser.add_argument("--alignment-band-index", type=int, default=0)
+    parser.add_argument("--alignment-moving-band-index", type=int)
+    parser.add_argument("--alignment-fixed-band-index", type=int)
+    parser.add_argument("--alignment-moving-nodata", type=float)
+    parser.add_argument("--alignment-fixed-nodata", type=float)
     parser.add_argument("--alignment-output-nodata", type=float)
-    parser.add_argument("--alignment-min-valid-fraction", type=float, default=0.002)
-    parser.add_argument("--alignment-temp-dir")
-    parser.add_argument("--alignment-keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--alignment-log-to-console", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--alignment-min-valid-fraction", type=float, default=0.01)
+    parser.add_argument("--alignment-split-factor", type=int, default=2)
+    parser.add_argument("--alignment-clip-fixed-to-moving", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--alignment-output-on-moving-grid", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--alignment-trim-edge-invalid", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--alignment-edge-trim-depth", type=int, default=8)
+    parser.add_argument("--alignment-edge-trim-detection-band-index", type=int, default=0)
+    parser.add_argument("--alignment-edge-trim-invalid-below", type=float)
+    parser.add_argument("--alignment-edge-trim-invalid-above", type=float)
+    parser.add_argument("--alignment-enforce-mutual-valid-mask", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--alignment-use-edge-proxies", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--alignment-solve-resolution", type=float)
     return parser
 
 
@@ -1259,10 +1253,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
-    if args.alignment_tile_size <= 0:
-        parser.error("--alignment-tile-size must be > 0.")
-    if args.alignment_tile_buffer < 0:
-        parser.error("--alignment-tile-buffer must be >= 0.")
+    if args.alignment_band_index < 0:
+        parser.error("--alignment-band-index must be >= 0.")
+    if args.alignment_moving_band_index is not None and args.alignment_moving_band_index < 0:
+        parser.error("--alignment-moving-band-index must be >= 0.")
+    if args.alignment_fixed_band_index is not None and args.alignment_fixed_band_index < 0:
+        parser.error("--alignment-fixed-band-index must be >= 0.")
+    if args.alignment_min_valid_fraction <= 0 or args.alignment_min_valid_fraction > 1:
+        parser.error("--alignment-min-valid-fraction must be in (0, 1].")
+    if args.alignment_split_factor < 0:
+        parser.error("--alignment-split-factor must be >= 0.")
+    if args.alignment_edge_trim_depth <= 0:
+        parser.error("--alignment-edge-trim-depth must be > 0.")
+    if args.alignment_edge_trim_detection_band_index < 0:
+        parser.error("--alignment-edge-trim-detection-band-index must be >= 0.")
+    if args.alignment_solve_resolution is not None and args.alignment_solve_resolution <= 0:
+        parser.error("--alignment-solve-resolution must be > 0.")
     try:
         _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
     except Exception as exc:
