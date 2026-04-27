@@ -163,13 +163,20 @@ alignment:
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
-  radiometric_normalization_output_suffix: _normalized # Filename suffix for normalized output
+  # radiometric_normalization_output: $_normalized.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the MUL basename
   # SpectralMatch pipeline kwargs:
-  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
   # Pass any SpectralMatch argument through using the `match_` prefix.
-  # match_shared_temp_dir: /path/to/temp
+  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
+
+  # These are already passed in by vhrharmonize:
+  # match_shared_input_images: ["input/image/1.tif", "input/image/2.tif"]
+  # match_shared_output_image_path: /path/to/output/image.tif
+  # match_shared_temp_dir: ./temp/spectralmatch
   # match_delete_temp_dir: true
   # match_shared_debug_logs: false
+  # match_shared_output_dtype: int16
+
+  # Other optional SpectralMatch pipeline kwargs:
   # match_shared_cache: auto
   # match_shared_custom_nodata_value: -9999
   # match_shared_window_size: 1024
@@ -179,8 +186,7 @@ radiometric_normalization:
   # match_shared_calculation_dtype: float32
   # match_shared_output_dtype: int16
   # match_shared_save_as_cog: false
-  # match_matching_global_method: global_regression
-  # match_matching_local_method: local_block_adjustment
+  # match_matching_order: [global_regression, local_block_adjustment]
   # match_align_method: align_rasters
   # match_seamline_method: voronoi_center_seamline
   # match_clip_method: mask_rasters
@@ -188,30 +194,29 @@ radiometric_normalization:
   # match_global_regression_output_images: /path/to/global_outputs
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
   # match_global_regression_estimate_stats: true
-  # match_global_regression_specify_model_images:
-  #   - include
-  #   - [image_a, image_b]
+  # match_global_regression_specify_model_images: [include, [image_a, image_b]]
   # match_global_regression_custom_mean_factor: 1.0
   # match_global_regression_custom_std_factor: 1.0
   # match_global_regression_save_adjustments: /path/to/adjustments.json
   # match_global_regression_load_adjustments: /path/to/adjustments.json
+  # match_global_regression_pif_method: entire
+  # match_global_regression_pif_red_band_index: 2
+  # match_global_regression_pif_nir_band_index: 6
+  # match_global_regression_pif_vegetation_threshold: 0.2
+  # match_global_regression_pif_inz_threshold: 0.25
+  # match_global_regression_pif_region_radius: 5
+  # match_global_regression_pif_max_samples: 100000
+  # match_global_regression_pif_min_samples: 32
+  # match_global_regression_pif_feature_method: orb
   # match_global_regression_build_overviews: false
   # match_local_block_adjustment_output_images: /path/to/local_outputs
   # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
   # match_local_block_adjustment_number_of_blocks: 100
   # match_local_block_adjustment_alpha: 1.0
   # match_local_block_adjustment_correction_method: offset
-  # match_local_block_adjustment_save_block_maps:
-  #   - /path/to/reference_block_map.tif
-  #   - /path/to/local_block_maps/$.tif
-  # match_local_block_adjustment_load_block_maps:
-  #   - /path/to/reference_block_map.tif
-  #   - /path/to/local_block_maps
-  # match_local_block_adjustment_override_bounds_canvas_coords:
-  #   - 0
-  #   - 0
-  #   - 1000
-  #   - 1000
+  # match_local_block_adjustment_save_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps/$.tif]
+  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
+  # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
   # match_align_rasters_output_images: /path/to/aligned_outputs
   # match_align_rasters_resampling_method: bilinear

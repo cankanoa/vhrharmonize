@@ -18,6 +18,7 @@ import geopandas as gpd
 from vhrharmonize.cli.cli_helpers import load_yaml_config
 from vhrharmonize.io.geospatial import get_image_percentile_value, shp_to_gpkg
 from vhrharmonize.io.workflow_utils import (
+    StepOutputPlan,
     build_output_path_from_input,
     plan_step_outputs,
     resolve_output_dir,
@@ -168,7 +169,6 @@ def _collect_prefixed_kwargs(
 def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
     radiometric_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
-    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
     return radiometric_kwargs
 
 
@@ -461,12 +461,53 @@ def _get_expected_mul_output_path(state: SceneWorkflowState, args: argparse.Name
             suffix=args.alignment_output_suffix,
         )
     if step_name == "radiometric_normalization":
+        configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
+        if configured_output is None:
+            configured_output = args.radiometric_normalization_output
+        if configured_output:
+            basename = os.path.splitext(os.path.basename(mul_image.tif_file))[0]
+            if "$" in configured_output:
+                configured_output = configured_output.replace("$", basename)
+            if os.path.isabs(configured_output):
+                return configured_output
+            return os.path.normpath(
+                os.path.join(state.step_dirs["radiometric_normalization"], configured_output)
+            )
         return build_output_path_from_input(
             mul_image.tif_file,
             state.step_dirs["radiometric_normalization"],
-            suffix=args.radiometric_normalization_output_suffix,
+            suffix="_normalized",
         )
     raise ValueError(f"Unsupported step name: {step_name}")
+
+
+def _plan_radiometric_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> StepOutputPlan:
+    input_paths = [str(path) for path in state.current_files]
+    output_paths = [
+        _get_expected_mul_output_path(state, args, "radiometric_normalization")
+        for _ in input_paths
+    ]
+    if not args.skip_existing:
+        return StepOutputPlan(
+            input_paths=input_paths,
+            output_paths=output_paths,
+            pending_input_paths=list(input_paths),
+            pending_output_paths=list(output_paths),
+        )
+
+    pending_input_paths = []
+    pending_output_paths = []
+    for input_path, output_path in zip(input_paths, output_paths):
+        if os.path.exists(output_path):
+            continue
+        pending_input_paths.append(input_path)
+        pending_output_paths.append(output_path)
+    return StepOutputPlan(
+        input_paths=input_paths,
+        output_paths=output_paths,
+        pending_input_paths=pending_input_paths,
+        pending_output_paths=pending_output_paths,
+    )
 
 
 def _get_expected_pan_ortho_path(state: SceneWorkflowState, args: argparse.Namespace) -> Optional[str]:
@@ -920,20 +961,19 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
 def _run_radiometric_normalization_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     if not args.run_radiometric_normalization:
         return state.current_files
-    plan = plan_step_outputs(
-        state.current_files,
-        output_dir=state.step_dirs["radiometric_normalization"],
-        suffix=args.radiometric_normalization_output_suffix,
-        skip_existing=args.skip_existing,
-    )
-    radiometric_kwargs = _build_radiometric_kwargs(args)
-    radiometric_kwargs.setdefault("shared_temp_dir", state.step_dirs["temp_root"])
-    radiometric_kwargs.setdefault("shared_custom_nodata_value", args.nodata_value)
-    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    plan = _plan_radiometric_outputs(state, args)
     for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
+        radiometric_kwargs = _build_radiometric_kwargs(args)
+        radiometric_kwargs.setdefault("shared_input_images", [input_path])
+        radiometric_kwargs.setdefault("shared_output_image_path", output_path)
+        radiometric_kwargs.setdefault(
+            "shared_temp_dir",
+            os.path.join(state.step_dirs["temp_root"], "spectralmatch"),
+        )
+        radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
+        radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+        radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
         radiometric_normalization(
-            shared_input_images=[input_path],
-            shared_output_image_path=output_path,
             method=args.radiometric_normalization_method,
             log_to_console=args.log_to_console,
             **radiometric_kwargs,
@@ -1136,7 +1176,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir")
     parser.add_argument("--fetch-atmosphere-output-suffix", default="_atmosphere")
     parser.add_argument("--atmospheric-correction-output-suffix", default="_atmospheric")
-    parser.add_argument("--radiometric-normalization-output-suffix", default="_normalized")
+    parser.add_argument("--radiometric-normalization-output")
     parser.add_argument("--orthorectification-output-suffix", default="_ortho")
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
