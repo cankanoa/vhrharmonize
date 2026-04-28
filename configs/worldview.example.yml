@@ -14,7 +14,7 @@ shared:
   # dem_online_timeout_s: 120.0
   # output_dir: ../Processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
   skip_existing: true # true | false
-  last_run_step: raw # raw | atmospheric_correction | orthorectification | pansharpen | cloud_mask | alignment | radiometric_normalization
+  last_run_step: raw # raw | atmospheric_correction | orthorectification | pansharpen | cloud_mask | alignment
 
 workflow:
   run_fetch_atmosphere: true # true | false
@@ -163,14 +163,20 @@ alignment:
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
-  # radiometric_normalization_output: $_normalized.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the MUL basename
+  # radiometric_normalization_output: radiometric_root.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the group label
   # SpectralMatch pipeline kwargs:
   # Pass any SpectralMatch argument through using the `match_` prefix.
   # https://spectralmatch.github.io/spectralmatch/api/pipeline/
 
-  # These are already passed in by vhrharmonize:
-  # match_shared_input_images: ["input/image/1.tif", "input/image/2.tif"]
-  # match_shared_output_image_path: /path/to/output/image.tif
+  # Optionally run mulitple spectralmatches in a row using groups
+  # group_by_basename: ["**/*.tif"] # Match all finished scene outputs together
+  # group_by_basename: ["*893242343*", "*123456789*"] # Match only images whose basename or full path matches these patterns
+  # group_by_basename: ["*893242343*", ["*111111111*", "*222222222*"], "*123456789*"] # Nested lists run inner spectralmatch first, then include that output in the outer one
+
+
+  # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
+  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]
+  # match_shared_output_image_path: /path/to/radiometric/group_output.tif
   # match_shared_temp_dir: ./temp/spectralmatch
   # match_delete_temp_dir: true
   # match_shared_debug_logs: false

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import glob
 import json
 import os
@@ -18,7 +19,6 @@ import geopandas as gpd
 from vhrharmonize.cli.cli_helpers import load_yaml_config
 from vhrharmonize.io.geospatial import get_image_percentile_value, shp_to_gpkg
 from vhrharmonize.io.workflow_utils import (
-    StepOutputPlan,
     build_output_path_from_input,
     plan_step_outputs,
     resolve_output_dir,
@@ -55,7 +55,6 @@ RASTER_STEP_ORDER = [
     "pansharpen",
     "cloud_mask",
     "alignment",
-    "radiometric_normalization",
 ]
 
 @dataclass
@@ -335,8 +334,6 @@ def _resolve_step_save_dir(
 
 
 def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
-    if args.run_radiometric_normalization:
-        return "radiometric_normalization"
     if args.run_alignment:
         return "alignment"
     if args.run_cloud_mask:
@@ -460,54 +457,7 @@ def _get_expected_mul_output_path(state: SceneWorkflowState, args: argparse.Name
             state.step_dirs["alignment"],
             suffix=args.alignment_output_suffix,
         )
-    if step_name == "radiometric_normalization":
-        configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
-        if configured_output is None:
-            configured_output = args.radiometric_normalization_output
-        if configured_output:
-            basename = os.path.splitext(os.path.basename(mul_image.tif_file))[0]
-            if "$" in configured_output:
-                configured_output = configured_output.replace("$", basename)
-            if os.path.isabs(configured_output):
-                return configured_output
-            return os.path.normpath(
-                os.path.join(state.step_dirs["radiometric_normalization"], configured_output)
-            )
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["radiometric_normalization"],
-            suffix="_normalized",
-        )
     raise ValueError(f"Unsupported step name: {step_name}")
-
-
-def _plan_radiometric_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> StepOutputPlan:
-    input_paths = [str(path) for path in state.current_files]
-    output_paths = [
-        _get_expected_mul_output_path(state, args, "radiometric_normalization")
-        for _ in input_paths
-    ]
-    if not args.skip_existing:
-        return StepOutputPlan(
-            input_paths=input_paths,
-            output_paths=output_paths,
-            pending_input_paths=list(input_paths),
-            pending_output_paths=list(output_paths),
-        )
-
-    pending_input_paths = []
-    pending_output_paths = []
-    for input_path, output_path in zip(input_paths, output_paths):
-        if os.path.exists(output_path):
-            continue
-        pending_input_paths.append(input_path)
-        pending_output_paths.append(output_path)
-    return StepOutputPlan(
-        input_paths=input_paths,
-        output_paths=output_paths,
-        pending_input_paths=pending_input_paths,
-        pending_output_paths=pending_output_paths,
-    )
 
 
 def _get_expected_pan_ortho_path(state: SceneWorkflowState, args: argparse.Namespace) -> Optional[str]:
@@ -569,6 +519,153 @@ def _register_step_outputs(
     if output_paths:
         _set_worldview_scene_step_path(state.scene, image_role, step_name, output_paths[0])
     return output_paths
+
+
+def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: argparse.Namespace) -> None:
+    last_step = _get_last_enabled_raster_step(args)
+    existing_output = _get_expected_mul_output_path(state, args, last_step)
+    state.current_files = [existing_output]
+    state.current_step = last_step
+    state.scene.step_outputs[last_step] = [existing_output]
+    _set_worldview_scene_step_path(state.scene, "mul", last_step, existing_output)
+
+
+def _normalize_group_by_basename_spec(raw_spec):
+    if raw_spec in (None, "", []):
+        return None
+    if isinstance(raw_spec, str):
+        stripped = raw_spec.strip()
+        if stripped.startswith("["):
+            return _normalize_group_by_basename_spec(json.loads(stripped))
+        return raw_spec
+    if not isinstance(raw_spec, list):
+        raise ValueError("group_by_basename must be a string or nested list of strings.")
+    return [_normalize_group_by_basename_spec(item) for item in raw_spec]
+
+
+def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
+    matches = [
+        path
+        for path in available_paths
+        if fnmatch.fnmatch(os.path.basename(path), pattern) or fnmatch.fnmatch(path, pattern)
+    ]
+    if not matches:
+        raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
+    return matches
+
+
+def _dedupe_paths(paths: List[str]) -> List[str]:
+    seen = set()
+    deduped: List[str] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append(path)
+    return deduped
+
+
+def _resolve_radiometric_group_output_path(
+    args: argparse.Namespace,
+    output_dir: str,
+    *,
+    group_label: str,
+    is_root: bool,
+) -> str:
+    configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
+    if configured_output is None and is_root:
+        configured_output = args.radiometric_normalization_output
+    if configured_output:
+        if "$" in configured_output:
+            configured_output = configured_output.replace("$", group_label)
+        if os.path.isabs(configured_output):
+            return configured_output
+        return os.path.normpath(os.path.join(output_dir, configured_output))
+    return os.path.join(output_dir, f"{group_label}.tif")
+
+
+def _run_radiometric_group(
+    group_spec,
+    *,
+    available_paths: List[str],
+    args: argparse.Namespace,
+    output_dir: str,
+    temp_root: str,
+    label_parts: List[int],
+) -> str | List[str]:
+    if isinstance(group_spec, str):
+        return _match_radiometric_input_patterns(group_spec, available_paths)
+    if not isinstance(group_spec, list) or not group_spec:
+        raise ValueError("Each radiometric normalization group must be a non-empty string or list.")
+
+    child_inputs: List[str] = []
+    for index, item in enumerate(group_spec):
+        child_label_parts = [*label_parts, index]
+        child_result = _run_radiometric_group(
+            item,
+            available_paths=available_paths,
+            args=args,
+            output_dir=output_dir,
+            temp_root=temp_root,
+            label_parts=child_label_parts,
+        )
+        if isinstance(child_result, list):
+            child_inputs.extend(child_result)
+        else:
+            child_inputs.append(child_result)
+
+    child_inputs = _dedupe_paths(child_inputs)
+    group_label = "radiometric_root" if not label_parts else "radiometric_group_" + "_".join(str(part) for part in label_parts)
+    output_path = _resolve_radiometric_group_output_path(
+        args,
+        output_dir,
+        group_label=group_label,
+        is_root=not label_parts,
+    )
+    if args.skip_existing and os.path.exists(output_path):
+        return output_path
+
+    radiometric_kwargs = _build_radiometric_kwargs(args)
+    radiometric_kwargs.setdefault("shared_input_images", child_inputs)
+    radiometric_kwargs.setdefault("shared_output_image_path", output_path)
+    radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
+    radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
+    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    radiometric_normalization(
+        method=args.radiometric_normalization_method,
+        log_to_console=args.log_to_console,
+        **radiometric_kwargs,
+    )
+    return output_path
+
+
+def _run_radiometric_normalization_workflow(
+    scene_output_paths: List[str],
+    *,
+    args: argparse.Namespace,
+    reference_state: SceneWorkflowState,
+) -> Optional[str]:
+    if not args.run_radiometric_normalization:
+        return None
+    available_paths = _dedupe_paths([str(path) for path in scene_output_paths if str(path)])
+    if not available_paths:
+        raise ValueError("No scene outputs were available for radiometric normalization.")
+
+    group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
+    if group_spec is None:
+        group_spec = available_paths
+    elif isinstance(group_spec, str):
+        group_spec = [group_spec]
+
+    return _run_radiometric_group(
+        group_spec,
+        available_paths=available_paths,
+        args=args,
+        output_dir=reference_state.step_dirs["radiometric_normalization"],
+        temp_root=reference_state.step_dirs["temp_root"],
+        label_parts=[],
+    )
 
 
 def _run_cloud_mask_command(
@@ -958,31 +1055,6 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
     return state.current_files
 
 
-def _run_radiometric_normalization_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
-    if not args.run_radiometric_normalization:
-        return state.current_files
-    plan = _plan_radiometric_outputs(state, args)
-    for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
-        radiometric_kwargs = _build_radiometric_kwargs(args)
-        radiometric_kwargs.setdefault("shared_input_images", [input_path])
-        radiometric_kwargs.setdefault("shared_output_image_path", output_path)
-        radiometric_kwargs.setdefault(
-            "shared_temp_dir",
-            os.path.join(state.step_dirs["temp_root"], "spectralmatch"),
-        )
-        radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
-        radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
-        radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
-        radiometric_normalization(
-            method=args.radiometric_normalization_method,
-            log_to_console=args.log_to_console,
-            **radiometric_kwargs,
-        )
-    state.current_files = _register_step_outputs(state, "radiometric_normalization", plan.output_paths)
-    state.current_step = "radiometric_normalization"
-    return state.current_files
-
-
 def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> tuple[str, str]:
     last_step = _get_last_enabled_raster_step(args)
     final_image_path = _get_expected_mul_output_path(state, args, last_step)
@@ -1082,6 +1154,7 @@ def run_workflow(args: argparse.Namespace) -> int:
         raise ValueError("No tif files matched --input-file-glob.")
 
     scenes = load_worldview_scenes_from_tif_files(tif_files, filter_basenames=filter_basenames)
+    processed_states: List[SceneWorkflowState] = []
     for scene in scenes:
         state = _initialize_scene_state(scene, args)
         log(
@@ -1092,6 +1165,8 @@ def run_workflow(args: argparse.Namespace) -> int:
 
         if args.skip_existing and _scene_final_outputs_complete(state, args):
             log("Skipping existing final output", enabled=args.log_to_console, step="workflow")
+            _mark_scene_complete_from_existing_output(state, args)
+            processed_states.append(state)
             continue
 
         scene_started_utc = datetime.utcnow().isoformat() + "Z"
@@ -1107,13 +1182,25 @@ def run_workflow(args: argparse.Namespace) -> int:
             _run_cloud_mask_step(state, args)
         if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("alignment"):
             _run_alignment_step(state, args)
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("radiometric_normalization"):
-            _run_radiometric_normalization_step(state, args)
 
         final_image_path, _ = _final_output_paths(state, args)
         log(f"Wrote final output {final_image_path}", enabled=args.log_to_console, step="workflow")
         _write_scene_report(state, args, scene_started_utc=scene_started_utc)
         log("Scene complete", enabled=args.log_to_console, step="workflow")
+        processed_states.append(state)
+
+    if processed_states and args.run_radiometric_normalization:
+        radiometric_output = _run_radiometric_normalization_workflow(
+            [state.current_files[0] for state in processed_states if state.current_files],
+            args=args,
+            reference_state=processed_states[0],
+        )
+        if radiometric_output:
+            log(
+                f"Wrote radiometric normalization output {radiometric_output}",
+                enabled=args.log_to_console,
+                step="workflow",
+            )
 
     log("All processing complete", enabled=args.log_to_console, step="workflow")
     return 0
@@ -1213,6 +1300,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fetch-atmosphere-hours-window", type=int, default=24)
     parser.add_argument("--radiometric-normalization-method", default="spectralmatch")
     parser.add_argument("--radiometric-normalization-kwargs-json")
+    parser.add_argument("--group-by-basename")
     parser.add_argument("--cloud-mask-command")
     parser.add_argument("--cloud-mask-method", choices=["omnicloudmask"], default="omnicloudmask")
     parser.add_argument("--cloud-mask-red-band-index", type=int, default=5)
@@ -1267,7 +1355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--input-file-glob is required (via CLI or --config-yaml).")
     if not args.dem_file_path and not args.existing_mul_ortho_input:
         parser.error("--dem-file-path is required unless --existing-mul-ortho-input is provided.")
-    if args.run_pansharpen and not args.run_orthorectification and args.last_run_step not in {"orthorectification", "pansharpen", "cloud_mask", "alignment", "radiometric_normalization"} and not args.existing_mul_ortho_input:
+    if args.run_pansharpen and not args.run_orthorectification and args.last_run_step not in {"orthorectification", "pansharpen", "cloud_mask", "alignment"} and not args.existing_mul_ortho_input:
         parser.error("--run-pansharpen requires orthorectified inputs, --run-orthorectification, or a later --last-run-step.")
     if args.run_pansharpen and args.existing_mul_ortho_input and not args.existing_pan_ortho_input:
         parser.error("--existing-pan-ortho-input is required when using --existing-mul-ortho-input with pansharpen.")
@@ -1281,8 +1369,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("Use either --cloud-mask-method or --cloud-mask-command, not both.")
     if args.last_run_step == "alignment" and not args.run_alignment:
         parser.error("--last-run-step alignment requires --run-alignment.")
-    if args.last_run_step == "radiometric_normalization" and not args.run_radiometric_normalization:
-        parser.error("--last-run-step radiometric_normalization requires --run-radiometric-normalization.")
     if args.cloud_mask_inference_resolution_m <= 0:
         parser.error("--cloud-mask-inference-resolution-m must be > 0.")
     if args.fetch_atmosphere_grid_size < 1:
@@ -1317,6 +1403,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         _parse_json_dict(args.radiometric_normalization_kwargs_json)
     except Exception as exc:
         parser.error(f"Invalid --radiometric-normalization-kwargs-json: {exc}")
+    try:
+        _normalize_group_by_basename_spec(args.group_by_basename)
+    except Exception as exc:
+        parser.error(f"Invalid --group-by-basename: {exc}")
     return run_workflow(args)
 
 
