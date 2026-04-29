@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 from vhrharmonize.preprocess.helpers import log
 
@@ -74,7 +75,11 @@ def align_image_pair(
             "coregix is not installed. Install alignment extras with `pip install -e \".[align]\"`."
         ) from exc
 
-    log("Running alignment", enabled=log_to_console, step="alignment")
+    log(
+        f"Running alignment moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",
+        enabled=log_to_console,
+        step="alignment",
+    )
     result = coregix_align_image_pair(
         moving_image_path=moving_image_path,
         fixed_image_path=fixed_image_path,
@@ -101,7 +106,9 @@ def align_image_pair(
         solve_resolution=solve_resolution,
         log_to_console=log_to_console,
     )
-    return AlignmentResult(output_image_path=_extract_output_path(result))
+    output_path = _extract_output_path(result)
+    log(f"Wrote output {os.path.basename(output_path)}", enabled=log_to_console, step="alignment")
+    return AlignmentResult(output_image_path=output_path)
 
 
 __all__ = ["AlignmentResult", "align_image_pair"]

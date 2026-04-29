@@ -210,9 +210,13 @@ def run_py6s(
         use_imd_radiance_calibration=use_imd_radiance_calibration,
         use_worldview_gain_offset_adjustment=use_worldview_gain_offset_adjustment,
     )
-    log("Running Py6S", enabled=log_to_console, step="py6s")
+    log(
+        f"Running Py6S input={os.path.basename(input_raster)} output={os.path.basename(output_raster)} profile={atmosphere_profile}",
+        enabled=log_to_console,
+        step="py6s",
+    )
     Py6SCorrector().run(input_raster=input_raster, output_raster=output_raster, **py6s_kwargs)
-    log("Wrote output", enabled=log_to_console, step="py6s")
+    log(f"Wrote output {os.path.basename(output_raster)}", enabled=log_to_console, step="py6s")
     return Py6SRunResult(
         output_raster=output_raster,
         effective_params={

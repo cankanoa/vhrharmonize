@@ -264,12 +264,15 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
     if dem_value.lower() != "online":
         resolved_dem_path = resolve_relative_to_input(dem_value, mul_folder)
         state.dem_file_path = resolved_dem_path
+        log(f"Using DEM {os.path.basename(resolved_dem_path)}", enabled=args.log_to_console, step="dem")
         return resolved_dem_path
 
     dem_dir = os.path.join(state.step_dirs["temp_root"], "dem")
     os.makedirs(dem_dir, exist_ok=True)
     dem_output_path = os.path.join(dem_dir, f"{mul_image.basename}_dem.tif")
-    if not os.path.isfile(dem_output_path):
+    if os.path.isfile(dem_output_path):
+        log(f"Reusing DEM {os.path.basename(dem_output_path)}", enabled=args.log_to_console, step="dem")
+    else:
         download_opentopography_dem_for_bbox(
             min_lon=state.scene_bbox_wgs84[0],
             min_lat=state.scene_bbox_wgs84[1],
@@ -282,6 +285,7 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
             timeout_s=args.dem_online_timeout_s,
             log_to_console=args.log_to_console,
         )
+        log(f"Downloaded DEM {os.path.basename(dem_output_path)}", enabled=args.log_to_console, step="dem")
     state.dem_file_path = dem_output_path
     return dem_output_path
 
@@ -310,6 +314,32 @@ def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
             if os.path.isfile(path) and os.path.splitext(path)[1].lower() == ".tif"
         )
     return sorted({os.path.abspath(path) for path in tif_files})
+
+
+def _short_path(path: str) -> str:
+    return os.path.basename(path)
+
+
+def _short_paths(paths: List[str]) -> str:
+    return ", ".join(_short_path(path) for path in paths)
+
+
+def _log_step_plan(
+    step: str,
+    *,
+    inputs: List[str] | None = None,
+    outputs: List[str] | None = None,
+    message: str | None = None,
+    enabled: bool = False,
+) -> None:
+    parts: List[str] = []
+    if message:
+        parts.append(message)
+    if inputs:
+        parts.append(f"in={_short_paths(inputs)}")
+    if outputs:
+        parts.append(f"out={_short_paths(outputs)}")
+    log(" | ".join(parts), enabled=enabled, step=step)
 
 
 def _resolve_step_save_dir(
@@ -345,6 +375,10 @@ def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
     if args.run_atmospheric_correction:
         return "atmospheric_correction"
     return "raw"
+
+
+def _step_outputs_exist(output_paths: List[str]) -> bool:
+    return bool(output_paths) and all(os.path.exists(path) for path in output_paths)
 
 
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
@@ -471,22 +505,6 @@ def _get_expected_pan_ortho_path(state: SceneWorkflowState, args: argparse.Names
     )
 
 
-def _set_scene_current_step(state: SceneWorkflowState, args: argparse.Namespace, step_name: str) -> None:
-    current_path = _get_expected_mul_output_path(state, args, step_name)
-    if not os.path.isfile(current_path):
-        raise ValueError(f"Expected existing output for last_run_step={step_name}: {current_path}")
-    _set_worldview_scene_step_path(state.scene, "mul", step_name, current_path)
-    state.current_files = [_get_worldview_scene_step_path(state.scene, "mul", step_name)]
-    state.current_step = step_name
-    state.scene.step_outputs[step_name] = [state.current_files[0]]
-    if RASTER_STEP_ORDER.index(step_name) >= RASTER_STEP_ORDER.index("orthorectification"):
-        state.pan_ortho_path = args.existing_pan_ortho_input or _get_expected_pan_ortho_path(state, args)
-        if args.run_pansharpen and state.pan_ortho_path and not os.path.isfile(state.pan_ortho_path):
-            raise ValueError(f"Expected existing panchromatic ortho output: {state.pan_ortho_path}")
-        if state.pan_ortho_path:
-            _set_worldview_scene_step_path(state.scene, "pan", "orthorectification", state.pan_ortho_path)
-
-
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
     mul_image = _require_scene_image(scene, "mul")
     pan_image = _require_scene_image(scene, "pan")
@@ -503,8 +521,6 @@ def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> 
         scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file),
         current_files=[_get_worldview_scene_step_path(scene, "mul", "raw")],
     )
-    if args.last_run_step != "raw":
-        _set_scene_current_step(state, args, args.last_run_step)
     return state
 
 
@@ -528,6 +544,41 @@ def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: a
     state.current_step = last_step
     state.scene.step_outputs[last_step] = [existing_output]
     _set_worldview_scene_step_path(state.scene, "mul", last_step, existing_output)
+
+
+def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    required_outputs: List[str] = []
+    if args.run_fetch_atmosphere and args.save_fetch_atmosphere != "temp":
+        required_outputs.append(
+            build_output_path_from_input(
+                _require_scene_image(state.scene, "mul").tif_file,
+                state.step_dirs["fetch_atmosphere"],
+                suffix=args.fetch_atmosphere_output_suffix,
+                extension=".json",
+            )
+        )
+    if args.run_atmospheric_correction and args.save_atmospheric_correction != "temp":
+        required_outputs.append(_get_expected_mul_output_path(state, args, "atmospheric_correction"))
+    if args.run_orthorectification and args.save_orthorectification != "temp":
+        required_outputs.append(_get_expected_mul_output_path(state, args, "orthorectification"))
+        if args.run_pansharpen:
+            pan_output = _get_expected_pan_ortho_path(state, args)
+            if pan_output:
+                required_outputs.append(pan_output)
+    if args.run_pansharpen and args.save_pansharpen != "temp":
+        required_outputs.append(_get_expected_mul_output_path(state, args, "pansharpen"))
+    if args.run_cloud_mask and args.save_cloud_mask != "temp":
+        required_outputs.append(_get_expected_mul_output_path(state, args, "cloud_mask"))
+        required_outputs.append(
+            build_output_path_from_input(
+                _require_scene_image(state.scene, "mul").tif_file,
+                state.step_dirs["cloud_mask"],
+                suffix=args.cloud_mask_mask_suffix,
+            )
+        )
+    if args.run_alignment and args.save_alignment != "temp":
+        required_outputs.append(_get_expected_mul_output_path(state, args, "alignment"))
+    return required_outputs
 
 
 def _normalize_group_by_basename_spec(raw_spec):
@@ -622,7 +673,13 @@ def _run_radiometric_group(
         group_label=group_label,
         is_root=not label_parts,
     )
-    if args.skip_existing and os.path.exists(output_path):
+    if args.run_from_existing and os.path.exists(output_path):
+        _log_step_plan(
+            "radiometric",
+            outputs=[output_path],
+            message=f"Skipping group {group_label} because output exists",
+            enabled=args.log_to_console,
+        )
         return output_path
 
     radiometric_kwargs = _build_radiometric_kwargs(args)
@@ -632,6 +689,13 @@ def _run_radiometric_group(
     radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
     radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
     radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    _log_step_plan(
+        "radiometric",
+        inputs=child_inputs,
+        outputs=[output_path],
+        message=f"Running SpectralMatch group {group_label}",
+        enabled=args.log_to_console,
+    )
     radiometric_normalization(
         method=args.radiometric_normalization_method,
         log_to_console=args.log_to_console,
@@ -698,14 +762,27 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         output_dir=state.step_dirs["fetch_atmosphere"],
         suffix=args.fetch_atmosphere_output_suffix,
         extension=".json",
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
-    if not plan.pending_output_paths:
+    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+        _log_step_plan(
+            "fetch_atmosphere",
+            outputs=plan.output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+        )
         state.fetch_atmosphere_result = _read_json(plan.output_paths[0])
         _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
         return
 
     fetch_source = _resolve_fetch_atmosphere_source(args)
+    _log_step_plan(
+        "fetch_atmosphere",
+        inputs=[mul_image.tif_file],
+        outputs=plan.output_paths,
+        message=f"Fetching atmosphere via {fetch_source}",
+        enabled=args.log_to_console,
+    )
     if fetch_source == "nasa_power":
         estimate = fetch_power_atmosphere_for_bbox(
             day_utc=mul_image.standardized_metadata.resolve_scene_datetime().date(),
@@ -745,6 +822,12 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         raise ValueError(f"Unsupported fetch atmosphere source: {fetch_source}")
 
     _write_json(plan.pending_output_paths[0], result)
+    _log_step_plan(
+        "fetch_atmosphere",
+        outputs=plan.output_paths,
+        message="Wrote atmosphere metadata",
+        enabled=args.log_to_console,
+    )
     state.fetch_atmosphere_result = result
     _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
 
@@ -764,15 +847,28 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         output_dir=state.step_dirs["atmospheric_correction"],
         suffix=args.atmospheric_correction_output_suffix,
         extension=_get_atmospheric_extension(args),
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
-    if not plan.pending_output_paths:
+    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+        _log_step_plan(
+            "atmospheric_correction",
+            outputs=plan.output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+        )
         state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
         state.current_step = "atmospheric_correction"
         return state.current_files
 
     input_raster = plan.pending_input_paths[0]
     output_raster = plan.pending_output_paths[0]
+    _log_step_plan(
+        "atmospheric_correction",
+        inputs=[input_raster],
+        outputs=[output_raster],
+        message=f"Running {args.atmospheric_method}",
+        enabled=args.log_to_console,
+    )
 
     if args.atmospheric_method == "flaash":
         if args.skip_flaash:
@@ -876,22 +972,37 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             state.current_files,
             output_dir=state.step_dirs["orthorectification"],
             suffix=args.orthorectification_output_suffix,
-            skip_existing=args.skip_existing,
+            skip_existing=False,
         )
-        for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
-            gcp_refined_rpc_orthorectification(
-                input_path,
-                output_path,
-                resolved_dem_file_path,
-                args.epsg,
-                output_nodata_value=args.nodata_value,
-                dtype=args.dtype,
-                output_resolution=resolve_output_resolution_for_crs(
-                    args.epsg,
-                    mul_image.standardized_metadata.product_resolution,
-                ),
-                log_to_console=args.log_to_console,
+        if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+            _log_step_plan(
+                "orthorectification",
+                outputs=plan.output_paths,
+                message="Skipping because output exists",
+                enabled=args.log_to_console,
             )
+        else:
+            _log_step_plan(
+                "orthorectification",
+                inputs=plan.pending_input_paths,
+                outputs=plan.pending_output_paths,
+                message=f"Projecting to EPSG:{args.epsg}",
+                enabled=args.log_to_console,
+            )
+            for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
+                gcp_refined_rpc_orthorectification(
+                    input_path,
+                    output_path,
+                    resolved_dem_file_path,
+                    args.epsg,
+                    output_nodata_value=args.nodata_value,
+                    dtype=args.dtype,
+                    output_resolution=resolve_output_resolution_for_crs(
+                        args.epsg,
+                        mul_image.standardized_metadata.product_resolution,
+                    ),
+                    log_to_console=args.log_to_console,
+                )
         state.current_files = _register_step_outputs(state, "orthorectification", plan.output_paths)
 
     if args.run_pansharpen:
@@ -902,22 +1013,37 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 [pan_image.tif_file],
                 output_dir=state.step_dirs["orthorectification"],
                 suffix=args.orthorectification_pan_output_suffix,
-                skip_existing=args.skip_existing,
+                skip_existing=False,
             )
-            for input_path, output_path in zip(pan_plan.pending_input_paths, pan_plan.pending_output_paths):
-                gcp_refined_rpc_orthorectification(
-                    input_path,
-                    output_path,
-                    resolved_dem_file_path,
-                    args.epsg,
-                    output_nodata_value=args.nodata_value,
-                    dtype=args.dtype,
-                    output_resolution=resolve_output_resolution_for_crs(
-                        args.epsg,
-                        pan_image.standardized_metadata.product_resolution,
-                    ),
-                    log_to_console=args.log_to_console,
+            if args.run_from_existing and _step_outputs_exist(pan_plan.output_paths):
+                _log_step_plan(
+                    "orthorectification_pan",
+                    outputs=pan_plan.output_paths,
+                    message="Skipping because output exists",
+                    enabled=args.log_to_console,
                 )
+            else:
+                _log_step_plan(
+                    "orthorectification_pan",
+                    inputs=pan_plan.pending_input_paths,
+                    outputs=pan_plan.pending_output_paths,
+                    message=f"Projecting to EPSG:{args.epsg}",
+                    enabled=args.log_to_console,
+                )
+                for input_path, output_path in zip(pan_plan.pending_input_paths, pan_plan.pending_output_paths):
+                    gcp_refined_rpc_orthorectification(
+                        input_path,
+                        output_path,
+                        resolved_dem_file_path,
+                        args.epsg,
+                        output_nodata_value=args.nodata_value,
+                        dtype=args.dtype,
+                        output_resolution=resolve_output_resolution_for_crs(
+                            args.epsg,
+                            pan_image.standardized_metadata.product_resolution,
+                        ),
+                        log_to_console=args.log_to_console,
+                    )
             state.pan_ortho_path = pan_plan.output_paths[0]
             _register_step_outputs(state, "orthorectification_pan", pan_plan.output_paths, image_role="pan")
 
@@ -934,16 +1060,31 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         state.current_files,
         output_dir=state.step_dirs["pansharpen"],
         suffix=args.pansharpen_output_suffix,
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
-    for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
-        pansharpen_image(
-            input_path,
-            state.pan_ortho_path,
-            output_path,
-            change_nodata_value=args.nodata_value,
-            log_to_console=args.log_to_console,
+    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+        _log_step_plan(
+            "pansharpen",
+            outputs=plan.output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
         )
+    else:
+        _log_step_plan(
+            "pansharpen",
+            inputs=plan.pending_input_paths + ([state.pan_ortho_path] if state.pan_ortho_path else []),
+            outputs=plan.pending_output_paths,
+            message="Running pansharpen",
+            enabled=args.log_to_console,
+        )
+        for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
+            pansharpen_image(
+                input_path,
+                state.pan_ortho_path,
+                output_path,
+                change_nodata_value=args.nodata_value,
+                log_to_console=args.log_to_console,
+            )
     state.current_files = _register_step_outputs(state, "pansharpen", plan.output_paths)
     state.current_step = "pansharpen"
     return state.current_files
@@ -960,16 +1101,30 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         state.current_files,
         output_dir=state.step_dirs["cloud_mask"],
         suffix=args.cloud_mask_output_suffix,
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
     mask_plan = plan_step_outputs(
         state.current_files,
         output_dir=state.step_dirs["cloud_mask"],
         suffix=args.cloud_mask_mask_suffix,
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
 
-    if args.cloud_mask_command:
+    if args.run_from_existing and _step_outputs_exist(output_plan.output_paths) and _step_outputs_exist(mask_plan.output_paths):
+        _log_step_plan(
+            "cloud_mask",
+            outputs=output_plan.output_paths + mask_plan.output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+        )
+    elif args.cloud_mask_command:
+        _log_step_plan(
+            "cloud_mask",
+            inputs=output_plan.pending_input_paths,
+            outputs=output_plan.pending_output_paths,
+            message="Running external cloud mask command",
+            enabled=args.log_to_console,
+        )
         for input_path, output_path in zip(output_plan.pending_input_paths, output_plan.pending_output_paths):
             _run_cloud_mask_command(
                 args.cloud_mask_command,
@@ -982,6 +1137,13 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     else:
         cloud_classes = _parse_int_csv(args.cloud_mask_classes)
         omnicloud_kwargs = _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
+        _log_step_plan(
+            "cloud_mask",
+            inputs=output_plan.pending_input_paths,
+            outputs=output_plan.pending_output_paths + mask_plan.pending_output_paths,
+            message=f"Running OmniCloudMask classes={cloud_classes} buffer={args.cloud_buffer_pixels}",
+            enabled=args.log_to_console,
+        )
         pending_pairs = zip(
             output_plan.pending_input_paths,
             output_plan.pending_output_paths,
@@ -1021,35 +1183,50 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
         state.current_files,
         output_dir=state.step_dirs["alignment"],
         suffix=args.alignment_output_suffix,
-        skip_existing=args.skip_existing,
+        skip_existing=False,
     )
-    for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
-        state.alignment_result = align_image_pair(
-            moving_image_path=input_path,
-            fixed_image_path=args.alignment_fixed_image,
-            output_image_path=output_path,
-            band_index=args.alignment_band_index,
-            moving_band_index=args.alignment_moving_band_index,
-            fixed_band_index=args.alignment_fixed_band_index,
-            moving_nodata=args.alignment_moving_nodata,
-            fixed_nodata=args.alignment_fixed_nodata,
-            output_nodata=args.alignment_output_nodata if args.alignment_output_nodata is not None else args.nodata_value,
-            min_valid_fraction=args.alignment_min_valid_fraction,
-            temp_dir=state.step_dirs["temp_root"],
-            keep_temp_dir=args.keep_temp_dir,
-            split_factor=args.alignment_split_factor,
-            clip_fixed_to_moving=args.alignment_clip_fixed_to_moving,
-            output_on_moving_grid=args.alignment_output_on_moving_grid,
-            trim_edge_invalid=args.alignment_trim_edge_invalid,
-            edge_trim_depth=args.alignment_edge_trim_depth,
-            edge_trim_detection_band_index=args.alignment_edge_trim_detection_band_index,
-            edge_trim_invalid_below=args.alignment_edge_trim_invalid_below,
-            edge_trim_invalid_above=args.alignment_edge_trim_invalid_above,
-            enforce_mutual_valid_mask=args.alignment_enforce_mutual_valid_mask,
-            use_edge_proxies=args.alignment_use_edge_proxies,
-            solve_resolution=args.alignment_solve_resolution,
-            log_to_console=args.log_to_console,
+    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+        _log_step_plan(
+            "alignment",
+            outputs=plan.output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
         )
+    else:
+        _log_step_plan(
+            "alignment",
+            inputs=plan.pending_input_paths + [args.alignment_fixed_image],
+            outputs=plan.pending_output_paths,
+            message=f"Running coregistration split_factor={args.alignment_split_factor}",
+            enabled=args.log_to_console,
+        )
+        for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
+            state.alignment_result = align_image_pair(
+                moving_image_path=input_path,
+                fixed_image_path=args.alignment_fixed_image,
+                output_image_path=output_path,
+                band_index=args.alignment_band_index,
+                moving_band_index=args.alignment_moving_band_index,
+                fixed_band_index=args.alignment_fixed_band_index,
+                moving_nodata=args.alignment_moving_nodata,
+                fixed_nodata=args.alignment_fixed_nodata,
+                output_nodata=args.alignment_output_nodata if args.alignment_output_nodata is not None else args.nodata_value,
+                min_valid_fraction=args.alignment_min_valid_fraction,
+                temp_dir=state.step_dirs["temp_root"],
+                keep_temp_dir=args.keep_temp_dir,
+                split_factor=args.alignment_split_factor,
+                clip_fixed_to_moving=args.alignment_clip_fixed_to_moving,
+                output_on_moving_grid=args.alignment_output_on_moving_grid,
+                trim_edge_invalid=args.alignment_trim_edge_invalid,
+                edge_trim_depth=args.alignment_edge_trim_depth,
+                edge_trim_detection_band_index=args.alignment_edge_trim_detection_band_index,
+                edge_trim_invalid_below=args.alignment_edge_trim_invalid_below,
+                edge_trim_invalid_above=args.alignment_edge_trim_invalid_above,
+                enforce_mutual_valid_mask=args.alignment_enforce_mutual_valid_mask,
+                use_edge_proxies=args.alignment_use_edge_proxies,
+                solve_resolution=args.alignment_solve_resolution,
+                log_to_console=args.log_to_console,
+            )
     state.current_files = _register_step_outputs(state, "alignment", plan.output_paths)
     state.current_step = "alignment"
     return state.current_files
@@ -1064,8 +1241,36 @@ def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> 
 
 
 def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Namespace) -> bool:
-    final_image_path, _ = _final_output_paths(state, args)
-    return os.path.isfile(final_image_path)
+    required_outputs = _scene_skip_required_outputs(state, args)
+    if required_outputs and not _step_outputs_exist(required_outputs):
+        return False
+    if args.run_radiometric_normalization:
+        return os.path.isfile(_get_expected_mul_output_path(state, args, _get_last_enabled_raster_step(args)))
+    return True if required_outputs else os.path.isfile(_get_expected_mul_output_path(state, args, _get_last_enabled_raster_step(args)))
+
+
+def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    saved_paths: List[str] = []
+
+    def _extend(step_name: str) -> None:
+        saved_paths.extend(state.scene.step_outputs.get(step_name, []))
+
+    if args.run_fetch_atmosphere and args.save_fetch_atmosphere != "temp":
+        _extend("fetch_atmosphere")
+    if args.run_atmospheric_correction and args.save_atmospheric_correction != "temp":
+        _extend("atmospheric_correction")
+    if args.run_orthorectification and args.save_orthorectification != "temp":
+        _extend("orthorectification")
+        if args.run_pansharpen:
+            _extend("orthorectification_pan")
+    if args.run_pansharpen and args.save_pansharpen != "temp":
+        _extend("pansharpen")
+    if args.run_cloud_mask and args.save_cloud_mask != "temp":
+        _extend("cloud_mask")
+        _extend("cloud_mask_mask")
+    if args.run_alignment and args.save_alignment != "temp":
+        _extend("alignment")
+    return _dedupe_paths([path for path in saved_paths if path])
 
 
 def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, scene_started_utc: str) -> None:
@@ -1075,6 +1280,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
         raise ValueError("WorldView scene is missing required images for metadata reporting.")
     resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
     final_scene_path, scene_metadata_path = _final_output_paths(state, args)
+    saved_output_paths = _scene_saved_output_paths(state, args)
     payload = {
         "scene": {
             "scene_id": state.scene.scene_id,
@@ -1100,7 +1306,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "pan": pan_image.standardized_metadata.to_dict() if pan_image.standardized_metadata else None,
         },
         "workflow": {
-            "last_run_step": args.last_run_step,
+            "run_from_existing": args.run_from_existing,
             "run_fetch_atmosphere": args.run_fetch_atmosphere,
             "run_atmospheric_correction": args.run_atmospheric_correction,
             "run_orthorectification": args.run_orthorectification,
@@ -1126,6 +1332,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
         "outputs": {
             "step_dirs": state.step_dirs,
             "step_outputs": state.scene.step_outputs,
+            "saved_output_paths": saved_output_paths,
             "final_scene_path": final_scene_path,
             "scene_metadata_path": scene_metadata_path,
         },
@@ -1154,6 +1361,11 @@ def run_workflow(args: argparse.Namespace) -> int:
         raise ValueError("No tif files matched --input-file-glob.")
 
     scenes = load_worldview_scenes_from_tif_files(tif_files, filter_basenames=filter_basenames)
+    log(
+        f"Discovered {len(tif_files)} tif files across {len(scenes)} scenes",
+        enabled=args.log_to_console,
+        step="workflow",
+    )
     processed_states: List[SceneWorkflowState] = []
     for scene in scenes:
         state = _initialize_scene_state(scene, args)
@@ -1164,7 +1376,12 @@ def run_workflow(args: argparse.Namespace) -> int:
         )
 
         if args.skip_existing and _scene_final_outputs_complete(state, args):
-            log("Skipping existing final output", enabled=args.log_to_console, step="workflow")
+            _log_step_plan(
+                "workflow",
+                outputs=_scene_skip_required_outputs(state, args),
+                message="Skipping whole scene because desired outputs exist",
+                enabled=args.log_to_console,
+            )
             _mark_scene_complete_from_existing_output(state, args)
             processed_states.append(state)
             continue
@@ -1183,13 +1400,23 @@ def run_workflow(args: argparse.Namespace) -> int:
         if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("alignment"):
             _run_alignment_step(state, args)
 
-        final_image_path, _ = _final_output_paths(state, args)
-        log(f"Wrote final output {final_image_path}", enabled=args.log_to_console, step="workflow")
+        saved_output_paths = _scene_saved_output_paths(state, args)
+        if saved_output_paths:
+            log(
+                "Wrote scene outputs: " + ", ".join(saved_output_paths),
+                enabled=args.log_to_console,
+                step="workflow",
+            )
         _write_scene_report(state, args, scene_started_utc=scene_started_utc)
         log("Scene complete", enabled=args.log_to_console, step="workflow")
         processed_states.append(state)
 
     if processed_states and args.run_radiometric_normalization:
+        log(
+            f"Preparing grouped radiometric normalization for {len([state for state in processed_states if state.current_files])} scene outputs",
+            enabled=args.log_to_console,
+            step="workflow",
+        )
         radiometric_output = _run_radiometric_normalization_workflow(
             [state.current_files[0] for state in processed_states if state.current_files],
             args=args,
@@ -1231,12 +1458,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodata-value", type=float, default=-9999)
     parser.add_argument("--dtype", default="int16")
     parser.add_argument("--log-to-console", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument(
-        "--last-run-step",
-        choices=RASTER_STEP_ORDER,
-        default="raw",
-        help="Most recent raster step already completed for the current scene outputs.",
-    )
+    parser.add_argument("--run-from-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--flaash-dem-ground-percentile", type=float, default=50.0)
     parser.add_argument("--flaash-modtran-atm")
     parser.add_argument("--flaash-modtran-aer")
@@ -1355,8 +1577,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--input-file-glob is required (via CLI or --config-yaml).")
     if not args.dem_file_path and not args.existing_mul_ortho_input:
         parser.error("--dem-file-path is required unless --existing-mul-ortho-input is provided.")
-    if args.run_pansharpen and not args.run_orthorectification and args.last_run_step not in {"orthorectification", "pansharpen", "cloud_mask", "alignment"} and not args.existing_mul_ortho_input:
-        parser.error("--run-pansharpen requires orthorectified inputs, --run-orthorectification, or a later --last-run-step.")
+    if args.run_pansharpen and not args.run_orthorectification and not args.existing_mul_ortho_input:
+        parser.error("--run-pansharpen requires orthorectified inputs, --run-orthorectification, or --existing-mul-ortho-input.")
     if args.run_pansharpen and args.existing_mul_ortho_input and not args.existing_pan_ortho_input:
         parser.error("--existing-pan-ortho-input is required when using --existing-mul-ortho-input with pansharpen.")
     if args.run_alignment and not args.alignment_fixed_image:
@@ -1367,8 +1589,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--envi-engine-path is required when running FLAASH.")
     if args.run_cloud_mask and args.cloud_mask_method and args.cloud_mask_command:
         parser.error("Use either --cloud-mask-method or --cloud-mask-command, not both.")
-    if args.last_run_step == "alignment" and not args.run_alignment:
-        parser.error("--last-run-step alignment requires --run-alignment.")
     if args.cloud_mask_inference_resolution_m <= 0:
         parser.error("--cloud-mask-inference-resolution-m must be > 0.")
     if args.fetch_atmosphere_grid_size < 1:

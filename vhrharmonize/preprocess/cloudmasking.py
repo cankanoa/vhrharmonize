@@ -39,7 +39,11 @@ def cloudmask_raster(
     log_to_console: bool = False,
 ) -> CloudMaskResult:
     """Create a cloud mask and apply it to a raster."""
-    log("Running cloud mask", enabled=log_to_console, step="cloudmask")
+    log(
+        f"Running cloud mask on {os.path.basename(input_image_path)}",
+        enabled=log_to_console,
+        step="cloudmask",
+    )
     create_cloud_mask_with_omnicloudmask(
         input_image_path,
         output_mask_path,
@@ -147,6 +151,11 @@ def create_cloud_mask_with_omnicloudmask(
     omnicloud_kwargs = dict(omnicloud_kwargs or {})
     # Keep large prediction mosaics off GPU by default to reduce VRAM pressure.
     omnicloud_kwargs.setdefault("mosaic_device", "cpu")
+    log(
+        f"OmniCloudMask setup resolution={inference_resolution_m}m buffer={buffer_pixels} classes={list(cloud_classes)}",
+        enabled=log_to_console,
+        step="cloudmask",
+    )
 
     with rasterio.open(input_image_path) as src:
         if max(red_band_index, green_band_index, nir_band_index) > src.count:
@@ -274,6 +283,7 @@ def apply_binary_cloud_mask_to_image(
                 height=src.height,
                 resampling=Resampling.nearest,
             )
+            log("Reprojecting cloud mask onto image grid", enabled=log_to_console, step="cloudmask")
 
         nodata_value = output_nodata_value if output_nodata_value is not None else src.nodata
         if nodata_value is None:

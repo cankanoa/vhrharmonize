@@ -35,7 +35,11 @@ def gcp_refined_rpc_orthorectification(
     log_to_console: bool = False,
     ):
     """Orthorectify an image using RPC metadata, with optional GCP-based RPC refinement."""
-    log("Running orthorectification", enabled=log_to_console, step="orthorectification")
+    log(
+        f"Running orthorectification input={os.path.basename(input_image_path)} dem={os.path.basename(dem_image_path)} epsg={output_epsg}",
+        enabled=log_to_console,
+        step="orthorectification",
+    )
 
     # Set resolution of output raster
     if isinstance(output_resolution, float):
@@ -153,7 +157,7 @@ def gcp_refined_rpc_orthorectification(
 
     # Clean up the temporary file
     os.remove(temp_image_path)
-    log("Wrote output", enabled=log_to_console, step="orthorectification")
+    log(f"Wrote output {os.path.basename(output_image_path)}", enabled=log_to_console, step="orthorectification")
 
 
 def qgis_gcps_to_csv(

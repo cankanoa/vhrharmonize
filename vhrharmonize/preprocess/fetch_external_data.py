@@ -55,7 +55,7 @@ def download_opentopography_dem_for_bbox(
         "API_Key": api_key,
     }
     log(
-        f"Downloading {demtype} DEM from OpenTopography",
+        f"Downloading {demtype} DEM to {os.path.basename(output_tif_path)}",
         enabled=log_to_console,
         step="dem",
     )
@@ -70,6 +70,7 @@ def download_opentopography_dem_for_bbox(
 
     with open(output_tif_path, "wb") as handle:
         handle.write(response.content)
+    log(f"Wrote DEM {os.path.basename(output_tif_path)}", enabled=log_to_console, step="dem")
     return output_tif_path
 
 

@@ -13,8 +13,8 @@ shared:
   # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
   # dem_online_timeout_s: 120.0
   # output_dir: ../Processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
-  skip_existing: true # true | false
-  last_run_step: raw # raw | atmospheric_correction | orthorectification | pansharpen | cloud_mask | alignment
+  skip_existing: true # true | false. Skip the whole scene only if all requested non-temp outputs already exist.
+  run_from_existing: true # true | false. At each step, if the expected output exists, reuse it instead of rerunning that step.
 
 workflow:
   run_fetch_atmosphere: true # true | false
@@ -151,14 +151,14 @@ alignment:
   alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
   alignment_use_edge_proxies: true # true | false
   alignment_split_factor: 2 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
-  alignment_clip_fixed_to_moving: false # true | false
+  alignment_clip_fixed_to_moving: true # true | false
   alignment_output_on_moving_grid: true # true | false
   alignment_trim_edge_invalid: true # true | false
   alignment_edge_trim_depth: 8 # Number of edge pixels to trim
   alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
   alignment_edge_trim_invalid_below: -3000 # Values <= this are treated as invalid during edge trimming
   # alignment_edge_trim_invalid_above: 65535 # Values >= this are treated as invalid during edge trimming
-  alignment_enforce_mutual_valid_mask: false # true | false
+  alignment_enforce_mutual_valid_mask: true # true | false
   # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
 
 radiometric_normalization:

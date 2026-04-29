@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import orthority as oty
 import rasterio
@@ -13,7 +15,11 @@ def pansharpen_image(
     log_to_console: bool = False,
     ):
     """Pansharpen a multispectral raster with a higher-resolution panchromatic raster."""
-    log("Running pansharpen", enabled=log_to_console, step="pansharpen")
+    log(
+        f"Running pansharpen mul={os.path.basename(input_low_resolution_path)} pan={os.path.basename(input_high_resolution_path)}",
+        enabled=log_to_console,
+        step="pansharpen",
+    )
     pan_sharp = oty.PanSharpen(input_high_resolution_path, input_low_resolution_path)
     pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
 
@@ -24,7 +30,7 @@ def pansharpen_image(
             -32768,
             log_to_console=log_to_console,
         )
-    log("Wrote output", enabled=log_to_console, step="pansharpen")
+    log(f"Wrote output {os.path.basename(output_image_path)}", enabled=log_to_console, step="pansharpen")
 
 
 def _change_nodata_value(

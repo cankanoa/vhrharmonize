@@ -66,10 +66,15 @@ def radiometric_normalization(
 
     output_path = Path(shared_output_image_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    log("Running radiometric normalization", enabled=log_to_console, step="radiometric")
+    input_images = _normalize_input_images(shared_input_images)
+    log(
+        f"Running radiometric normalization inputs={len(input_images)} output={output_path.name}",
+        enabled=log_to_console,
+        step="radiometric",
+    )
 
     pipeline_kwargs = {
-        "shared_input_images": _normalize_input_images(shared_input_images),
+        "shared_input_images": input_images,
         "shared_output_image_path": str(output_path),
         "delete_temp_dir": delete_temp_dir,
         "shared_debug_logs": shared_debug_logs,
@@ -96,7 +101,7 @@ def radiometric_normalization(
     result = pipeline(**pipeline_kwargs)
 
     if output_path.exists():
-        log("Wrote output", enabled=log_to_console, step="radiometric")
+        log(f"Wrote output {output_path.name}", enabled=log_to_console, step="radiometric")
         return str(output_path)
     if isinstance(result, str) and result:
         return result
