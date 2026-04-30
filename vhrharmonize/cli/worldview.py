@@ -20,7 +20,6 @@ import geopandas as gpd
 from vhrharmonize.cli.cli_helpers import load_yaml_config
 from vhrharmonize.io.geospatial import calculate_raster_overviews, get_image_percentile_value, shp_to_gpkg
 from vhrharmonize.io.workflow_utils import (
-    build_output_path_from_input,
     plan_step_outputs,
     resolve_output_dir,
     resolve_temp_dir,
@@ -493,53 +492,84 @@ def _get_atmospheric_extension(args: argparse.Namespace) -> str:
     return ".dat" if args.atmospheric_method == "flaash" else ".tif"
 
 
-def _get_expected_mul_output_path(state: SceneWorkflowState, args: argparse.Namespace, step_name: str) -> str:
+def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> Dict[str, List[str]]:
     mul_image = _require_scene_image(state.scene, "mul")
-    if step_name == "raw":
-        return mul_image.tif_file
-    if step_name == "atmospheric_correction":
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["atmospheric_correction"],
+    expected_outputs: Dict[str, List[str]] = {
+        "raw": [mul_image.tif_file],
+    }
+    current_mul_outputs = [mul_image.tif_file]
+
+    if args.run_fetch_atmosphere:
+        expected_outputs["fetch_atmosphere"] = plan_step_outputs(
+            [mul_image.tif_file],
+            output_dir=state.step_dirs["fetch_atmosphere"],
+            suffix=args.fetch_atmosphere_output_suffix,
+            extension=".json",
+            skip_existing=False,
+        ).output_paths
+
+    if args.run_atmospheric_correction:
+        current_mul_outputs = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["atmospheric_correction"],
             suffix=args.atmospheric_correction_output_suffix,
             extension=_get_atmospheric_extension(args),
-        )
-    if step_name == "orthorectification":
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["orthorectification"],
+            skip_existing=False,
+        ).output_paths
+        expected_outputs["atmospheric_correction"] = list(current_mul_outputs)
+
+    if args.run_orthorectification:
+        current_mul_outputs = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["orthorectification"],
             suffix=args.orthorectification_output_suffix,
-        )
-    if step_name == "pansharpen":
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["pansharpen"],
+            skip_existing=False,
+        ).output_paths
+        expected_outputs["orthorectification"] = list(current_mul_outputs)
+
+        if args.run_pansharpen and state.scene.pan_image is not None:
+            expected_outputs["orthorectification_pan"] = plan_step_outputs(
+                [state.scene.pan_image.tif_file],
+                output_dir=state.step_dirs["orthorectification"],
+                suffix=args.orthorectification_pan_output_suffix,
+                skip_existing=False,
+            ).output_paths
+
+    if args.run_pansharpen:
+        current_mul_outputs = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["pansharpen"],
             suffix=args.pansharpen_output_suffix,
-        )
-    if step_name == "cloud_mask":
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["cloud_mask"],
+            skip_existing=False,
+        ).output_paths
+        expected_outputs["pansharpen"] = list(current_mul_outputs)
+
+    if args.run_cloud_mask:
+        expected_outputs["cloud_mask_mask"] = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["cloud_mask"],
+            suffix=args.cloud_mask_mask_suffix,
+            skip_existing=False,
+        ).output_paths
+        current_mul_outputs = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["cloud_mask"],
             suffix=args.cloud_mask_output_suffix,
-        )
-    if step_name == "alignment":
-        return build_output_path_from_input(
-            mul_image.tif_file,
-            state.step_dirs["alignment"],
+            skip_existing=False,
+        ).output_paths
+        expected_outputs["cloud_mask"] = list(current_mul_outputs)
+
+    if args.run_alignment:
+        current_mul_outputs = plan_step_outputs(
+            current_mul_outputs,
+            output_dir=state.step_dirs["alignment"],
             suffix=args.alignment_output_suffix,
-        )
-    raise ValueError(f"Unsupported step name: {step_name}")
+            skip_existing=False,
+        ).output_paths
+        expected_outputs["alignment"] = list(current_mul_outputs)
 
-
-def _get_expected_pan_ortho_path(state: SceneWorkflowState, args: argparse.Namespace) -> Optional[str]:
-    pan_image = state.scene.pan_image
-    if pan_image is None:
-        return None
-    return build_output_path_from_input(
-        pan_image.tif_file,
-        state.step_dirs["orthorectification"],
-        suffix=args.orthorectification_pan_output_suffix,
-    )
+    expected_outputs["final_raster"] = list(current_mul_outputs)
+    return expected_outputs
 
 
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
@@ -575,8 +605,9 @@ def _register_step_outputs(
 
 
 def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: argparse.Namespace) -> None:
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
     last_step = _get_last_enabled_raster_step(args)
-    existing_output = _get_expected_mul_output_path(state, args, last_step)
+    existing_output = expected_outputs[last_step][0]
     state.current_files = [existing_output]
     state.current_step = last_step
     state.scene.step_outputs[last_step] = [existing_output]
@@ -584,37 +615,23 @@ def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: a
 
 
 def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs: List[str] = []
     if args.run_fetch_atmosphere and args.save_fetch_atmosphere != "temp":
-        required_outputs.append(
-            build_output_path_from_input(
-                _require_scene_image(state.scene, "mul").tif_file,
-                state.step_dirs["fetch_atmosphere"],
-                suffix=args.fetch_atmosphere_output_suffix,
-                extension=".json",
-            )
-        )
+        required_outputs.extend(expected_outputs.get("fetch_atmosphere", []))
     if args.run_atmospheric_correction and args.save_atmospheric_correction != "temp":
-        required_outputs.append(_get_expected_mul_output_path(state, args, "atmospheric_correction"))
+        required_outputs.extend(expected_outputs.get("atmospheric_correction", []))
     if args.run_orthorectification and args.save_orthorectification != "temp":
-        required_outputs.append(_get_expected_mul_output_path(state, args, "orthorectification"))
+        required_outputs.extend(expected_outputs.get("orthorectification", []))
         if args.run_pansharpen:
-            pan_output = _get_expected_pan_ortho_path(state, args)
-            if pan_output:
-                required_outputs.append(pan_output)
+            required_outputs.extend(expected_outputs.get("orthorectification_pan", []))
     if args.run_pansharpen and args.save_pansharpen != "temp":
-        required_outputs.append(_get_expected_mul_output_path(state, args, "pansharpen"))
+        required_outputs.extend(expected_outputs.get("pansharpen", []))
     if args.run_cloud_mask and args.save_cloud_mask != "temp":
-        required_outputs.append(_get_expected_mul_output_path(state, args, "cloud_mask"))
-        required_outputs.append(
-            build_output_path_from_input(
-                _require_scene_image(state.scene, "mul").tif_file,
-                state.step_dirs["cloud_mask"],
-                suffix=args.cloud_mask_mask_suffix,
-            )
-        )
+        required_outputs.extend(expected_outputs.get("cloud_mask", []))
+        required_outputs.extend(expected_outputs.get("cloud_mask_mask", []))
     if args.run_alignment and args.save_alignment != "temp":
-        required_outputs.append(_get_expected_mul_output_path(state, args, "alignment"))
+        required_outputs.extend(expected_outputs.get("alignment", []))
     return required_outputs
 
 
@@ -1358,20 +1375,20 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
 
 
 def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> tuple[str, str]:
-    last_step = _get_last_enabled_raster_step(args)
-    final_image_path = _get_expected_mul_output_path(state, args, last_step)
+    final_image_path = _get_expected_scene_step_outputs(state, args)["final_raster"][0]
     final_base = os.path.splitext(final_image_path)[0]
     final_metadata_path = f"{final_base}_metadata.json"
     return final_image_path, final_metadata_path
 
 
 def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Namespace) -> bool:
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs = _scene_skip_required_outputs(state, args)
     if required_outputs and not _step_outputs_exist(required_outputs):
         return False
     if args.run_radiometric_normalization:
-        return os.path.isfile(_get_expected_mul_output_path(state, args, _get_last_enabled_raster_step(args)))
-    return True if required_outputs else os.path.isfile(_get_expected_mul_output_path(state, args, _get_last_enabled_raster_step(args)))
+        return os.path.isfile(expected_outputs["final_raster"][0])
+    return True if required_outputs else os.path.isfile(expected_outputs["final_raster"][0])
 
 
 def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
