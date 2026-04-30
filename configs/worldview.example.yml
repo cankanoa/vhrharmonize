@@ -1,12 +1,12 @@
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
   keep_temp_dir: false # true | false
-  epsg: 6635 # Output CRS for orthorectified products
+  epsg:  # Projects epsg code for output products; for example 6635 for Hawaii Island
   nodata_value: -9999 # Shared nodata value used by raster-writing steps
   dtype: int16 # Shared output dtype for raster-writing steps
   log_to_console: true # true | false
-  concurrent_processing: num_cpu # Integer worker count or num_cpu to use all available CPUs for per-scene processing.
-  #overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true.
+  concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing.
+  overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true.
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
   dem_file_path: online # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
@@ -14,36 +14,42 @@ shared:
   # dem_online_source: SRTMGL1_Ellip
   # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
   # dem_online_timeout_s: 120.0
-  # output_dir: ../Processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
+  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
   skip_existing: true # true | false. Skip the whole scene only if all requested non-temp outputs already exist.
   run_from_existing: true # true | false. At each step, if the expected output exists, reuse it instead of rerunning that step.
 
 workflow:
-  run_fetch_atmosphere: true # true | false
-  save_fetch_atmosphere: temp # temp | output | ./custom_relative | /custom/absolute
-  run_atmospheric_correction: true
-  save_atmospheric_correction: temp
-  calculate_overviews_atmospheric_correction: false
+  # Atmospheric correction
+  run_atmospheric_correction: true # true | false
+  save_atmospheric_correction: temp # temp | output | ./custom_relative | /custom/absolute
+  calculate_overviews_atmospheric_correction: false # true | false
+  run_fetch_atmosphere: true
+  save_fetch_atmosphere: temp
 
+  # Orthorectification
   run_orthorectification: true
   save_orthorectification: temp
   calculate_overviews_orthorectification: false
 
+  # Pansharpening
   run_pansharpen: true
   save_pansharpen: temp
   calculate_overviews_pansharpen: false
 
+  # Cloud masking
   run_cloud_mask: true
   save_cloud_mask: output
-  calculate_overviews_cloud_mask: false
+  calculate_overviews_cloud_mask: true
 
+  # Spatially match to external dataset
   run_alignment: false
-  save_alignment: temp
-  calculate_overviews_alignment: false
+  save_alignment: output
+  calculate_overviews_alignment: true
 
+  # Radiometrically match images to each other
   run_radiometric_normalization: false
-  save_radiometric_normalization: temp
-  calculate_overviews_radiometric_normalization: false
+  save_radiometric_normalization: /custom/absolute/to/folder
+  calculate_overviews_radiometric_normalization: true
 
 atmospheric_correction:
   atmospheric_method: py6s # py6s | flaash | none
