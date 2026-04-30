@@ -49,6 +49,7 @@ def align_image_pair(
     use_edge_proxies: bool = True,
     solve_resolution: float | None = None,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> AlignmentResult:
     """Align a moving image to a fixed image using coregix."""
     if band_index < 0:
@@ -79,6 +80,7 @@ def align_image_pair(
         f"Running alignment moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",
         enabled=log_to_console,
         step="alignment",
+        scene_basename=scene_basename,
     )
     result = coregix_align_image_pair(
         moving_image_path=moving_image_path,
@@ -107,7 +109,12 @@ def align_image_pair(
         log_to_console=log_to_console,
     )
     output_path = _extract_output_path(result)
-    log(f"Wrote output {os.path.basename(output_path)}", enabled=log_to_console, step="alignment")
+    log(
+        f"Wrote output {os.path.basename(output_path)}",
+        enabled=log_to_console,
+        step="alignment",
+        scene_basename=scene_basename,
+    )
     return AlignmentResult(output_image_path=output_path)
 
 

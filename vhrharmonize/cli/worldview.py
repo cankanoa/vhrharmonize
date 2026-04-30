@@ -265,14 +265,24 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
     if dem_value.lower() != "online":
         resolved_dem_path = resolve_relative_to_input(dem_value, mul_folder)
         state.dem_file_path = resolved_dem_path
-        log(f"Using DEM {os.path.basename(resolved_dem_path)}", enabled=args.log_to_console, step="dem")
+        log(
+            f"Using DEM {os.path.basename(resolved_dem_path)}",
+            enabled=args.log_to_console,
+            step="dem",
+            scene_basename=state.scene.primary_basename,
+        )
         return resolved_dem_path
 
     dem_dir = os.path.join(state.step_dirs["temp_root"], "dem")
     os.makedirs(dem_dir, exist_ok=True)
     dem_output_path = os.path.join(dem_dir, f"{mul_image.basename}_dem.tif")
     if os.path.isfile(dem_output_path):
-        log(f"Reusing DEM {os.path.basename(dem_output_path)}", enabled=args.log_to_console, step="dem")
+        log(
+            f"Reusing DEM {os.path.basename(dem_output_path)}",
+            enabled=args.log_to_console,
+            step="dem",
+            scene_basename=state.scene.primary_basename,
+        )
     else:
         download_opentopography_dem_for_bbox(
             min_lon=state.scene_bbox_wgs84[0],
@@ -285,8 +295,14 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
             endpoint=args.dem_online_api_endpoint,
             timeout_s=args.dem_online_timeout_s,
             log_to_console=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
-        log(f"Downloaded DEM {os.path.basename(dem_output_path)}", enabled=args.log_to_console, step="dem")
+        log(
+            f"Downloaded DEM {os.path.basename(dem_output_path)}",
+            enabled=args.log_to_console,
+            step="dem",
+            scene_basename=state.scene.primary_basename,
+        )
     state.dem_file_path = dem_output_path
     return dem_output_path
 
@@ -351,6 +367,7 @@ def _log_step_plan(
     outputs: List[str] | None = None,
     message: str | None = None,
     enabled: bool = False,
+    scene_basename: str | None = None,
 ) -> None:
     parts: List[str] = []
     if message:
@@ -359,7 +376,7 @@ def _log_step_plan(
         parts.append(f"in={_short_paths(inputs)}")
     if outputs:
         parts.append(f"out={_short_paths(outputs)}")
-    log(" | ".join(parts), enabled=enabled, step=step)
+    log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
 def _resolve_step_save_dir(
@@ -763,6 +780,7 @@ def _run_cloud_mask_command(
     image_basename: str,
     *,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> None:
     command = command_template.format(
         input=input_image_path,
@@ -770,7 +788,12 @@ def _run_cloud_mask_command(
         scene_root=scene_root_path,
         image_basename=image_basename,
     )
-    log("Running external cloud mask command", enabled=log_to_console, step="cloud_mask")
+    log(
+        "Running external cloud mask command",
+        enabled=log_to_console,
+        step="cloud_mask",
+        scene_basename=scene_basename,
+    )
     subprocess.run(command, shell=True, check=True)
 
 
@@ -793,6 +816,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
             outputs=plan.output_paths,
             message="Skipping because output exists",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         state.fetch_atmosphere_result = _read_json(plan.output_paths[0])
         _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
@@ -805,6 +829,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         outputs=plan.output_paths,
         message=f"Fetching atmosphere via {fetch_source}",
         enabled=args.log_to_console,
+        scene_basename=state.scene.primary_basename,
     )
     if fetch_source == "nasa_power":
         estimate = fetch_power_atmosphere_for_bbox(
@@ -818,6 +843,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
             timeout_s=args.fetch_atmosphere_timeout_s,
             endpoint=args.fetch_atmosphere_power_endpoint,
             log_to_console=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         result = {
             "source": estimate.source,
@@ -839,6 +865,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
             env_file=args.fetch_atmosphere_env_file,
             hours_window=args.fetch_atmosphere_hours_window,
             log_to_console=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         result = estimate.to_dict()
     else:
@@ -850,6 +877,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         outputs=plan.output_paths,
         message="Wrote atmosphere metadata",
         enabled=args.log_to_console,
+        scene_basename=state.scene.primary_basename,
     )
     state.fetch_atmosphere_result = result
     _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
@@ -878,6 +906,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
             outputs=plan.output_paths,
             message="Skipping because output exists",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
         state.current_step = "atmospheric_correction"
@@ -891,6 +920,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         outputs=[output_raster],
         message=f"Running {args.atmospheric_method}",
         enabled=args.log_to_console,
+        scene_basename=state.scene.primary_basename,
     )
 
     if args.atmospheric_method == "flaash":
@@ -964,6 +994,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
             use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
             auto_atmos_source="none",
             log_to_console=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         state.py6s_effective_params = py6s_result.effective_params
         state.py6s_auto_atmos_estimate = py6s_result.auto_atmos_estimate
@@ -974,7 +1005,12 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
 
     state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
     if args.calculate_overviews_atmospheric_correction:
-        log("Calculating overviews for step atmospheric_correction", enabled=args.log_to_console, step="overviews")
+        log(
+            "Calculating overviews for step atmospheric_correction",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
         for output_path in plan.output_paths:
             calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "atmospheric_correction"
@@ -1007,6 +1043,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 outputs=plan.output_paths,
                 message="Skipping because output exists",
                 enabled=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
         else:
             _log_step_plan(
@@ -1015,6 +1052,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 outputs=plan.pending_output_paths,
                 message=f"Projecting to EPSG:{args.epsg}",
                 enabled=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
             for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
                 gcp_refined_rpc_orthorectification(
@@ -1029,10 +1067,16 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                         mul_image.standardized_metadata.product_resolution,
                     ),
                     log_to_console=args.log_to_console,
+                    scene_basename=state.scene.primary_basename,
                 )
         state.current_files = _register_step_outputs(state, "orthorectification", plan.output_paths)
         if args.calculate_overviews_orthorectification:
-            log("Calculating overviews for step orthorectification", enabled=args.log_to_console, step="overviews")
+            log(
+                "Calculating overviews for step orthorectification",
+                enabled=args.log_to_console,
+                step="overviews",
+                scene_basename=state.scene.primary_basename,
+            )
             for output_path in plan.output_paths:
                 calculate_raster_overviews(output_path, args.overview_scales)
 
@@ -1052,6 +1096,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     outputs=pan_plan.output_paths,
                     message="Skipping because output exists",
                     enabled=args.log_to_console,
+                    scene_basename=state.scene.primary_basename,
                 )
             else:
                 _log_step_plan(
@@ -1060,6 +1105,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     outputs=pan_plan.pending_output_paths,
                     message=f"Projecting to EPSG:{args.epsg}",
                     enabled=args.log_to_console,
+                    scene_basename=state.scene.primary_basename,
                 )
                 for input_path, output_path in zip(pan_plan.pending_input_paths, pan_plan.pending_output_paths):
                     gcp_refined_rpc_orthorectification(
@@ -1074,11 +1120,17 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                             pan_image.standardized_metadata.product_resolution,
                         ),
                         log_to_console=args.log_to_console,
+                        scene_basename=state.scene.primary_basename,
                     )
             state.pan_ortho_path = pan_plan.output_paths[0]
             _register_step_outputs(state, "orthorectification_pan", pan_plan.output_paths, image_role="pan")
             if args.calculate_overviews_orthorectification:
-                log("Calculating overviews for step orthorectification_pan", enabled=args.log_to_console, step="overviews")
+                log(
+                    "Calculating overviews for step orthorectification_pan",
+                    enabled=args.log_to_console,
+                    step="overviews",
+                    scene_basename=state.scene.primary_basename,
+                )
                 for output_path in pan_plan.output_paths:
                     calculate_raster_overviews(output_path, args.overview_scales)
 
@@ -1103,6 +1155,7 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             outputs=plan.output_paths,
             message="Skipping because output exists",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
     else:
         _log_step_plan(
@@ -1111,6 +1164,7 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             outputs=plan.pending_output_paths,
             message="Running pansharpen",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
             pansharpen_image(
@@ -1119,10 +1173,16 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
                 output_path,
                 change_nodata_value=args.nodata_value,
                 log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
     state.current_files = _register_step_outputs(state, "pansharpen", plan.output_paths)
     if args.calculate_overviews_pansharpen:
-        log("Calculating overviews for step pansharpen", enabled=args.log_to_console, step="overviews")
+        log(
+            "Calculating overviews for step pansharpen",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
         for output_path in plan.output_paths:
             calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "pansharpen"
@@ -1155,6 +1215,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             outputs=output_plan.output_paths + mask_plan.output_paths,
             message="Skipping because output exists",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
     elif args.cloud_mask_command:
         _log_step_plan(
@@ -1163,6 +1224,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             outputs=output_plan.pending_output_paths,
             message="Running external cloud mask command",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         for input_path, output_path in zip(output_plan.pending_input_paths, output_plan.pending_output_paths):
             _run_cloud_mask_command(
@@ -1172,6 +1234,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
                 state.scene.root_folder_path,
                 mul_image.basename,
                 log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
     else:
         cloud_classes = _parse_int_csv(args.cloud_mask_classes)
@@ -1182,6 +1245,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             outputs=output_plan.pending_output_paths + mask_plan.pending_output_paths,
             message=f"Running OmniCloudMask classes={cloud_classes} buffer={args.cloud_buffer_pixels}",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         pending_pairs = zip(
             output_plan.pending_input_paths,
@@ -1203,13 +1267,19 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
                 output_nodata_value=args.nodata_value,
                 allow_mask_reprojection=True,
                 log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
             state.cloud_mask_pixel_count = cloudmask_result.mask_pixel_count
             state.cloud_mask_path = cloudmask_result.output_mask_path
 
     state.current_files = _register_step_outputs(state, "cloud_mask", output_plan.output_paths)
     if args.calculate_overviews_cloud_mask:
-        log("Calculating overviews for step cloud_mask", enabled=args.log_to_console, step="overviews")
+        log(
+            "Calculating overviews for step cloud_mask",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
         for output_path in output_plan.output_paths:
             calculate_raster_overviews(output_path, args.overview_scales)
     if mask_plan.output_paths:
@@ -1234,6 +1304,7 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
             outputs=plan.output_paths,
             message="Skipping because output exists",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
     else:
         _log_step_plan(
@@ -1242,6 +1313,7 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
             outputs=plan.pending_output_paths,
             message=f"Running coregistration split_factor={args.alignment_split_factor}",
             enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
         )
         for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
             state.alignment_result = align_image_pair(
@@ -1269,10 +1341,16 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
                 use_edge_proxies=args.alignment_use_edge_proxies,
                 solve_resolution=args.alignment_solve_resolution,
                 log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
             )
     state.current_files = _register_step_outputs(state, "alignment", plan.output_paths)
     if args.calculate_overviews_alignment:
-        log("Calculating overviews for step alignment", enabled=args.log_to_console, step="overviews")
+        log(
+            "Calculating overviews for step alignment",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
         for output_path in plan.output_paths:
             calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "alignment"
@@ -1406,6 +1484,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
         f"Processing {scene.primary_basename or f'{scene.scene_id}_{scene.catalog_id}'}",
         enabled=args.log_to_console,
         step="workflow",
+        scene_basename=scene.primary_basename,
     )
 
     if args.skip_existing and _scene_final_outputs_complete(state, args):
@@ -1414,6 +1493,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             outputs=_scene_skip_required_outputs(state, args),
             message="Skipping whole scene because desired outputs exist",
             enabled=args.log_to_console,
+            scene_basename=scene.primary_basename,
         )
         _mark_scene_complete_from_existing_output(state, args)
         return state
@@ -1438,9 +1518,10 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             "Wrote scene outputs: " + ", ".join(saved_output_paths),
             enabled=args.log_to_console,
             step="workflow",
+            scene_basename=scene.primary_basename,
         )
     _write_scene_report(state, args, scene_started_utc=scene_started_utc)
-    log("Scene complete", enabled=args.log_to_console, step="workflow")
+    log("Scene complete", enabled=args.log_to_console, step="workflow", scene_basename=scene.primary_basename)
     return state
 
 

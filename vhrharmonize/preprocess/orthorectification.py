@@ -33,12 +33,14 @@ def gcp_refined_rpc_orthorectification(
     dtype=None,
     output_resolution: Union[float, Tuple[float, float]]=None,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
     ):
     """Orthorectify an image using RPC metadata, with optional GCP-based RPC refinement."""
     log(
         f"Running orthorectification input={os.path.basename(input_image_path)} dem={os.path.basename(dem_image_path)} epsg={output_epsg}",
         enabled=log_to_console,
         step="orthorectification",
+        scene_basename=scene_basename,
     )
 
     # Set resolution of output raster
@@ -157,13 +159,19 @@ def gcp_refined_rpc_orthorectification(
 
     # Clean up the temporary file
     os.remove(temp_image_path)
-    log(f"Wrote output {os.path.basename(output_image_path)}", enabled=log_to_console, step="orthorectification")
+    log(
+        f"Wrote output {os.path.basename(output_image_path)}",
+        enabled=log_to_console,
+        step="orthorectification",
+        scene_basename=scene_basename,
+    )
 
 
 def qgis_gcps_to_csv(
     input_gcp_path,
     output_epsg=None,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
     ):
 
     """
@@ -226,7 +234,12 @@ def qgis_gcps_to_csv(
             else:
                 continue
 
-    log("Converted QGIS GCP text to CSV", enabled=log_to_console, step="orthorectification")
+    log(
+        "Converted QGIS GCP text to CSV",
+        enabled=log_to_console,
+        step="orthorectification",
+        scene_basename=scene_basename,
+    )
     return output_csv_text
 
 
@@ -256,6 +269,7 @@ def qgis_gcps_to_geojson(
     output_geojson_path,
     force_positive_pixel_values=False,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
     ):
     """Convert a QGIS GCP text file into Orthority-compatible GeoJSON control points."""
 
@@ -339,7 +353,12 @@ def qgis_gcps_to_geojson(
 
     with open(output_geojson_path, "w") as f:
         json.dump(geojson, f, indent=4)
-    log("Wrote GCP GeoJSON", enabled=log_to_console, step="orthorectification")
+    log(
+        "Wrote GCP GeoJSON",
+        enabled=log_to_console,
+        step="orthorectification",
+        scene_basename=scene_basename,
+    )
 
     # Cleanup
     dem_dataset = None

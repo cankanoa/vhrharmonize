@@ -156,6 +156,7 @@ def run_py6s(
     auto_atmos_timeout_s: float = 30.0,
     auto_atmos_power_endpoint: str = "https://power.larc.nasa.gov/api/temporal/daily/point",
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> Py6SRunResult:
     """Run Py6S correction using provider-neutral standardized metadata."""
     effective_aot550 = aot550
@@ -179,6 +180,7 @@ def run_py6s(
             timeout_s=auto_atmos_timeout_s,
             endpoint=auto_atmos_power_endpoint,
             log_to_console=log_to_console,
+            scene_basename=scene_basename,
         )
         if estimate.aot550 is not None:
             effective_aot550 = float(estimate.aot550)
@@ -214,9 +216,15 @@ def run_py6s(
         f"Running Py6S input={os.path.basename(input_raster)} output={os.path.basename(output_raster)} profile={atmosphere_profile}",
         enabled=log_to_console,
         step="py6s",
+        scene_basename=scene_basename,
     )
     Py6SCorrector().run(input_raster=input_raster, output_raster=output_raster, **py6s_kwargs)
-    log(f"Wrote output {os.path.basename(output_raster)}", enabled=log_to_console, step="py6s")
+    log(
+        f"Wrote output {os.path.basename(output_raster)}",
+        enabled=log_to_console,
+        step="py6s",
+        scene_basename=scene_basename,
+    )
     return Py6SRunResult(
         output_raster=output_raster,
         effective_params={

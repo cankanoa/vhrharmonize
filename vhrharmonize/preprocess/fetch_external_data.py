@@ -33,6 +33,7 @@ def download_opentopography_dem_for_bbox(
     endpoint: str = DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT,
     timeout_s: float = 120.0,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> str:
     """Download an OpenTopography DEM subset for a WGS84 bbox."""
     if min_lon > max_lon or min_lat > max_lat:
@@ -58,6 +59,7 @@ def download_opentopography_dem_for_bbox(
         f"Downloading {demtype} DEM to {os.path.basename(output_tif_path)}",
         enabled=log_to_console,
         step="dem",
+        scene_basename=scene_basename,
     )
     response = requests.get(endpoint, params=params, timeout=timeout_s)
     response.raise_for_status()
@@ -70,7 +72,12 @@ def download_opentopography_dem_for_bbox(
 
     with open(output_tif_path, "wb") as handle:
         handle.write(response.content)
-    log(f"Wrote DEM {os.path.basename(output_tif_path)}", enabled=log_to_console, step="dem")
+    log(
+        f"Wrote DEM {os.path.basename(output_tif_path)}",
+        enabled=log_to_console,
+        step="dem",
+        scene_basename=scene_basename,
+    )
     return output_tif_path
 
 
@@ -170,6 +177,7 @@ def fetch_power_atmosphere_for_bbox(
     endpoint: str = "https://power.larc.nasa.gov/api/temporal/daily/point",
     timeout_s: float = 30.0,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> AtmosphereEstimate:
     """Fetch AOT550, water vapor, and ozone for a bbox via NASA POWER daily API."""
     if min_lon > max_lon or min_lat > max_lat:
@@ -210,6 +218,7 @@ def fetch_power_atmosphere_for_bbox(
                 f"Using NASA POWER values from {query_day.isoformat()}",
                 enabled=log_to_console,
                 step="fetch_atmosphere",
+                scene_basename=scene_basename,
             )
             return AtmosphereEstimate(
                 aot550=(sum(aod_vals) / len(aod_vals)) if aod_vals else None,
@@ -220,7 +229,12 @@ def fetch_power_atmosphere_for_bbox(
                 date_used=query_day.isoformat(),
             )
 
-    log("No external atmosphere values found", enabled=log_to_console, step="fetch_atmosphere")
+    log(
+        "No external atmosphere values found",
+        enabled=log_to_console,
+        step="fetch_atmosphere",
+        scene_basename=scene_basename,
+    )
     return AtmosphereEstimate(
         aot550=None,
         water_vapor=None,
@@ -498,9 +512,15 @@ def fetch_modis_water_vapor_for_bbox(
     modtran_baseline_water_vapor: float = 2.92,
     reduce_scale_m: int = 1000,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> ModisWaterVaporEstimate:
     """Fetch MODIS water vapor and companion AOD-derived FLAASH inputs for a bbox."""
-    log("Querying MODIS atmosphere data", enabled=log_to_console, step="fetch_atmosphere")
+    log(
+        "Querying MODIS atmosphere data",
+        enabled=log_to_console,
+        step="fetch_atmosphere",
+        scene_basename=scene_basename,
+    )
     if ee is None:
         ee = init_ee_client(ee_project=ee_project, authenticate=authenticate, env_file=env_file)
     if scene_datetime_utc.tzinfo is None:
@@ -541,7 +561,12 @@ def fetch_modis_water_vapor_for_bbox(
     )
     best = _choose_best_candidate([terra, aqua])
     if best is None:
-        log("No MODIS match found", enabled=log_to_console, step="fetch_atmosphere")
+        log(
+            "No MODIS match found",
+            enabled=log_to_console,
+            step="fetch_atmosphere",
+            scene_basename=scene_basename,
+        )
         return ModisWaterVaporEstimate(
             status="no_modis_match",
             selected_collection=None,
@@ -602,7 +627,12 @@ def fetch_modis_water_vapor_for_bbox(
         image_time_utc=best["image_time_utc"],
         abs_time_diff_hours=best["abs_time_diff_hours"],
     )
-    log("Fetched MODIS atmosphere values", enabled=log_to_console, step="fetch_atmosphere")
+    log(
+        "Fetched MODIS atmosphere values",
+        enabled=log_to_console,
+        step="fetch_atmosphere",
+        scene_basename=scene_basename,
+    )
     return result
 
 
