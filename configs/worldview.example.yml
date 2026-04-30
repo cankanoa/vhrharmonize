@@ -5,6 +5,7 @@ shared:
   nodata_value: -9999 # Shared nodata value used by raster-writing steps
   dtype: int16 # Shared output dtype for raster-writing steps
   log_to_console: true # true | false
+  concurrent_processing: num_cpu # Integer worker count or num_cpu to use all available CPUs for per-scene processing.
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
   dem_file_path: online # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1

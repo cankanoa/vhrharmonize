@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import fnmatch
 import glob
 import json
@@ -314,6 +315,25 @@ def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
             if os.path.isfile(path) and os.path.splitext(path)[1].lower() == ".tif"
         )
     return sorted({os.path.abspath(path) for path in tif_files})
+
+
+def _resolve_concurrent_processing(value: object) -> int:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "num_cpu":
+            return max(1, os.cpu_count() or 1)
+        try:
+            resolved = int(normalized)
+        except ValueError as exc:
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+    else:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+    if resolved < 1:
+        raise ValueError("concurrent_processing must be >= 1.")
+    return resolved
 
 
 def _short_path(path: str) -> str:
@@ -1353,6 +1373,50 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
     state.scene.metadata_report_path = scene_metadata_path
 
 
+def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
+    state = _initialize_scene_state(scene, args)
+    log(
+        f"Processing {scene.primary_basename or f'{scene.scene_id}_{scene.catalog_id}'}",
+        enabled=args.log_to_console,
+        step="workflow",
+    )
+
+    if args.skip_existing and _scene_final_outputs_complete(state, args):
+        _log_step_plan(
+            "workflow",
+            outputs=_scene_skip_required_outputs(state, args),
+            message="Skipping whole scene because desired outputs exist",
+            enabled=args.log_to_console,
+        )
+        _mark_scene_complete_from_existing_output(state, args)
+        return state
+
+    scene_started_utc = datetime.utcnow().isoformat() + "Z"
+    _run_fetch_atmosphere_step(state, args)
+
+    if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
+        _run_atmospheric_correction_step(state, args)
+    if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("orthorectification"):
+        _run_orthorectification_step(state, args)
+    if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("pansharpen"):
+        _run_pansharpen_step(state, args)
+    if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("cloud_mask"):
+        _run_cloud_mask_step(state, args)
+    if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("alignment"):
+        _run_alignment_step(state, args)
+
+    saved_output_paths = _scene_saved_output_paths(state, args)
+    if saved_output_paths:
+        log(
+            "Wrote scene outputs: " + ", ".join(saved_output_paths),
+            enabled=args.log_to_console,
+            step="workflow",
+        )
+    _write_scene_report(state, args, scene_started_utc=scene_started_utc)
+    log("Scene complete", enabled=args.log_to_console, step="workflow")
+    return state
+
+
 def run_workflow(args: argparse.Namespace) -> int:
     """Run full-scene WorldView preprocessing using input tif globs."""
     filter_basenames = _parse_filter_basenames(args.filter_basename)
@@ -1367,49 +1431,26 @@ def run_workflow(args: argparse.Namespace) -> int:
         step="workflow",
     )
     processed_states: List[SceneWorkflowState] = []
-    for scene in scenes:
-        state = _initialize_scene_state(scene, args)
+    worker_count = _resolve_concurrent_processing(args.concurrent_processing)
+    if worker_count > 1 and len(scenes) > 1:
         log(
-            f"Processing {scene.primary_basename or f'{scene.scene_id}_{scene.catalog_id}'}",
+            f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
             enabled=args.log_to_console,
             step="workflow",
         )
-
-        if args.skip_existing and _scene_final_outputs_complete(state, args):
-            _log_step_plan(
-                "workflow",
-                outputs=_scene_skip_required_outputs(state, args),
-                message="Skipping whole scene because desired outputs exist",
-                enabled=args.log_to_console,
-            )
-            _mark_scene_complete_from_existing_output(state, args)
-            processed_states.append(state)
-            continue
-
-        scene_started_utc = datetime.utcnow().isoformat() + "Z"
-        _run_fetch_atmosphere_step(state, args)
-
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
-            _run_atmospheric_correction_step(state, args)
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("orthorectification"):
-            _run_orthorectification_step(state, args)
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("pansharpen"):
-            _run_pansharpen_step(state, args)
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("cloud_mask"):
-            _run_cloud_mask_step(state, args)
-        if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("alignment"):
-            _run_alignment_step(state, args)
-
-        saved_output_paths = _scene_saved_output_paths(state, args)
-        if saved_output_paths:
-            log(
-                "Wrote scene outputs: " + ", ".join(saved_output_paths),
-                enabled=args.log_to_console,
-                step="workflow",
-            )
-        _write_scene_report(state, args, scene_started_utc=scene_started_utc)
-        log("Scene complete", enabled=args.log_to_console, step="workflow")
-        processed_states.append(state)
+        ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
+        with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
+            future_to_index = {
+                executor.submit(_process_scene, scene, args): index
+                for index, scene in enumerate(scenes)
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                ordered_results[index] = future.result()
+        processed_states = [state for state in ordered_results if state is not None]
+    else:
+        for scene in scenes:
+            processed_states.append(_process_scene(scene, args))
 
     if processed_states and args.run_radiometric_normalization:
         log(
@@ -1490,6 +1531,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--concurrent-processing", default=1)
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
@@ -1599,6 +1641,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
+    try:
+        args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.alignment_band_index < 0:
         parser.error("--alignment-band-index must be >= 0.")
     if args.alignment_moving_band_index is not None and args.alignment_moving_band_index < 0:
