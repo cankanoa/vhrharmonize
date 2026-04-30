@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 import geopandas as gpd
 
 from vhrharmonize.cli.cli_helpers import load_yaml_config
-from vhrharmonize.io.geospatial import get_image_percentile_value, shp_to_gpkg
+from vhrharmonize.io.geospatial import calculate_raster_overviews, get_image_percentile_value, shp_to_gpkg
 from vhrharmonize.io.workflow_utils import (
     build_output_path_from_input,
     plan_step_outputs,
@@ -721,6 +721,9 @@ def _run_radiometric_group(
         log_to_console=args.log_to_console,
         **radiometric_kwargs,
     )
+    if args.calculate_overviews_radiometric_normalization:
+        log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
+        calculate_raster_overviews(output_path, args.overview_scales)
     return output_path
 
 
@@ -970,6 +973,10 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         return state.current_files
 
     state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
+    if args.calculate_overviews_atmospheric_correction:
+        log("Calculating overviews for step atmospheric_correction", enabled=args.log_to_console, step="overviews")
+        for output_path in plan.output_paths:
+            calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "atmospheric_correction"
     return state.current_files
 
@@ -1024,6 +1031,10 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     log_to_console=args.log_to_console,
                 )
         state.current_files = _register_step_outputs(state, "orthorectification", plan.output_paths)
+        if args.calculate_overviews_orthorectification:
+            log("Calculating overviews for step orthorectification", enabled=args.log_to_console, step="overviews")
+            for output_path in plan.output_paths:
+                calculate_raster_overviews(output_path, args.overview_scales)
 
     if args.run_pansharpen:
         if args.existing_pan_ortho_input:
@@ -1066,6 +1077,10 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     )
             state.pan_ortho_path = pan_plan.output_paths[0]
             _register_step_outputs(state, "orthorectification_pan", pan_plan.output_paths, image_role="pan")
+            if args.calculate_overviews_orthorectification:
+                log("Calculating overviews for step orthorectification_pan", enabled=args.log_to_console, step="overviews")
+                for output_path in pan_plan.output_paths:
+                    calculate_raster_overviews(output_path, args.overview_scales)
 
     state.current_step = "orthorectification"
     return state.current_files
@@ -1106,6 +1121,10 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
                 log_to_console=args.log_to_console,
             )
     state.current_files = _register_step_outputs(state, "pansharpen", plan.output_paths)
+    if args.calculate_overviews_pansharpen:
+        log("Calculating overviews for step pansharpen", enabled=args.log_to_console, step="overviews")
+        for output_path in plan.output_paths:
+            calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "pansharpen"
     return state.current_files
 
@@ -1189,6 +1208,10 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             state.cloud_mask_path = cloudmask_result.output_mask_path
 
     state.current_files = _register_step_outputs(state, "cloud_mask", output_plan.output_paths)
+    if args.calculate_overviews_cloud_mask:
+        log("Calculating overviews for step cloud_mask", enabled=args.log_to_console, step="overviews")
+        for output_path in output_plan.output_paths:
+            calculate_raster_overviews(output_path, args.overview_scales)
     if mask_plan.output_paths:
         _register_step_outputs(state, "cloud_mask_mask", mask_plan.output_paths)
         state.cloud_mask_path = mask_plan.output_paths[0]
@@ -1248,6 +1271,10 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
                 log_to_console=args.log_to_console,
             )
     state.current_files = _register_step_outputs(state, "alignment", plan.output_paths)
+    if args.calculate_overviews_alignment:
+        log("Calculating overviews for step alignment", enabled=args.log_to_console, step="overviews")
+        for output_path in plan.output_paths:
+            calculate_raster_overviews(output_path, args.overview_scales)
     state.current_step = "alignment"
     return state.current_files
 
@@ -1532,6 +1559,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--concurrent-processing", default=1)
+    parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
@@ -1539,16 +1567,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-fetch-atmosphere", default="temp")
     parser.add_argument("--run-atmospheric-correction", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-atmospheric-correction", default="temp")
+    parser.add_argument("--calculate-overviews-atmospheric-correction", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-orthorectification", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-orthorectification", default="temp")
+    parser.add_argument("--calculate-overviews-orthorectification", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-pansharpen", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-pansharpen", default="temp")
+    parser.add_argument("--calculate-overviews-pansharpen", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-cloud-mask", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-cloud-mask", default="output")
+    parser.add_argument("--calculate-overviews-cloud-mask", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-alignment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-alignment", default="temp")
+    parser.add_argument("--calculate-overviews-alignment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-radiometric-normalization", default="temp")
+    parser.add_argument("--calculate-overviews-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip-flaash", action="store_true")
     parser.add_argument("--existing-flaash-input")
     parser.add_argument("--existing-mul-ortho-input")
@@ -1645,6 +1679,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.overview_scales is not None:
+        if isinstance(args.overview_scales, str):
+            args.overview_scales = [int(value.strip()) for value in args.overview_scales.split(",") if value.strip()]
+        else:
+            args.overview_scales = [int(value) for value in args.overview_scales]
+    if (
+        args.calculate_overviews_atmospheric_correction
+        or args.calculate_overviews_orthorectification
+        or args.calculate_overviews_pansharpen
+        or args.calculate_overviews_cloud_mask
+        or args.calculate_overviews_alignment
+        or args.calculate_overviews_radiometric_normalization
+    ) and not args.overview_scales:
+        parser.error("--overview-scales is required when any calculate-overviews-* option is enabled.")
     if args.alignment_band_index < 0:
         parser.error("--alignment-band-index must be >= 0.")
     if args.alignment_moving_band_index is not None and args.alignment_moving_band_index < 0:
