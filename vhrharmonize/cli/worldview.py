@@ -1415,6 +1415,43 @@ def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespac
     return _dedupe_paths([path for path in saved_paths if path])
 
 
+def _delete_files(paths: List[str]) -> None:
+    for path in _dedupe_paths([str(path) for path in paths if str(path)]):
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    temp_paths: List[str] = []
+
+    def _extend(step_name: str) -> None:
+        temp_paths.extend(state.scene.step_outputs.get(step_name, []))
+
+    if args.run_fetch_atmosphere and args.save_fetch_atmosphere == "temp":
+        _extend("fetch_atmosphere")
+    if args.run_atmospheric_correction and args.save_atmospheric_correction == "temp":
+        _extend("atmospheric_correction")
+        if args.atmospheric_method == "flaash":
+            temp_paths.extend([f"{path}.params.txt" for path in state.scene.step_outputs.get("atmospheric_correction", [])])
+    if args.run_orthorectification and args.save_orthorectification == "temp":
+        _extend("orthorectification")
+        if args.run_pansharpen:
+            _extend("orthorectification_pan")
+    if args.run_pansharpen and args.save_pansharpen == "temp":
+        _extend("pansharpen")
+    if args.run_cloud_mask and args.save_cloud_mask == "temp":
+        _extend("cloud_mask")
+        _extend("cloud_mask_mask")
+    if args.run_alignment and args.save_alignment == "temp":
+        _extend("alignment")
+
+    mul_image = state.scene.mul_image
+    if mul_image is not None:
+        temp_paths.append(os.path.join(state.step_dirs["scene_work"], f"{mul_image.basename}.gpkg"))
+
+    return _dedupe_paths(temp_paths)
+
+
 def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, scene_started_utc: str) -> None:
     mul_image = state.scene.mul_image
     pan_image = state.scene.pan_image
@@ -1538,6 +1575,16 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             scene_basename=scene.primary_basename,
         )
     _write_scene_report(state, args, scene_started_utc=scene_started_utc)
+    if not args.keep_temp_dir:
+        temp_cleanup_paths = _scene_temp_cleanup_paths(state, args)
+        if temp_cleanup_paths:
+            log(
+                f"Deleting {len(temp_cleanup_paths)} temp files",
+                enabled=args.log_to_console,
+                step="workflow",
+                scene_basename=scene.primary_basename,
+            )
+            _delete_files(temp_cleanup_paths)
     log("Scene complete", enabled=args.log_to_console, step="workflow", scene_basename=scene.primary_basename)
     return state
 
