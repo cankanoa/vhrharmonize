@@ -1,9 +1,20 @@
+# This file has params to process worldview images
+# To install the required libraries run:
+  # conda create -n vhrharmonize -c conda-forge py6s sixs gdal
+  # conda activate vhrharmonize
+  # pip install -e ".[all]"
+# Then set the required params in this folder
+# Lastly, to process images: vhr-worldview --config-yaml config/worldview.example.yml
+
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
-  epsg: 6635 # Output CRS for orthorectified products
+  keep_temp_dir: false # true | false
+  epsg:  # Projects epsg code for output products; for example 6635 for Hawaii Island
   nodata_value: -9999 # Shared nodata value used by raster-writing steps
   dtype: int16 # Shared output dtype for raster-writing steps
   log_to_console: true # true | false
+  concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing.
+  overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true.
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
   dem_file_path: online # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
@@ -11,25 +22,42 @@ shared:
   # dem_online_source: SRTMGL1_Ellip
   # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
   # dem_online_timeout_s: 120.0
-  # output_dir: ../Processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
-  skip_existing: true # true | false
-  last_run_step: raw # raw | atmospheric_correction | orthorectification | pansharpen | cloud_mask | alignment | radiometric_normalization
+  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder.
+  skip_existing: true # true | false. Skip the whole scene only if all requested non-temp outputs already exist.
+  run_from_existing: true # true | false. At each step, if the expected output exists, reuse it instead of rerunning that step.
 
 workflow:
-  run_fetch_atmosphere: true # true | false
-  save_fetch_atmosphere: temp # temp | output | ./custom_relative | /custom/absolute
-  run_atmospheric_correction: true
-  save_atmospheric_correction: temp
+  # Atmospheric correction
+  run_atmospheric_correction: true # true | false
+  save_atmospheric_correction: temp # temp | output | ./custom_relative | /custom/absolute
+  calculate_overviews_atmospheric_correction: false # true | false
+  run_fetch_atmosphere: true
+  save_fetch_atmosphere: temp
+
+  # Orthorectification
   run_orthorectification: true
   save_orthorectification: temp
+  calculate_overviews_orthorectification: false
+
+  # Pansharpening
   run_pansharpen: true
   save_pansharpen: temp
+  calculate_overviews_pansharpen: false
+
+  # Cloud masking
   run_cloud_mask: true
   save_cloud_mask: output
+  calculate_overviews_cloud_mask: true
+
+  # Spatially match to external dataset
   run_alignment: false
-  save_alignment: temp
+  save_alignment: output
+  calculate_overviews_alignment: true
+
+  # Radiometrically match images to each other
   run_radiometric_normalization: false
-  save_radiometric_normalization: temp
+  save_radiometric_normalization: /custom/absolute/to/folder
+  calculate_overviews_radiometric_normalization: true
 
 atmospheric_correction:
   atmospheric_method: py6s # py6s | flaash | none
@@ -141,31 +169,47 @@ cloud_mask:
 alignment:
   alignment_fixed_image: /path/to/fixed/reference_intensity.tif # Required when run_alignment is true
   alignment_output_suffix: _aligned # Filename suffix for aligned output
-  alignment_moving_band_index: 0 # 0-based band index from moving image
-  alignment_fixed_band_index: 0 # 0-based band index from fixed image
-  alignment_registration_mode: structural_wv3_lidar # default | structural_wv3_lidar
-  alignment_parameter_map: rigid # translation | rigid | affine | bspline
-  alignment_no_tiling: true # true | false
-  alignment_tile_size: 1000 # Tile width/height in pixels when tiling is enabled
-  alignment_tile_buffer: 100 # Tile overlap buffer in pixels
+  alignment_band_index: 0 # 0-based band index used for registration metric
+  # alignment_moving_band_index: 0 # Optional override for moving-image registration band
+  # alignment_fixed_band_index: 0 # Optional override for fixed-image registration band
+  # alignment_moving_nodata: -9999 # Optional override nodata for moving image
+  # alignment_fixed_nodata: -9999 # Optional override nodata for fixed image
+  # alignment_output_nodata: -9999 # Optional override nodata for output image
+  alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
+  alignment_use_edge_proxies: true # true | false
+  alignment_split_factor: 2 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
   alignment_clip_fixed_to_moving: true # true | false
-  alignment_enforce_mutual_valid_mask: true # true | false
   alignment_output_on_moving_grid: true # true | false
-  alignment_moving_nodata: -9999 # Nodata value for moving image
-  alignment_fixed_nodata: -9999 # Nodata value for fixed image
-  alignment_min_valid_fraction: 0.002 # Skip tiles with less valid overlap than this fraction
-  alignment_keep_temp_dir: false # true | false
-  alignment_log_to_console: false # true | false
+  alignment_trim_edge_invalid: true # true | false
+  alignment_edge_trim_depth: 8 # Number of edge pixels to trim
+  alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
+  alignment_edge_trim_invalid_below: -3000 # Values <= this are treated as invalid during edge trimming
+  # alignment_edge_trim_invalid_above: 65535 # Values >= this are treated as invalid during edge trimming
+  alignment_enforce_mutual_valid_mask: true # true | false
+  # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
-  radiometric_normalization_output_suffix: _normalized # Filename suffix for normalized output
+  # radiometric_normalization_output: radiometric_root.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the group label
   # SpectralMatch pipeline kwargs:
-  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
   # Pass any SpectralMatch argument through using the `match_` prefix.
-  # match_shared_temp_dir: /path/to/temp
+  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
+
+  # Optionally run mulitple spectralmatches in a row using groups
+  # group_by_basename: ["**/*.tif"] # Match all finished scene outputs together
+  # group_by_basename: ["*893242343*", "*123456789*"] # Match only images whose basename or full path matches these patterns
+  # group_by_basename: ["*893242343*", ["*111111111*", "*222222222*"], "*123456789*"] # Nested lists run inner spectralmatch first, then include that output in the outer one
+
+
+  # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
+  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]
+  # match_shared_output_image_path: /path/to/radiometric/group_output.tif
+  # match_shared_temp_dir: ./temp/spectralmatch
   # match_delete_temp_dir: true
   # match_shared_debug_logs: false
+  # match_shared_output_dtype: int16
+
+  # Other optional SpectralMatch pipeline kwargs:
   # match_shared_cache: auto
   # match_shared_custom_nodata_value: -9999
   # match_shared_window_size: 1024
@@ -175,8 +219,7 @@ radiometric_normalization:
   # match_shared_calculation_dtype: float32
   # match_shared_output_dtype: int16
   # match_shared_save_as_cog: false
-  # match_matching_global_method: global_regression
-  # match_matching_local_method: local_block_adjustment
+  # match_matching_order: [global_regression, local_block_adjustment]
   # match_align_method: align_rasters
   # match_seamline_method: voronoi_center_seamline
   # match_clip_method: mask_rasters
@@ -184,30 +227,29 @@ radiometric_normalization:
   # match_global_regression_output_images: /path/to/global_outputs
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
   # match_global_regression_estimate_stats: true
-  # match_global_regression_specify_model_images:
-  #   - include
-  #   - [image_a, image_b]
+  # match_global_regression_specify_model_images: [include, [image_a, image_b]]
   # match_global_regression_custom_mean_factor: 1.0
   # match_global_regression_custom_std_factor: 1.0
   # match_global_regression_save_adjustments: /path/to/adjustments.json
   # match_global_regression_load_adjustments: /path/to/adjustments.json
+  # match_global_regression_pif_method: entire
+  # match_global_regression_pif_red_band_index: 2
+  # match_global_regression_pif_nir_band_index: 6
+  # match_global_regression_pif_vegetation_threshold: 0.2
+  # match_global_regression_pif_inz_threshold: 0.25
+  # match_global_regression_pif_region_radius: 5
+  # match_global_regression_pif_max_samples: 100000
+  # match_global_regression_pif_min_samples: 32
+  # match_global_regression_pif_feature_method: orb
   # match_global_regression_build_overviews: false
   # match_local_block_adjustment_output_images: /path/to/local_outputs
   # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
   # match_local_block_adjustment_number_of_blocks: 100
   # match_local_block_adjustment_alpha: 1.0
   # match_local_block_adjustment_correction_method: offset
-  # match_local_block_adjustment_save_block_maps:
-  #   - /path/to/reference_block_map.tif
-  #   - /path/to/local_block_maps/$.tif
-  # match_local_block_adjustment_load_block_maps:
-  #   - /path/to/reference_block_map.tif
-  #   - /path/to/local_block_maps
-  # match_local_block_adjustment_override_bounds_canvas_coords:
-  #   - 0
-  #   - 0
-  #   - 1000
-  #   - 1000
+  # match_local_block_adjustment_save_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps/$.tif]
+  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
+  # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
   # match_align_rasters_output_images: /path/to/aligned_outputs
   # match_align_rasters_resampling_method: bilinear

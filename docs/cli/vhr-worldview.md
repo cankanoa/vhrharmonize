@@ -63,6 +63,7 @@ vhr-worldview \
   - relative paths resolve from the MUL image folder
   - if unset, the default output base is `../Processed` from the MUL image folder
 - `--skip-existing`: skip scenes when the final output TIFF already exists
+- `--keep-temp-dir`: keep shared workflow temp directories and alignment working files
 - `--last-run-step`: resume the raster chain from an existing step output
 - `--dem-online-api-key`: OpenTopography API key for `--dem-file-path online`
 - `--dem-online-source`: global DEM dataset name (default `SRTMGL1_Ellip`)
@@ -96,21 +97,10 @@ vhr-worldview \
 - `--run-alignment` / `--no-run-alignment`: enable or skip final alignment stage
 - `--run-radiometric-normalization` / `--no-run-radiometric-normalization`
 - `--alignment-fixed-image`: required fixed/reference raster when alignment is enabled
-- `--alignment-moving-band-index`: 0-based moving image band used for registration metric
-- `--alignment-fixed-band-index`: 0-based fixed image band used for registration metric
-- `--alignment-registration-mode`: `default` or `structural_wv3_lidar`
-- `--alignment-clip-fixed-to-moving`: clip fixed domain to moving extent before alignment
-- `--alignment-output-on-moving-grid`: write aligned output on moving-image grid/resolution (default: enabled)
-- `--alignment-temp-dir`: temp directory for elastix/transformix artifacts
-- `--alignment-keep-temp-dir`: retain alignment temp files for inspection/debugging
-
-Alignment mode notes:
-- `default`: raw-band elastix registration
-- `structural_wv3_lidar`: common-grid structural registration path for optical-to-LiDAR alignment
-  - despite the name, this is a generic structural edge-based mode, not a WorldView-only implementation
-
-For large scenes, prefer `alignment_temp_dir` on a native Linux filesystem rather
-than a mounted external path.
+- `--alignment-split-factor`: coregix split factor
+- `--alignment-trim-edge-invalid` / `--no-alignment-trim-edge-invalid`
+- `--alignment-edge-trim-depth`: number of edge pixels to trim
+- `--alignment-edge-trim-invalid-below`: threshold used to identify invalid edge values
 
 ## Py6S Output Units
 
@@ -161,6 +151,7 @@ Each raster step uses the same storage rule:
 - any other value is treated as a custom folder, and the step name is appended to it
 
 If `temp_dir` is unset, `vhr-worldview` creates a real temporary directory with Python `tempfile`.
+If `keep_temp_dir=true`, workflow temp content is retained instead of being cleaned up.
 
 When `dem_file_path=online`, the workflow downloads a WGS84 ellipsoidal-height DEM for each scene into `<temp_dir>/dem` and then uses that local file for atmospheric correction and orthorectification.
 

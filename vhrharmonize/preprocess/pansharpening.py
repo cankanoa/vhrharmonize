@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import orthority as oty
 import rasterio
@@ -11,9 +13,15 @@ def pansharpen_image(
     output_image_path,
     change_nodata_value = None,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
     ):
     """Pansharpen a multispectral raster with a higher-resolution panchromatic raster."""
-    log("Running pansharpen", enabled=log_to_console, step="pansharpen")
+    log(
+        f"Running pansharpen mul={os.path.basename(input_low_resolution_path)} pan={os.path.basename(input_high_resolution_path)}",
+        enabled=log_to_console,
+        step="pansharpen",
+        scene_basename=scene_basename,
+    )
     pan_sharp = oty.PanSharpen(input_high_resolution_path, input_low_resolution_path)
     pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
 
@@ -23,8 +31,14 @@ def pansharpen_image(
             change_nodata_value,
             -32768,
             log_to_console=log_to_console,
+            scene_basename=scene_basename,
         )
-    log("Wrote output", enabled=log_to_console, step="pansharpen")
+    log(
+        f"Wrote output {os.path.basename(output_image_path)}",
+        enabled=log_to_console,
+        step="pansharpen",
+        scene_basename=scene_basename,
+    )
 
 
 def _change_nodata_value(
@@ -33,6 +47,7 @@ def _change_nodata_value(
     old_nodata,
     *,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
     ):
 
     """
@@ -61,4 +76,9 @@ def _change_nodata_value(
         src.nodata = new_nodata_value
 
     if replaced_any:
-        log("Updated nodata values", enabled=log_to_console, step="pansharpen")
+        log(
+            "Updated nodata values",
+            enabled=log_to_console,
+            step="pansharpen",
+            scene_basename=scene_basename,
+        )

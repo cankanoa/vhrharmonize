@@ -29,9 +29,6 @@ _EXPORTS = {
     "align_image_pair": (".alignment", "align_image_pair"),
     "AlignmentResult": (".alignment", "AlignmentResult"),
     "tile_image": ("..io.tiling", "tile_image"),
-    "estimate_elastix_transform": (".coregistration", "estimate_elastix_transform"),
-    "apply_elastix_transform": (".coregistration", "apply_elastix_transform"),
-    "run_elastix_registration": (".coregistration", "run_elastix_registration"),
 }
 
 __all__ = list(_EXPORTS.keys())

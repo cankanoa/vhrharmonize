@@ -66,7 +66,7 @@ With radiometric normalization extras:
 pip install -e ".[radiometric-normalization]"
 ```
 
-With elastix alignment extras:
+With `coregix` alignment extras:
 
 ```bash
 pip install -e ".[align]"

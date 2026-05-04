@@ -76,7 +76,11 @@ def _json_dict(value: str | None) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run radiometric normalization via SpectralMatch.")
     parser.add_argument("--input-image", action="append", required=True, help="Input raster. Repeat for multiple images.")
-    parser.add_argument("--output-image", required=True, help="Merged normalized output image path.")
+    parser.add_argument(
+        "--output-image",
+        required=True,
+        help="Merged normalized output image path.",
+    )
     parser.add_argument("--temp-dir", help="Optional shared temp directory.")
     parser.add_argument("--delete-temp-dir", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug-logs", action=argparse.BooleanOptionalAction, default=False)

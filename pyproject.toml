@@ -82,8 +82,7 @@ radiometric-normalization = [
 ]
 
 align = [
-    "itk-elastix>=0.19.2",
-    "pyforestscan",
+    "coregix",
 ]
 
 docs = [
@@ -105,7 +104,7 @@ all = [
     "envipyengine>=1.0.9",
     "orthority>=0.5.1",
     "spectralmatch",
-    "itk-elastix>=0.19.2"
+    "coregix"
 ]
 
 [project.urls]

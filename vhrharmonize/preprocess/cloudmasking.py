@@ -37,9 +37,15 @@ def cloudmask_raster(
     output_nodata_value: Optional[float] = None,
     allow_mask_reprojection: bool = True,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> CloudMaskResult:
     """Create a cloud mask and apply it to a raster."""
-    log("Running cloud mask", enabled=log_to_console, step="cloudmask")
+    log(
+        f"Running cloud mask on {os.path.basename(input_image_path)}",
+        enabled=log_to_console,
+        step="cloudmask",
+        scene_basename=scene_basename,
+    )
     create_cloud_mask_with_omnicloudmask(
         input_image_path,
         output_mask_path,
@@ -51,6 +57,7 @@ def cloudmask_raster(
         omnicloud_kwargs=omnicloud_kwargs,
         inference_resolution_m=inference_resolution_m,
         log_to_console=log_to_console,
+        scene_basename=scene_basename,
     )
     apply_binary_cloud_mask_to_image(
         input_image_path,
@@ -60,6 +67,7 @@ def cloudmask_raster(
         output_nodata_value=output_nodata_value,
         allow_mask_reprojection=allow_mask_reprojection,
         log_to_console=log_to_console,
+        scene_basename=scene_basename,
     )
 
     mask_pixel_count = 0
@@ -131,6 +139,7 @@ def create_cloud_mask_with_omnicloudmask(
     omnicloud_kwargs: Optional[dict] = None,
     inference_resolution_m: Optional[float] = 10.0,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> str:
     """
     Run OmniCloudMask on an input raster and write a binary cloud mask.
@@ -147,6 +156,12 @@ def create_cloud_mask_with_omnicloudmask(
     omnicloud_kwargs = dict(omnicloud_kwargs or {})
     # Keep large prediction mosaics off GPU by default to reduce VRAM pressure.
     omnicloud_kwargs.setdefault("mosaic_device", "cpu")
+    log(
+        f"OmniCloudMask setup resolution={inference_resolution_m}m buffer={buffer_pixels} classes={list(cloud_classes)}",
+        enabled=log_to_console,
+        step="cloudmask",
+        scene_basename=scene_basename,
+    )
 
     with rasterio.open(input_image_path) as src:
         if max(red_band_index, green_band_index, nir_band_index) > src.count:
@@ -210,6 +225,7 @@ def create_cloud_mask_with_omnicloudmask(
                 f"Downsampling inference input to {inference_resolution_m:.3f} map units",
                 enabled=log_to_console,
                 step="cloudmask",
+                scene_basename=scene_basename,
             )
         else:
             rgbn = src.read([red_band_index, green_band_index, nir_band_index]).astype(np.float32)
@@ -228,7 +244,12 @@ def create_cloud_mask_with_omnicloudmask(
             retry_kwargs.setdefault("batch_size", 1)
             retry_kwargs.setdefault("patch_size", 768)
             retry_kwargs.setdefault("patch_overlap", 192)
-            log("Retrying on CPU after CUDA OOM", enabled=log_to_console, step="cloudmask")
+            log(
+                "Retrying on CPU after CUDA OOM",
+                enabled=log_to_console,
+                step="cloudmask",
+                scene_basename=scene_basename,
+            )
             raw_mask = predict_from_array(rgbn, **retry_kwargs)
 
         class_mask = _normalize_omnicloud_output(raw_mask)
@@ -250,6 +271,7 @@ def apply_binary_cloud_mask_to_image(
     output_nodata_value: Optional[float] = None,
     allow_mask_reprojection: bool = True,
     log_to_console: bool = False,
+    scene_basename: str | None = None,
 ) -> str:
     """
     Apply a binary cloud mask to an image by assigning NoData to masked pixels.
@@ -274,6 +296,12 @@ def apply_binary_cloud_mask_to_image(
                 height=src.height,
                 resampling=Resampling.nearest,
             )
+            log(
+                "Reprojecting cloud mask onto image grid",
+                enabled=log_to_console,
+                step="cloudmask",
+                scene_basename=scene_basename,
+            )
 
         nodata_value = output_nodata_value if output_nodata_value is not None else src.nodata
         if nodata_value is None:
@@ -297,7 +325,12 @@ def apply_binary_cloud_mask_to_image(
         if mask_reader is not mask_src:
             mask_reader.close()
 
-    log("Wrote mask and masked raster", enabled=log_to_console, step="cloudmask")
+    log(
+        "Wrote mask and masked raster",
+        enabled=log_to_console,
+        step="cloudmask",
+        scene_basename=scene_basename,
+    )
     return output_image_path
 
 

@@ -9,6 +9,36 @@ from osgeo import ogr, osr
 from shapely.geometry import mapping
 
 
+def calculate_raster_overviews(
+    input_image_path,
+    overview_scales,
+    *,
+    resampling="nearest",
+    ):
+
+    """
+    Build internal raster overviews for a GeoTIFF-like raster.
+
+    Overview factors <= 1 are ignored.
+    """
+    factors = []
+    seen = set()
+    for value in overview_scales or []:
+        factor = int(value)
+        if factor <= 1 or factor in seen:
+            continue
+        seen.add(factor)
+        factors.append(factor)
+
+    if not factors:
+        return input_image_path
+
+    with rasterio.open(input_image_path, "r+") as dataset:
+        dataset.build_overviews(factors, rasterio.enums.Resampling[resampling])
+        dataset.update_tags(ns="rio_overview", resampling=resampling)
+    return input_image_path
+
+
 def shp_to_gpkg(
     input_shp_path,
     output_gpkg_path,
