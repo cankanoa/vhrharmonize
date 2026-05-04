@@ -1,6 +1,6 @@
 # This file has params to process worldview images
 # To install the required libraries run:
-  # conda create -n vhrharmonize -c conda-forge py6s sixs gdal
+  # conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
   # conda activate vhrharmonize
   # pip install -e ".[all]"
 # Then set the required params in this folder
@@ -177,7 +177,7 @@ alignment:
   # alignment_output_nodata: -9999 # Optional override nodata for output image
   alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
   alignment_use_edge_proxies: true # true | false
-  alignment_split_factor: 2 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
+  alignment_split_factor: 0 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
   alignment_clip_fixed_to_moving: true # true | false
   alignment_output_on_moving_grid: true # true | false
   alignment_trim_edge_invalid: true # true | false
