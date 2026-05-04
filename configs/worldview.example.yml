@@ -4,7 +4,7 @@
   # conda activate vhrharmonize
   # pip install -e ".[all]"
 # Then set the required params in this folder
-# Lastly, to process images: vhr-worldview --config-yaml config/worldview.example.yml
+# Lastly, to process images: vhr-worldview --config-yaml configs/worldview.example.yml
 
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
@@ -16,7 +16,7 @@ shared:
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing.
   overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true.
   input_file_glob:
-    - /path/to/worldview_bundle_root/**/*.tif # Should match both mul and pan images (which will be grouped together)
+    - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
   dem_file_path: online # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
   # dem_online_api_key: your-opentopography-api-key # Or set OPENTOPOGRAPHY_API_KEY in the environment
   # dem_online_source: SRTMGL1_Ellip
