@@ -1,3 +1,11 @@
+# This file has params to process worldview images
+# To install the required libraries run:
+  # conda create -n vhrharmonize -c conda-forge py6s sixs gdal
+  # conda activate vhrharmonize
+  # pip install -e ".[all]"
+# Then set the required params in this folder
+# Lastly, to process images: vhr-worldview --config-yaml config/worldview.example.yml
+
 shared:
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
   keep_temp_dir: false # true | false

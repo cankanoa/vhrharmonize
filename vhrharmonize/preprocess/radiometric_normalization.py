@@ -12,8 +12,9 @@ from vhrharmonize.preprocess.helpers import log
 def _load_spectralmatch_pipeline() -> Callable[..., Any]:
     """Import the upstream ``spectralmatch.pipeline`` callable."""
     candidate_paths = [
-        ("spectralmatch.pipeline", "pipeline"),
+        ("spectralmatch.chain", "pipeline"),
         ("spectralmatch", "pipeline"),
+        ("spectralmatch.pipeline", "pipeline"),
     ]
     errors = []
     for module_name, attr_name in candidate_paths:
