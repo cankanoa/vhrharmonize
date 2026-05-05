@@ -18,7 +18,7 @@ LOCAL_HOME ?= $(HOME)
 GOAL_ITEMS := $(filter-out upload download,$(MAKECMDGOALS))
 EFFECTIVE_ITEMS := $(strip $(if $(ITEMS),$(ITEMS),$(GOAL_ITEMS)))
 
-.PHONY: help login upload download setup-ssh-cache cache-open cache-close cache-check
+.PHONY: help login upload download setup-ssh-cache cache-open cache-close cache-check clean-package build-python version tag release
 
 ifneq (,$(filter upload download,$(MAKECMDGOALS)))
 $(GOAL_ITEMS):
@@ -36,6 +36,13 @@ help:
 	@echo ""
 	@echo "  make upload file1 dir1 [OUTDIR=~/remote/path/]"
 	@echo "  make download file1 dir1 [OUTDIR=~/local/path/]"
+	@echo ""
+	@echo "Python package release helpers:"
+	@echo "  make clean-package"
+	@echo "  make build-python"
+	@echo "  make version version=0.0.2"
+	@echo "  make tag version=0.0.2"
+	@echo "  make release version=0.0.2"
 	@echo ""
 	@echo "Set REMOTE_USER and REMOTE_HOST in the make file or pass at runtime or use setup-ssh-cache to store them."
 
@@ -112,3 +119,31 @@ setup-ssh-cache:
 	mv "$$tmp" "$(SSH_CONFIG)"; \
 	chmod 600 "$(SSH_CONFIG)"; \
 	echo "Updated $(SSH_CONFIG) with Host $(SSH_ALIAS)"
+
+clean:
+	rm -rf build dist *.egg-info vhrharmonize.egg-info
+
+build-python: clean-package
+	python -m build --sdist --wheel --outdir dist/
+
+tag:
+	@if [ -z "$(version)" ]; then \
+		echo "Usage: make tag version=0.0.2"; \
+		exit 1; \
+	fi
+	git tag -a v$(version) -m "Version $(version)"
+	git push origin v$(version)
+
+version:
+	@if [ -z "$(version)" ]; then \
+		echo "Usage: make version version=0.0.2"; \
+		exit 1; \
+	fi
+	@echo "Updating pyproject.toml version to $(version)..."
+	sed -i.bak "s/^version = .*/version = \"$(version)\"/" pyproject.toml && rm pyproject.toml.bak
+	git add pyproject.toml
+	git commit -m "Version $(version) released"
+	git push origin HEAD
+
+release: version tag
+	@echo "Created and pushed release v$(version). GitHub Actions will create the GitHub release and publish to PyPI."
