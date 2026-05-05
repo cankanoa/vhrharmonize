@@ -69,6 +69,7 @@ class StandardizedMetadata:
     photo_basename: Optional[str] = None
     acquisition_datetime_utc: Optional[datetime] = None
     sensor_id: Optional[str] = None
+    cloud_cover: Optional[float] = None
     sun_azimuth: Optional[float] = None
     sun_elevation: Optional[float] = None
     sun_zenith: Optional[float] = None
@@ -98,6 +99,8 @@ class StandardizedMetadata:
         off_nadir = worldview_metadata.find_first_number("meanOffNadirViewAngle")
         sat_azimuth = worldview_metadata.find_first_number("meanSatAz")
         sensor_id = worldview_metadata.find_first("satId")
+        cloud_cover_value = worldview_metadata.find_first_number("cloudCover")
+        cloud_cover = None if cloud_cover_value is None else cloud_cover_value * 100.0
 
         band_factors: Dict[str, float] = {}
         discovered_band_order: List[str] = []
@@ -137,6 +140,7 @@ class StandardizedMetadata:
             photo_basename=worldview_metadata.photo_basename,
             acquisition_datetime_utc=acquisition_dt,
             sensor_id=str(sensor_id) if sensor_id is not None else None,
+            cloud_cover=cloud_cover,
             sun_azimuth=sun_azimuth,
             sun_elevation=sun_elevation,
             sun_zenith=(90.0 - sun_elevation) if sun_elevation is not None else None,
@@ -159,6 +163,7 @@ class StandardizedMetadata:
                 "TLCTime": "acquisition_datetime_utc",
                 "earliestAcqTime": "acquisition_datetime_utc",
                 "latestAcqTime": "acquisition_datetime_utc",
+                "cloudCover": "cloud_cover",
                 "meanSunAz": "sun_azimuth",
                 "meanSunEl": "sun_elevation",
                 "meanSatAz": "view_azimuth",

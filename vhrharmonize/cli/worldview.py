@@ -381,22 +381,32 @@ def _log_step_plan(
 def _resolve_step_save_dir(
     save_value: Optional[str],
     *,
-    step_name: str,
     temp_root: str,
     output_root: str,
     relative_base_folder: str,
 ) -> str:
-    save_mode = (save_value or "temp").strip()
-    if save_mode == "temp":
-        base_dir = temp_root
-    elif save_mode == "output":
-        base_dir = output_root
+    save_mode = (save_value or "$temp").strip()
+    if save_mode == "$temp":
+        resolved_dir = temp_root
+    elif save_mode.startswith("$temp/"):
+        resolved_dir = os.path.join(temp_root, save_mode[len("$temp/"):])
+    elif save_mode == "$output":
+        resolved_dir = output_root
+    elif save_mode.startswith("$output/"):
+        resolved_dir = os.path.join(output_root, save_mode[len("$output/"):])
+    elif save_mode.startswith("./"):
+        resolved_dir = resolve_relative_to_input(save_mode, relative_base_folder)
+    elif os.path.isabs(save_mode):
+        resolved_dir = save_mode
     else:
-        base_dir = resolve_relative_to_input(save_mode, relative_base_folder)
-        os.makedirs(base_dir, exist_ok=True)
-    step_dir = os.path.join(base_dir, step_name)
-    os.makedirs(step_dir, exist_ok=True)
-    return step_dir
+        resolved_dir = os.path.abspath(save_mode)
+    os.makedirs(resolved_dir, exist_ok=True)
+    return resolved_dir
+
+
+def _is_temp_save_value(save_value: Optional[str]) -> bool:
+    normalized = (save_value or "$temp").strip()
+    return normalized == "$temp" or normalized.startswith("$temp/")
 
 
 def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
@@ -428,7 +438,7 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
         else default_output_root
     )
     os.makedirs(resolved_output_root, exist_ok=True)
-    return {
+    step_dirs: Dict[str, str] = {
         "temp_root": resolved_temp_root,
         "output_root": resolved_output_root,
         "scene_work": resolve_output_dir(
@@ -436,56 +446,58 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
             temp_dir=resolved_temp_root,
             step_name="shared",
         ),
-        "fetch_atmosphere": _resolve_step_save_dir(
-            args.save_fetch_atmosphere,
-            step_name="fetch_atmosphere",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "atmospheric_correction": _resolve_step_save_dir(
-            args.save_atmospheric_correction,
-            step_name="atmospheric_correction",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "orthorectification": _resolve_step_save_dir(
-            args.save_orthorectification,
-            step_name="orthorectification",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "pansharpen": _resolve_step_save_dir(
-            args.save_pansharpen,
-            step_name="pansharpen",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "cloud_mask": _resolve_step_save_dir(
-            args.save_cloud_mask,
-            step_name="cloud_mask",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "alignment": _resolve_step_save_dir(
-            args.save_alignment,
-            step_name="alignment",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
-        "radiometric_normalization": _resolve_step_save_dir(
-            args.save_radiometric_normalization,
-            step_name="radiometric_normalization",
-            temp_root=resolved_temp_root,
-            output_root=resolved_output_root,
-            relative_base_folder=relative_output_base,
-        ),
     }
+
+    if args.run_fetch_atmosphere:
+        step_dirs["fetch_atmosphere"] = _resolve_step_save_dir(
+            args.save_fetch_atmosphere,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_atmospheric_correction:
+        step_dirs["atmospheric_correction"] = _resolve_step_save_dir(
+            args.save_atmospheric_correction,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_orthorectification:
+        step_dirs["orthorectification"] = _resolve_step_save_dir(
+            args.save_orthorectification,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_pansharpen:
+        step_dirs["pansharpen"] = _resolve_step_save_dir(
+            args.save_pansharpen,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_cloud_mask:
+        step_dirs["cloud_mask"] = _resolve_step_save_dir(
+            args.save_cloud_mask,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_alignment:
+        step_dirs["alignment"] = _resolve_step_save_dir(
+            args.save_alignment,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    if args.run_radiometric_normalization:
+        step_dirs["radiometric_normalization"] = _resolve_step_save_dir(
+            args.save_radiometric_normalization,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
+    return step_dirs
 
 
 def _get_atmospheric_extension(args: argparse.Namespace) -> str:
@@ -617,20 +629,20 @@ def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: a
 def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs: List[str] = []
-    if args.run_fetch_atmosphere and args.save_fetch_atmosphere != "temp":
+    if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         required_outputs.extend(expected_outputs.get("fetch_atmosphere", []))
-    if args.run_atmospheric_correction and args.save_atmospheric_correction != "temp":
+    if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
         required_outputs.extend(expected_outputs.get("atmospheric_correction", []))
-    if args.run_orthorectification and args.save_orthorectification != "temp":
+    if args.run_orthorectification and not _is_temp_save_value(args.save_orthorectification):
         required_outputs.extend(expected_outputs.get("orthorectification", []))
         if args.run_pansharpen:
             required_outputs.extend(expected_outputs.get("orthorectification_pan", []))
-    if args.run_pansharpen and args.save_pansharpen != "temp":
+    if args.run_pansharpen and not _is_temp_save_value(args.save_pansharpen):
         required_outputs.extend(expected_outputs.get("pansharpen", []))
-    if args.run_cloud_mask and args.save_cloud_mask != "temp":
+    if args.run_cloud_mask and not _is_temp_save_value(args.save_cloud_mask):
         required_outputs.extend(expected_outputs.get("cloud_mask", []))
         required_outputs.extend(expected_outputs.get("cloud_mask_mask", []))
-    if args.run_alignment and args.save_alignment != "temp":
+    if args.run_alignment and not _is_temp_save_value(args.save_alignment):
         required_outputs.extend(expected_outputs.get("alignment", []))
     return required_outputs
 
@@ -1077,6 +1089,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     output_path,
                     resolved_dem_file_path,
                     args.epsg,
+                    gcp_geojson_file_path=args.orthorectification_rpc_refinement_geojson,
                     output_nodata_value=args.nodata_value,
                     dtype=args.dtype,
                     output_resolution=resolve_output_resolution_for_crs(
@@ -1130,6 +1143,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                         output_path,
                         resolved_dem_file_path,
                         args.epsg,
+                        gcp_geojson_file_path=args.orthorectification_rpc_refinement_geojson,
                         output_nodata_value=args.nodata_value,
                         dtype=args.dtype,
                         output_resolution=resolve_output_resolution_for_crs(
@@ -1397,22 +1411,29 @@ def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespac
     def _extend(step_name: str) -> None:
         saved_paths.extend(state.scene.step_outputs.get(step_name, []))
 
-    if args.run_fetch_atmosphere and args.save_fetch_atmosphere != "temp":
+    if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
-    if args.run_atmospheric_correction and args.save_atmospheric_correction != "temp":
+    if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
         _extend("atmospheric_correction")
-    if args.run_orthorectification and args.save_orthorectification != "temp":
+    if args.run_orthorectification and not _is_temp_save_value(args.save_orthorectification):
         _extend("orthorectification")
         if args.run_pansharpen:
             _extend("orthorectification_pan")
-    if args.run_pansharpen and args.save_pansharpen != "temp":
+    if args.run_pansharpen and not _is_temp_save_value(args.save_pansharpen):
         _extend("pansharpen")
-    if args.run_cloud_mask and args.save_cloud_mask != "temp":
+    if args.run_cloud_mask and not _is_temp_save_value(args.save_cloud_mask):
         _extend("cloud_mask")
         _extend("cloud_mask_mask")
-    if args.run_alignment and args.save_alignment != "temp":
+    if args.run_alignment and not _is_temp_save_value(args.save_alignment):
         _extend("alignment")
     return _dedupe_paths([path for path in saved_paths if path])
+
+
+def _scene_cloud_cover_percent(scene: WorldViewScene) -> Optional[float]:
+    image = scene.mul_image or scene.pan_image
+    if image is None or image.standardized_metadata is None:
+        return None
+    return image.standardized_metadata.cloud_cover
 
 
 def _delete_files(paths: List[str]) -> None:
@@ -1427,22 +1448,22 @@ def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespac
     def _extend(step_name: str) -> None:
         temp_paths.extend(state.scene.step_outputs.get(step_name, []))
 
-    if args.run_fetch_atmosphere and args.save_fetch_atmosphere == "temp":
+    if args.run_fetch_atmosphere and _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
-    if args.run_atmospheric_correction and args.save_atmospheric_correction == "temp":
+    if args.run_atmospheric_correction and _is_temp_save_value(args.save_atmospheric_correction):
         _extend("atmospheric_correction")
         if args.atmospheric_method == "flaash":
             temp_paths.extend([f"{path}.params.txt" for path in state.scene.step_outputs.get("atmospheric_correction", [])])
-    if args.run_orthorectification and args.save_orthorectification == "temp":
+    if args.run_orthorectification and _is_temp_save_value(args.save_orthorectification):
         _extend("orthorectification")
         if args.run_pansharpen:
             _extend("orthorectification_pan")
-    if args.run_pansharpen and args.save_pansharpen == "temp":
+    if args.run_pansharpen and _is_temp_save_value(args.save_pansharpen):
         _extend("pansharpen")
-    if args.run_cloud_mask and args.save_cloud_mask == "temp":
+    if args.run_cloud_mask and _is_temp_save_value(args.save_cloud_mask):
         _extend("cloud_mask")
         _extend("cloud_mask_mask")
-    if args.run_alignment and args.save_alignment == "temp":
+    if args.run_alignment and _is_temp_save_value(args.save_alignment):
         _extend("alignment")
 
     mul_image = state.scene.mul_image
@@ -1532,8 +1553,33 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
     state.scene.metadata_report_path = scene_metadata_path
 
 
+def _write_cloud_cover_skip_report(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+    *,
+    cloud_cover: float,
+) -> None:
+    _, scene_metadata_path = _final_output_paths(state, args)
+    message = (
+        f"Max cloud cover of {cloud_cover:.2f}% does not meet "
+        f"max_cloud_cover_to_process of {args.max_cloud_cover_to_process:.2f}%"
+    )
+    _write_json(scene_metadata_path, {"message": message})
+    state.scene.metadata_report_path = scene_metadata_path
+
+
 def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
     state = _initialize_scene_state(scene, args)
+    cloud_cover = _scene_cloud_cover_percent(scene)
+    if args.max_cloud_cover_to_process is not None and cloud_cover is not None and cloud_cover > args.max_cloud_cover_to_process:
+        _write_cloud_cover_skip_report(state, args, cloud_cover=cloud_cover)
+        log(
+            f"Skipping because cloud cover {cloud_cover:.2f}% exceeds max {args.max_cloud_cover_to_process:.2f}%",
+            enabled=args.log_to_console,
+            step="workflow",
+            scene_basename=scene.primary_basename,
+        )
+        return state
     log(
         f"Processing {scene.primary_basename or f'{scene.scene_id}_{scene.catalog_id}'}",
         enabled=args.log_to_console,
@@ -1695,12 +1741,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--py6s-auto-atmos-power-endpoint", default="https://power.larc.nasa.gov/api/temporal/daily/point")
     parser.add_argument("--footprint-epsg", type=int, default=4326)
     parser.add_argument("--filter-basename", action="append")
+    parser.add_argument("--max-cloud-cover-to-process", type=float)
     parser.add_argument("--output-dir")
     parser.add_argument("--fetch-atmosphere-output-suffix", default="_atmosphere")
     parser.add_argument("--atmospheric-correction-output-suffix", default="_atmospheric")
     parser.add_argument("--radiometric-normalization-output")
     parser.add_argument("--orthorectification-output-suffix", default="_ortho")
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
+    parser.add_argument("--orthorectification-rpc-refinement-geojson")
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--concurrent-processing", default=1)
@@ -1709,24 +1757,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-fetch-atmosphere", default="temp")
+    parser.add_argument("--save-fetch-atmosphere", default="$temp")
     parser.add_argument("--run-atmospheric-correction", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-atmospheric-correction", default="temp")
+    parser.add_argument("--save-atmospheric-correction", default="$temp")
     parser.add_argument("--calculate-overviews-atmospheric-correction", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-orthorectification", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-orthorectification", default="temp")
+    parser.add_argument("--save-orthorectification", default="$temp")
     parser.add_argument("--calculate-overviews-orthorectification", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-pansharpen", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-pansharpen", default="temp")
+    parser.add_argument("--save-pansharpen", default="$temp")
     parser.add_argument("--calculate-overviews-pansharpen", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-cloud-mask", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-cloud-mask", default="output")
+    parser.add_argument("--save-cloud-mask", default="$output")
     parser.add_argument("--calculate-overviews-cloud-mask", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-alignment", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--save-alignment", default="temp")
+    parser.add_argument("--save-alignment", default="$temp")
     parser.add_argument("--calculate-overviews-alignment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--save-radiometric-normalization", default="temp")
+    parser.add_argument("--save-radiometric-normalization", default="$temp")
     parser.add_argument("--calculate-overviews-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip-flaash", action="store_true")
     parser.add_argument("--existing-flaash-input")
@@ -1802,6 +1850,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--run-pansharpen requires orthorectified inputs, --run-orthorectification, or --existing-mul-ortho-input.")
     if args.run_pansharpen and args.existing_mul_ortho_input and not args.existing_pan_ortho_input:
         parser.error("--existing-pan-ortho-input is required when using --existing-mul-ortho-input with pansharpen.")
+    if (
+        args.orthorectification_rpc_refinement_geojson
+        and not os.path.isfile(args.orthorectification_rpc_refinement_geojson)
+    ):
+        parser.error(
+            "--orthorectification-rpc-refinement-geojson does not exist: "
+            f"{args.orthorectification_rpc_refinement_geojson}"
+        )
     if args.run_alignment and not args.alignment_fixed_image:
         parser.error("--alignment-fixed-image is required when --run-alignment is enabled.")
     if args.run_alignment and args.alignment_fixed_image and not os.path.isfile(args.alignment_fixed_image):
@@ -1820,6 +1876,37 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
+    for arg_name in (
+        "save_fetch_atmosphere",
+        "save_atmospheric_correction",
+        "save_orthorectification",
+        "save_pansharpen",
+        "save_cloud_mask",
+        "save_alignment",
+        "save_radiometric_normalization",
+    ):
+        save_value = getattr(args, arg_name)
+        if save_value in (None, ""):
+            continue
+        normalized = str(save_value).strip()
+        if normalized in ("$temp", "$output"):
+            continue
+        if normalized.startswith(("$temp/", "$output/", "./")):
+            continue
+        if os.path.isabs(normalized):
+            continue
+        if normalized.startswith("../"):
+            continue
+        if normalized in ("temp", "output") or normalized.startswith(("temp/", "output/")):
+            parser.error(
+                f"--{arg_name.replace('_', '-')} no longer supports legacy 'temp'/'output' prefixes; "
+                "use '$temp' or '$output' instead."
+            )
+    if (
+        args.max_cloud_cover_to_process is not None
+        and (args.max_cloud_cover_to_process < 0 or args.max_cloud_cover_to_process > 100)
+    ):
+        parser.error("--max-cloud-cover-to-process must be in [0, 100].")
     try:
         args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
     except ValueError as exc:
