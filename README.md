@@ -29,7 +29,7 @@
 
 ## Installation
 
-See [getting-started/installation.md](getting-started/installation.md) for detailed installation instructions or simply install like this: 
+See [docs/getting-started/installation.md](docs/getting-started/installation.md) for detailed installation instructions or simply install like this: 
 
 ```bash
 conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
@@ -37,7 +37,7 @@ conda activate vhrharmonize
 pip install vhrharmonize[default]
 ```
 ## Getting Started
-For an overview of using the library see [getting-started/quickstart.md](getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [configs/worldview.example.yml](configs/worldview.example.yml) and running:
+For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/worldview.example.yml](docs/configs/worldview.example.yml) and running:
 
 ```bash
 vhr-worldview --config-yaml worldview.example.yml
@@ -68,7 +68,7 @@ vhr-py6s --help
 
 ## Contributing
 
-We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See [getting-started/contributing.md](getting-started/contributing.md).
+We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See [docs/getting-started/contributing.md](docs/getting-started/contributing.md).
 
 ---
 
