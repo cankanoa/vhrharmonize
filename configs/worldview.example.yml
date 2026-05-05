@@ -1,16 +1,23 @@
-# This file has params to process worldview images
-# To install the required libraries run:
-  # conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
-  # conda activate vhrharmonize
-  # pip install -e ".[all]"
-# Then set the required params in this folder
-# To process images:
-  # Navigate to the folder with this file: cd configs
-  # Run: vhr-worldview --config-yaml worldview.example.yml
+# This file has arguments to process WorldView-3 B1 images and brief setup instructions below.
+
+# 1. To install the required system level libraries run:
+  # `conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11`
+  # `conda activate vhrharmonize`
+
+# 2. To install the library, depending on if you are installing from pip or source:
+  # From source: `pip install -e ".[defaults]"`
+  # From pip: `pip install vhrharmonize[defaults]`
+
+# 3. Set the arguments in this yml file
+
+# 4. To process images:
+  # Navigate to the folder with this yml file (may need to be changed): `cd configs`
+  # Run: `vhr-worldview --config-yaml worldview.example.yml`
 
 shared:
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
+  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing
   dem_file_path: /path.tif  # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
@@ -26,7 +33,6 @@ shared:
   dtype: int16 # Shared output dtype for raster-writing steps
   log_to_console: true
   overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true
-  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   skip_existing: true # Skip the whole scene only if all requested non-temp outputs already exist
   run_from_existing: true # At each step, if the expected output exists, reuse it instead of rerunning that step
   max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold

@@ -12,7 +12,7 @@ conda activate vhrharmonize
 2. Install the package with default dependencies.
 
 ```bash
-pip install vhrharmonize[default]
+pip install vhrharmonize[defaults]
 ```
 
 3. Install specific dependencies as needed.
@@ -48,7 +48,7 @@ cd vhrharmonize
 3. Install the default packages.
 
 ```bash
-pip install -e '.[default]'
+pip install -e '.[defaults]'
 ```
 
 4. Install specific dependencies as needed.
