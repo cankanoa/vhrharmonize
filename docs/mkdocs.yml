@@ -12,8 +12,8 @@ nav:
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
+      - Contributing: getting-started/contributing.md
   - CLI:
-      - Overview: cli/overview.md
       - vhr-worldview: cli/vhr-worldview.md
       - vhr-fetch-modis-water-vapor: cli/vhr-fetch-modis-water-vapor.md
       - vhr-flaash: cli/vhr-flaash.md
@@ -25,29 +25,21 @@ nav:
       - vhr-py6s: cli/vhr-py6s.md
   - Configuration:
       - WorldView Config: configuration/worldview-config.md
-  - Workflows:
-      - Full-Scene Workflow: workflows/full-scene-worldview.md
-      - Atmospheric Correction (Py6S): workflows/atmospheric-correction-py6s.md
-  - Architecture:
-      - Package Layout: architecture/package-layout.md
+  - Pre-Processing Steps:
+      - Py6S: pre-processing-steps/py6s.md
+      - WorldView Pipeline: pre-processing-steps/worldview-pipeline.md
   - API Reference:
-      - Overview: api/index.md
+      - io.geospatial: api/io-geospatial.md
+      - io.workflow_utils: api/io-workflow-utils.md
+      - preprocess.alignment: api/preprocess-alignment.md
       - preprocess.atmospheric_correction: api/preprocess-atmospheric-correction.md
+      - preprocess.cloudmasking: api/preprocess-cloudmasking.md
+      - preprocess.helpers: api/preprocess-helpers.md
       - preprocess.orthorectification: api/preprocess-orthorectification.md
       - preprocess.pansharpening: api/preprocess-pansharpening.md
-      - preprocess.cloudmasking: api/preprocess-cloudmasking.md
-      - preprocess.alignment: api/pipelines-alignment.md
-      - io.tiling: api/preprocess-tiling.md
       - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
-      - preprocess.data_preparation: api/data_prep.md
-      - io.geospatial: api/utils.md
-      - io.workflow_utils: api/pipelines-config.md
-      - analysis.statistics: api/calculate_statistics.md
-      - providers.worldview: api/find_files.md
-      - preprocess.helpers: api/providers-worldview-discover.md
-  - Notes:
-      - FLAASH Tuning Findings: notes/flaash_tuning_findings.md
-      - FLAASH Params Info: flaash_params_info.txt
+      - providers.standardized: api/providers-standardized.md
+      - providers.worldview: api/providers-worldview.md
 
 theme:
   name: material

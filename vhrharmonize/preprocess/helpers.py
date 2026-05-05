@@ -10,7 +10,15 @@ def log(
     step: str | None = None,
     scene_basename: str | None = None,
 ) -> None:
-    """Emit a concise console log message when logging is enabled."""
+    """Emit a concise console log message.
+    Args:
+        message: Log message text.
+        enabled: Whether logging is enabled.
+        step: Optional step name for the log prefix.
+        scene_basename: Optional scene basename for the log prefix.
+    Returns:
+        None.
+    """
     if not enabled:
         return
     scene_basename = (scene_basename or "").strip()

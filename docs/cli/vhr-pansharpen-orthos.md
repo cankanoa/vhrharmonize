@@ -1,11 +1,13 @@
-# `vhr-pansharpen-orthos`
+# vhr-pansharpen-orthos
 
-Pansharpenes existing orthorectified multispectral and panchromatic rasters.
+## Overview
 
-Install extras with:
+`vhr-pansharpen-orthos` pansharpens an orthorectified multispectral raster with an orthorectified panchromatic raster.
+
+## Installation
 
 ```bash
-pip install -e ".[pansharpen]"
+pip install "vhrharmonize[pansharpen]"
 ```
 
 ## Usage
@@ -14,10 +16,9 @@ pip install -e ".[pansharpen]"
 vhr-pansharpen-orthos \
   --mul-ortho /data/mul_ortho.tif \
   --pan-ortho /data/pan_ortho.tif \
-  --output /data/out/pansharp.tif
+  --output /data/pansharpened.tif \
+  --nodata-value -9999
 ```
 
-## Notes
-
-- Input paths must exist.
-- Optional `--nodata-value` sets output NoData.
+- Required: `--mul-ortho`, `--pan-ortho`, `--output`
+- Optional output nodata: `--nodata-value`

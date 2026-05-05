@@ -48,7 +48,14 @@ class AtmosphericCorrector(Protocol):
         ...
 
 
-def _py6s_atmosphere_profile(AtmosProfile, value: str):
+def _py6s_atmosphere_profile(AtmosProfile: Any, value: str) -> Any:
+    """Resolve a Py6S atmosphere profile.
+    Args:
+        AtmosProfile: Py6S AtmosProfile class.
+        value: Atmosphere profile name.
+    Returns:
+        Py6S predefined atmosphere profile.
+    """
     mapping = {
         "tropical": AtmosProfile.Tropical,
         "midlatitude_summer": AtmosProfile.MidlatitudeSummer,
@@ -63,7 +70,14 @@ def _py6s_atmosphere_profile(AtmosProfile, value: str):
     return AtmosProfile.PredefinedType(mapping[key])
 
 
-def _py6s_aerosol_profile(AeroProfile, value: str):
+def _py6s_aerosol_profile(AeroProfile: Any, value: str) -> Any:
+    """Resolve a Py6S aerosol profile.
+    Args:
+        AeroProfile: Py6S AeroProfile class.
+        value: Aerosol profile name.
+    Returns:
+        Py6S predefined aerosol profile.
+    """
     mapping = {
         "continental": AeroProfile.Continental,
         "maritime": AeroProfile.Maritime,
@@ -79,7 +93,7 @@ def _py6s_aerosol_profile(AeroProfile, value: str):
 
 
 def build_py6s_kwargs_from_standardized_metadata(
-    metadata,
+    metadata: Any,
     *,
     ground_elevation_km: float,
     atmosphere_profile: str,
@@ -94,7 +108,24 @@ def build_py6s_kwargs_from_standardized_metadata(
     use_imd_radiance_calibration: bool,
     use_worldview_gain_offset_adjustment: bool,
 ) -> Dict[str, Any]:
-    """Build shared Py6S kwargs from standardized metadata."""
+    """Build shared Py6S keyword arguments.
+    Args:
+        metadata: Standardized metadata object.
+        ground_elevation_km: Ground elevation in kilometers.
+        atmosphere_profile: Requested atmosphere profile name.
+        aerosol_profile: Requested aerosol profile name.
+        aot550: Aerosol optical thickness at 550 nm.
+        visibility_km: Optional visibility override in kilometers.
+        water_vapor: Water vapor value in g/cm^2.
+        ozone: Ozone value in cm-atm.
+        sixs_executable: Optional 6S executable path.
+        output_scale_factor: Optional output reflectance scale factor.
+        output_dtype: Output raster dtype.
+        use_imd_radiance_calibration: Whether to use IMD radiance calibration factors.
+        use_worldview_gain_offset_adjustment: Whether to apply WorldView gain and offset adjustment.
+    Returns:
+        Provider-neutral Py6S keyword arguments.
+    """
     scene_dt = metadata.resolve_scene_datetime()
     py6s_kwargs = {
         "solar_zenith": metadata.sun_zenith,
@@ -135,7 +166,7 @@ def build_py6s_kwargs_from_standardized_metadata(
 def run_py6s(
     input_raster: str,
     output_raster: str,
-    metadata,
+    metadata: Any,
     *,
     ground_elevation_km: float,
     atmosphere_profile: str,
@@ -158,7 +189,34 @@ def run_py6s(
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> Py6SRunResult:
-    """Run Py6S correction using provider-neutral standardized metadata."""
+    """Run Py6S correction using standardized metadata.
+    Args:
+        input_raster: Input raster path.
+        output_raster: Output raster path.
+        metadata: Standardized metadata object.
+        ground_elevation_km: Ground elevation in kilometers.
+        atmosphere_profile: Requested atmosphere profile name.
+        aerosol_profile: Requested aerosol profile name.
+        aot550: Aerosol optical thickness at 550 nm.
+        visibility_km: Optional visibility override in kilometers.
+        water_vapor: Water vapor value in g/cm^2.
+        ozone: Ozone value in cm-atm.
+        sixs_executable: Optional 6S executable path.
+        output_scale_factor: Optional output reflectance scale factor.
+        output_dtype: Output raster dtype.
+        use_imd_radiance_calibration: Whether to use IMD radiance calibration factors.
+        use_worldview_gain_offset_adjustment: Whether to apply WorldView gain and offset adjustment.
+        auto_atmos_source: Optional automatic atmosphere source.
+        bbox_wgs84: Optional WGS84 bbox used for automatic atmosphere lookup.
+        auto_atmos_grid_size: Grid size used for automatic atmosphere lookup.
+        auto_atmos_search_days: Search window in days for automatic atmosphere lookup.
+        auto_atmos_timeout_s: Timeout in seconds for automatic atmosphere lookup.
+        auto_atmos_power_endpoint: NASA POWER endpoint used for automatic atmosphere lookup.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        Py6S run summary.
+    """
     effective_aot550 = aot550
     effective_water_vapor = water_vapor
     effective_ozone = ozone
@@ -456,7 +514,7 @@ FLAASH_ALLOWED_PARAMS = {
 }
 
 
-def init_envi_engine(envi_engine_path: str):
+def init_envi_engine(envi_engine_path: str) -> Any:
     """Initialize the ENVI task engine used by FLAASH."""
     import envipyengine.config
     from envipyengine import Engine
@@ -482,7 +540,7 @@ def build_flaash_kwargs_from_standardized_metadata(
     input_raster: str,
     dem_file_path: str,
     footprint_vector_path: str,
-    metadata,
+    metadata: Any,
     output_raster: str,
     *,
     dem_ground_percentile: float,
@@ -492,7 +550,22 @@ def build_flaash_kwargs_from_standardized_metadata(
     default_visibility: Optional[float],
     custom_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build validated shared FLAASH params from standardized metadata."""
+    """Build validated shared FLAASH parameters.
+    Args:
+        input_raster: Input raster path.
+        dem_file_path: DEM raster path.
+        footprint_vector_path: Footprint vector path for DEM sampling.
+        metadata: Standardized metadata object.
+        output_raster: Output raster path.
+        dem_ground_percentile: DEM percentile used for ground elevation estimation.
+        modtran_atm: MODTRAN atmosphere profile name.
+        modtran_aer: MODTRAN aerosol profile name.
+        use_aerosol: FLAASH aerosol handling mode.
+        default_visibility: Optional default visibility override.
+        custom_params: Optional custom FLAASH parameter overrides.
+    Returns:
+        Validated FLAASH parameter dictionary.
+    """
     from vhrharmonize.io.geospatial import get_image_percentile_value
 
     ground_elevation_m = get_image_percentile_value(
@@ -551,13 +624,13 @@ def convert_flaash_params_paths_for_windows(flaash_params: Dict[str, Any]) -> Di
 
 
 def _execute_flaash_task(
-    flaash_params,
-    output_params_path,
-    envi_engine,
-    output_image_path_to_delete=None,
+    flaash_params: Dict[str, Any],
+    output_params_path: str,
+    envi_engine: Any,
+    output_image_path_to_delete: Optional[str] = None,
     *,
     log_to_console: bool = False,
-):
+ ) -> None:
     """Execute ENVI FLAASH with the provided parameter dictionary."""
     log("Running FLAASH", enabled=log_to_console, step="flaash")
     if output_image_path_to_delete:
@@ -570,14 +643,14 @@ def _execute_flaash_task(
     log("Wrote output", enabled=log_to_console, step="flaash")
 
 
-def run_flaash_wrapper(args):
+def run_flaash_wrapper(args: tuple[Dict[str, Any], str, Any]) -> str:
     """Executor wrapper for FLAASH grid runs."""
     test_params, test_output_params_path, envi_engine = args
     _execute_flaash_task(test_params, test_output_params_path, envi_engine)
     return test_params["OUTPUT_RASTER_URI"]
 
 
-def parallel_flaash(test_flaash_params_array, envi_engine, max_workers=4):
+def parallel_flaash(test_flaash_params_array: List[tuple[Dict[str, Any], str]], envi_engine: Any, max_workers: int = 4) -> List[str]:
     """Execute `run_flaash` in parallel on parameterized FLAASH runs."""
     all_output_paths = []
     tasks = [
@@ -597,7 +670,13 @@ def parallel_flaash(test_flaash_params_array, envi_engine, max_workers=4):
 class FLAASHCorrector:
     """Adapter around existing ENVI FLAASH execution helper."""
 
-    def __init__(self, envi_engine) -> None:
+    def __init__(self, envi_engine: Any) -> None:
+        """Initialize the FLAASH adapter.
+        Args:
+            envi_engine: Initialized ENVI engine instance.
+        Returns:
+            None.
+        """
         self.envi_engine = envi_engine
 
     def run(self, input_raster: str, output_raster: str, **kwargs: Any) -> str:
@@ -616,11 +695,11 @@ def run_flaash(
     input_raster: str,
     output_raster: str,
     *,
-    metadata=None,
+    metadata: Any = None,
     dem_file_path: Optional[str] = None,
     footprint_vector_path: Optional[str] = None,
     envi_engine_path: Optional[str] = None,
-    envi_engine=None,
+    envi_engine: Any = None,
     output_params_path: Optional[str] = None,
     convert_paths_for_windows: bool = False,
     delete_output_before_run: Optional[str] = None,
@@ -633,7 +712,29 @@ def run_flaash(
     custom_params: Optional[Dict[str, Any]] = None,
     log_to_console: bool = False,
 ) -> FLAASHRunResult:
-    """Run FLAASH using provider-neutral standardized metadata or explicit params."""
+    """Run FLAASH using standardized metadata or explicit params.
+    Args:
+        input_raster: Input raster path.
+        output_raster: Output raster path.
+        metadata: Optional standardized metadata object.
+        dem_file_path: Optional DEM raster path.
+        footprint_vector_path: Optional footprint vector path.
+        envi_engine_path: Optional ENVI engine executable path.
+        envi_engine: Optional initialized ENVI engine.
+        output_params_path: Optional executed-params output path.
+        convert_paths_for_windows: Whether to convert paths for Windows ENVI execution.
+        delete_output_before_run: Optional output path to delete before execution.
+        params: Optional explicit FLAASH parameter dictionary.
+        dem_ground_percentile: DEM percentile used for ground elevation estimation.
+        modtran_atm: MODTRAN atmosphere profile name.
+        modtran_aer: MODTRAN aerosol profile name.
+        use_aerosol: FLAASH aerosol handling mode.
+        default_visibility: Optional default visibility override.
+        custom_params: Optional custom FLAASH parameter overrides.
+        log_to_console: Whether to emit console logs.
+    Returns:
+        FLAASH run summary.
+    """
     if params is None:
         if metadata is None or dem_file_path is None or footprint_vector_path is None:
             raise ValueError(

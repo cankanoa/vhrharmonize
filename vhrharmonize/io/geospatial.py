@@ -1,5 +1,6 @@
 import os
 import warnings
+from typing import Iterable, Optional
 import rasterio
 import rasterio.mask
 import geopandas as gpd
@@ -10,16 +11,18 @@ from shapely.geometry import mapping
 
 
 def calculate_raster_overviews(
-    input_image_path,
-    overview_scales,
+    input_image_path: str,
+    overview_scales: Optional[Iterable[int]],
     *,
-    resampling="nearest",
-    ):
-
-    """
-    Build internal raster overviews for a GeoTIFF-like raster.
-
-    Overview factors <= 1 are ignored.
+    resampling: str = "nearest",
+    ) -> str:
+    """Build internal raster overviews.
+    Args:
+        input_image_path: Input raster path.
+        overview_scales: Requested overview decimation factors.
+        resampling: Rasterio overview resampling method name.
+    Returns:
+        Input raster path after overview creation.
     """
     factors = []
     seen = set()
@@ -40,24 +43,17 @@ def calculate_raster_overviews(
 
 
 def shp_to_gpkg(
-    input_shp_path,
-    output_gpkg_path,
-    override_projection_epsg=None
-    ):
-
-    """
-    Reads a shapefile (which might not have a .prj),
-    optionally forces a new EPSG code on it,
-    then saves it as a GeoPackage (no in-memory layers used).
-
-    Parameters
-    ----------
-    input_shp_path : str
-    Path to the input shapefile (possibly missing a .prj).
-    output_gpkg_path : str
-    Path to the output GeoPackage file.
-    override_projection_epsg : int, optional
-    If provided, the layer's CRS is forced to this EPSG without reprojecting geometries.
+    input_shp_path: str,
+    output_gpkg_path: str,
+    override_projection_epsg: Optional[int] = None
+    ) -> None:
+    """Convert a shapefile to a GeoPackage.
+    Args:
+        input_shp_path: Input shapefile path.
+        output_gpkg_path: Output GeoPackage path.
+        override_projection_epsg: Optional CRS EPSG override to assign without reprojection.
+    Returns:
+        None.
     """
 
     # Open the input shapefile (read-only)
@@ -135,23 +131,19 @@ def shp_to_gpkg(
 
 
 def get_image_percentile_value(
-    input_image_path,
-    percentile=50.0,
-    mask=None,
-    override_mask_crs_epsg=None,
-    ):
-
-    """
-    Get a percentile value from a raster image, optionally constrained by a vector mask.
-
+    input_image_path: str,
+    percentile: float = 50.0,
+    mask: Optional[str] = None,
+    override_mask_crs_epsg: Optional[int] = None,
+    ) -> float:
+    """Compute a raster percentile value.
     Args:
-    input_image_path (str): Path to raster.
-    percentile (float): Percentile to compute (0-100). Default is 50 (median).
-    mask (str, optional): Vector mask path.
-    override_mask_crs_epsg (int, optional): Override EPSG for mask when needed.
-
+        input_image_path: Input raster path.
+        percentile: Requested percentile in the inclusive range 0 to 100.
+        mask: Optional vector mask path used to limit sampled pixels.
+        override_mask_crs_epsg: Optional CRS EPSG override for the mask.
     Returns:
-    float: Percentile value from valid (non-nodata) raster pixels.
+        Percentile value from valid raster pixels.
     """
     if percentile < 0 or percentile > 100:
         raise ValueError("percentile must be between 0 and 100.")

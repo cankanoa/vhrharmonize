@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from typing import Any
 
 from vhrharmonize.preprocess.helpers import log
 
@@ -15,7 +16,13 @@ class AlignmentResult:
     output_image_path: str
 
 
-def _extract_output_path(result) -> str:
+def _extract_output_path(result: Any) -> str:
+    """Extract an output image path from a coregix result.
+    Args:
+        result: Returned object from coregix alignment.
+    Returns:
+        Extracted output image path.
+    """
     for attribute_name in ("output_image_path", "aligned_image_path", "path"):
         value = getattr(result, attribute_name, None)
         if isinstance(value, str) and value:
@@ -51,7 +58,36 @@ def align_image_pair(
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> AlignmentResult:
-    """Align a moving image to a fixed image using coregix."""
+    """Align a moving image to a fixed image.
+    Args:
+        moving_image_path: Moving image path to transform.
+        fixed_image_path: Fixed reference image path.
+        output_image_path: Output aligned image path.
+        band_index: Default band index used when band-specific overrides are not provided.
+        moving_band_index: Optional moving-image band index override.
+        fixed_band_index: Optional fixed-image band index override.
+        moving_nodata: Optional moving-image nodata override.
+        fixed_nodata: Optional fixed-image nodata override.
+        output_nodata: Optional output nodata override.
+        min_valid_fraction: Minimum valid overlap fraction required for registration.
+        temp_dir: Optional temp directory for coregix intermediates.
+        keep_temp_dir: Whether to preserve the coregix temp directory.
+        split_factor: Chunking factor used by coregix.
+        clip_fixed_to_moving: Whether to clip the fixed image to the moving bounds before registration.
+        output_on_moving_grid: Whether to write the aligned result on the moving grid.
+        trim_edge_invalid: Whether to trim invalid alignment edge artifacts.
+        edge_trim_depth: Edge trim depth in pixels.
+        edge_trim_detection_band_index: Detection band index used for edge trimming.
+        edge_trim_invalid_below: Optional lower invalid-value threshold for edge trimming.
+        edge_trim_invalid_above: Optional upper invalid-value threshold for edge trimming.
+        enforce_mutual_valid_mask: Whether to enforce mutual valid masks during alignment.
+        use_edge_proxies: Whether to use edge proxies during alignment.
+        solve_resolution: Optional solve resolution override.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        Alignment result summary.
+    """
     if band_index < 0:
         raise ValueError("band_index must be >= 0.")
     if moving_band_index is not None and moving_band_index < 0:

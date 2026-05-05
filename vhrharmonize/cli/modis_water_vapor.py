@@ -21,6 +21,12 @@ DEFAULT_ENV_FILE = os.path.join(PROJECT_ROOT, "configs", ".env")
 
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
+    """Normalize optional basename filters.
+    Args:
+        raw_values: Repeated or comma-delimited basename filters.
+    Returns:
+        Flattened basename filter list.
+    """
     if not raw_values:
         return []
     parsed: List[str] = []
@@ -32,7 +38,13 @@ def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
     return parsed
 
 
-def _parse_scene_datetime_utc(photo_basename: str):
+def _parse_scene_datetime_utc(photo_basename: str) -> object:
+    """Parse a scene timestamp from a basename.
+    Args:
+        photo_basename: WorldView photo basename.
+    Returns:
+        Parsed acquisition datetime object.
+    """
     parts = parse_worldview_basename(photo_basename)
     if parts is None:
         raise ValueError(f"Could not parse acquisition datetime from: {photo_basename}")
@@ -40,6 +52,12 @@ def _parse_scene_datetime_utc(photo_basename: str):
 
 
 def _load_scene_bbox_wgs84(shp_path: str) -> tuple[float, float, float, float]:
+    """Load a scene footprint bounding box in WGS84.
+    Args:
+        shp_path: Path to the footprint shapefile.
+    Returns:
+        Bounding box as min lon, min lat, max lon, max lat.
+    """
     import geopandas as gpd
 
     gdf = gpd.read_file(shp_path)
@@ -52,7 +70,13 @@ def _load_scene_bbox_wgs84(shp_path: str) -> tuple[float, float, float, float]:
     return float(minx), float(miny), float(maxx), float(maxy)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the MODIS water vapor CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(
         description="Fetch MODIS water vapor per scene from Google Earth Engine and write reports.",
     )
@@ -90,8 +114,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run the MODIS water vapor CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
+    args = _build_parser().parse_args(argv)
     ee = init_ee_client(
         ee_project=args.ee_project,
         authenticate=args.authenticate,

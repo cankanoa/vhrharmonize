@@ -1,6 +1,7 @@
 """Preprocessing step modules."""
 
 from importlib import import_module
+from typing import Any
 
 _EXPORTS = {
     "log": (".helpers", "log"),
@@ -28,13 +29,18 @@ _EXPORTS = {
     "radiometric_normalization": (".radiometric_normalization", "radiometric_normalization"),
     "align_image_pair": (".alignment", "align_image_pair"),
     "AlignmentResult": (".alignment", "AlignmentResult"),
-    "tile_image": ("..io.tiling", "tile_image"),
 }
 
 __all__ = list(_EXPORTS.keys())
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
+    """Lazily resolve a public preprocessing export.
+    Args:
+        name: Export name requested from the preprocessing namespace.
+    Returns:
+        The resolved export object.
+    """
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _EXPORTS[name]

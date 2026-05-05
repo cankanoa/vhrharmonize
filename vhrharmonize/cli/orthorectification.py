@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from typing import Optional
 
 from vhrharmonize.preprocess.orthorectification import (
     gcp_refined_rpc_orthorectification,
@@ -13,7 +14,13 @@ from vhrharmonize.preprocess.orthorectification import (
 )
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the orthorectification CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(description="Run orthorectification helper commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -47,7 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_output_resolution(args):
+def _resolve_output_resolution(args: argparse.Namespace) -> float | tuple[float, float] | None:
+    """Resolve the requested output resolution.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Scalar resolution, x/y tuple, or None.
+    """
     if args.output_resolution is not None:
         return float(args.output_resolution)
     if args.output_resolution_x is not None or args.output_resolution_y is not None:
@@ -59,8 +72,14 @@ def _resolve_output_resolution(args):
     return None
 
 
-def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+def main(argv: Optional[list[str]] = None) -> int:
+    """Run the orthorectification CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
+    args = _build_parser().parse_args(argv)
 
     if args.command == "orthorectify":
         gcp_refined_rpc_orthorectification(

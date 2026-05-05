@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from vhrharmonize.providers.worldview import WorldViewMetadata, parse_worldview_basename
 
@@ -43,7 +43,13 @@ _WV_RADIOMETRIC_GAIN_OFFSET_2018V0: Dict[str, Dict[str, Tuple[float, float]]] = 
 }
 
 
-def _walk_values(data: Any):
+def _walk_values(data: Any) -> Iterator[tuple[str, Any]]:
+    """Yield nested mapping values.
+    Args:
+        data: Nested mapping or list structure.
+    Returns:
+        Iterator of key-value pairs from nested mappings.
+    """
     if isinstance(data, dict):
         for key, value in data.items():
             yield key, value
@@ -54,6 +60,12 @@ def _walk_values(data: Any):
 
 
 def _collect_band_groups(data: Mapping[str, Any]) -> List[Tuple[str, Mapping[str, Any]]]:
+    """Collect nested WorldView band groups.
+    Args:
+        data: Nested metadata mapping.
+    Returns:
+        Ordered band-group tuples.
+    """
     groups: List[Tuple[str, Mapping[str, Any]]] = []
     for key, value in _walk_values(data):
         if isinstance(value, dict) and key.upper().startswith("BAND_"):
@@ -90,7 +102,14 @@ class StandardizedMetadata:
     source_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_worldview_metadata(cls, worldview_metadata: WorldViewMetadata) -> "StandardizedMetadata":
+    def from_worldview_metadata(cls: type["StandardizedMetadata"], worldview_metadata: WorldViewMetadata) -> "StandardizedMetadata":
+        """Build standardized metadata from WorldView metadata.
+        Args:
+            cls: Dataclass type being constructed.
+            worldview_metadata: Parsed WorldView metadata object.
+        Returns:
+            Standardized metadata instance.
+        """
         acquisition_dt = worldview_metadata.find_first_datetime(
             "firstLineTime", "TLCTime", "earliestAcqTime", "latestAcqTime"
         )
@@ -176,6 +195,12 @@ class StandardizedMetadata:
         )
 
     def resolve_scene_datetime(self) -> datetime:
+        """Resolve a scene acquisition datetime.
+        Args:
+            self: Standardized metadata instance.
+        Returns:
+            Resolved acquisition datetime in UTC.
+        """
         if self.acquisition_datetime_utc is not None:
             return self.acquisition_datetime_utc
         if not self.photo_basename:
@@ -186,6 +211,12 @@ class StandardizedMetadata:
         return parts.acquisition_datetime_utc
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert standardized metadata to a dictionary.
+        Args:
+            self: Standardized metadata instance.
+        Returns:
+            Dictionary representation of the metadata.
+        """
         payload = asdict(self)
         if self.acquisition_datetime_utc is not None:
             payload["acquisition_datetime_utc"] = self.acquisition_datetime_utc.isoformat()

@@ -6,7 +6,12 @@ from typing import Any, Dict
 
 
 def load_yaml_config(path: str) -> Dict[str, Any]:
-    """Load a YAML config file and normalize hyphenated keys to underscores."""
+    """Load and normalize a YAML config file.
+    Args:
+        path: YAML config file path.
+    Returns:
+        Loaded config mapping with hyphenated keys normalized to underscores.
+    """
     try:
         import yaml
     except ImportError as exc:

@@ -34,6 +34,12 @@ def _load_spectralmatch_pipeline() -> Callable[..., Any]:
 
 
 def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
+    """Normalize shared input image paths.
+    Args:
+        shared_input_images: Iterable of candidate raster paths.
+    Returns:
+        Normalized non-empty raster path list.
+    """
     normalized = [str(path) for path in shared_input_images if str(path)]
     if not normalized:
         raise ValueError("shared_input_images must contain at least one raster path.")
@@ -60,7 +66,28 @@ def radiometric_normalization(
     log_to_console: bool = False,
     **kwargs: Any,
 ) -> str:
-    """Run radiometric normalization using the upstream SpectralMatch pipeline."""
+    """Run radiometric normalization with SpectralMatch.
+    Args:
+        shared_input_images: Input raster paths for normalization.
+        shared_output_image_path: Output normalized raster path.
+        method: Requested radiometric normalization method.
+        shared_temp_dir: Optional SpectralMatch temp directory.
+        delete_temp_dir: Whether SpectralMatch should delete its temp directory.
+        shared_debug_logs: Whether SpectralMatch should emit debug logs.
+        shared_cache: SpectralMatch cache setting to pass through.
+        shared_custom_nodata_value: Optional custom nodata override.
+        shared_window_size: SpectralMatch shared window size.
+        shared_image_threads: SpectralMatch image thread setting.
+        shared_io_threads: SpectralMatch IO thread setting.
+        shared_tile_threads: SpectralMatch tile thread setting.
+        shared_calculation_dtype: SpectralMatch calculation dtype.
+        shared_output_dtype: Optional SpectralMatch output dtype override.
+        shared_save_as_cog: Whether to save as a COG.
+        log_to_console: Whether to emit console logs.
+        kwargs: Additional SpectralMatch keyword arguments.
+    Returns:
+        Output normalized raster path.
+    """
     method_norm = method.strip().lower()
     if method_norm != "spectralmatch":
         raise ValueError(f"Unsupported radiometric normalization method: {method}")

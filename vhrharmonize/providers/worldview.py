@@ -22,6 +22,12 @@ class WorldViewFilenameParts:
 
     @property
     def image_role(self) -> Optional[str]:
+        """Return the parsed image role.
+        Args:
+            self: Parsed filename parts instance.
+        Returns:
+            WorldView image role string or None.
+        """
         product = self.product_code.upper()
         if product.startswith("M"):
             return "mul"
@@ -31,6 +37,12 @@ class WorldViewFilenameParts:
 
     @property
     def acquisition_datetime_utc(self) -> datetime:
+        """Return the acquisition datetime in UTC.
+        Args:
+            self: Parsed filename parts instance.
+        Returns:
+            Parsed acquisition datetime.
+        """
         month_map = {
             "JAN": 1,
             "FEB": 2,
@@ -75,10 +87,22 @@ class WorldViewImage:
 
     @property
     def basename(self) -> str:
+        """Return the image basename.
+        Args:
+            self: WorldView image instance.
+        Returns:
+            Parsed image basename.
+        """
         return self.filename_parts.basename
 
     @property
     def image_role(self) -> Optional[str]:
+        """Return the image role.
+        Args:
+            self: WorldView image instance.
+        Returns:
+            Parsed image role string or None.
+        """
         return self.filename_parts.image_role
 
 
@@ -96,14 +120,32 @@ class WorldViewScene:
 
     @property
     def primary_image(self) -> Optional[WorldViewImage]:
+        """Return the preferred primary image.
+        Args:
+            self: WorldView scene instance.
+        Returns:
+            Primary scene image or None.
+        """
         return self.mul_image or self.pan_image
 
     @property
     def primary_basename(self) -> Optional[str]:
+        """Return the primary scene basename.
+        Args:
+            self: WorldView scene instance.
+        Returns:
+            Primary image basename or None.
+        """
         image = self.primary_image
         return image.basename if image else None
 
     def get_image(self, role: str) -> Optional[WorldViewImage]:
+        """Return an image for a requested role.
+        Args:
+            role: Requested image role.
+        Returns:
+            Matching scene image or None.
+        """
         role_norm = role.strip().lower()
         if role_norm == "mul":
             return self.mul_image
@@ -112,6 +154,12 @@ class WorldViewScene:
         return None
 
     def set_image(self, image: WorldViewImage) -> None:
+        """Assign an image to the scene.
+        Args:
+            image: WorldView image to attach to the scene.
+        Returns:
+            None.
+        """
         if image.image_role == "mul":
             if self.mul_image is not None and self.mul_image.basename != image.basename:
                 raise ValueError(
@@ -131,9 +179,21 @@ class WorldViewScene:
         raise ValueError(f"Unsupported WorldView image role for scene assignment: {image.image_role}")
 
     def iter_images(self) -> List[WorldViewImage]:
+        """Return available scene images.
+        Args:
+            self: WorldView scene instance.
+        Returns:
+            List of non-null scene images.
+        """
         return [image for image in (self.mul_image, self.pan_image) if image is not None]
 
     def to_dict(self) -> Dict[str, object]:
+        """Convert a scene to a flat dictionary.
+        Args:
+            self: WorldView scene instance.
+        Returns:
+            Flattened scene dictionary.
+        """
         mul_image = self.mul_image
         pan_image = self.pan_image
         payload: Dict[str, object] = {
@@ -187,6 +247,12 @@ def parse_worldview_basename(name: str) -> Optional[WorldViewFilenameParts]:
 
 
 def _scene_root_for_path(path: str) -> str:
+    """Resolve the canonical scene root for a file path.
+    Args:
+        path: Candidate scene file path.
+    Returns:
+        Scene root directory path.
+    """
     directory = os.path.dirname(path)
     base = os.path.basename(directory).upper()
     if base.endswith("_MUL") or base.endswith("_PAN"):
@@ -199,6 +265,14 @@ def _find_worldview_shp_file(
     scene_root: str,
     basename: str,
 ) -> Optional[str]:
+    """Find a scene shapefile for a basename.
+    Args:
+        image_directory: Directory containing the image bundle.
+        scene_root: Root scene directory.
+        basename: Image basename to match.
+    Returns:
+        Matching shapefile path or None.
+    """
     for candidate in sorted(os.listdir(image_directory)):
         candidate_path = os.path.join(image_directory, candidate)
         if not os.path.isfile(candidate_path):
@@ -231,6 +305,14 @@ def _find_worldview_shp_file(
 
 
 def _companion_files_for_stem(directory: str, scene_root: str, basename: str) -> Dict[str, Optional[str]]:
+    """Collect companion files for an image basename.
+    Args:
+        directory: Directory containing image bundle files.
+        scene_root: Root scene directory.
+        basename: Image basename to match.
+    Returns:
+        Mapping of discovered companion file paths.
+    """
     companions = {"imd_file": None, "tif_file": None, "shp_file": None, "til_file": None}
     for candidate in os.listdir(directory):
         candidate_path = os.path.join(directory, candidate)
@@ -303,6 +385,12 @@ def iter_worldview_scenes(scene_tree: Mapping[str, Mapping[str, WorldViewScene]]
 
 
 def _split_imd_statements(text: str) -> Iterator[str]:
+    """Split IMD text into logical statements.
+    Args:
+        text: Raw IMD text.
+    Returns:
+        Iterator of normalized IMD statements.
+    """
     buffer: List[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -326,6 +414,12 @@ def _split_imd_statements(text: str) -> Iterator[str]:
 
 
 def _split_top_level_csv(raw: str) -> List[str]:
+    """Split a top-level CSV-like string.
+    Args:
+        raw: Raw comma-delimited string.
+    Returns:
+        Top-level comma-delimited tokens.
+    """
     parts: List[str] = []
     buffer: List[str] = []
     depth = 0
@@ -355,6 +449,12 @@ def _split_top_level_csv(raw: str) -> List[str]:
 
 
 def _parse_scalar(raw_value: str) -> Any:
+    """Parse a scalar IMD value.
+    Args:
+        raw_value: Raw IMD value text.
+    Returns:
+        Parsed Python scalar or nested list value.
+    """
     value = raw_value.strip()
     if not value:
         return ""
@@ -386,6 +486,14 @@ def _parse_scalar(raw_value: str) -> Any:
 
 
 def _append_group(container: Dict[str, Any], key: str, value: Dict[str, Any]) -> None:
+    """Append a parsed group into a container.
+    Args:
+        container: Target parsed metadata container.
+        key: Group key to append.
+        value: Parsed group payload.
+    Returns:
+        None.
+    """
     existing = container.get(key)
     if existing is None:
         container[key] = value
@@ -429,6 +537,12 @@ def parse_worldview_imd_file(imd_file: str) -> Dict[str, Any]:
 
 
 def _walk_values(data: Any) -> Iterator[Tuple[str, Any]]:
+    """Yield nested mapping values.
+    Args:
+        data: Nested mapping or list structure.
+    Returns:
+        Iterator of key-value pairs from nested mappings.
+    """
     if isinstance(data, dict):
         for key, value in data.items():
             yield key, value
@@ -447,7 +561,15 @@ class WorldViewMetadata:
     raw_metadata: Mapping[str, Any]
 
     @classmethod
-    def from_imd_file(cls, imd_file: str, *, photo_basename: Optional[str] = None) -> "WorldViewMetadata":
+    def from_imd_file(cls: type["WorldViewMetadata"], imd_file: str, *, photo_basename: Optional[str] = None) -> "WorldViewMetadata":
+        """Build metadata from an IMD file.
+        Args:
+            cls: Dataclass type being constructed.
+            imd_file: IMD file path.
+            photo_basename: Optional basename override.
+        Returns:
+            Parsed WorldView metadata instance.
+        """
         basename = photo_basename or os.path.splitext(os.path.basename(imd_file))[0]
         return cls(
             imd_file=imd_file,
@@ -456,6 +578,12 @@ class WorldViewMetadata:
         )
 
     def find_first(self, *keys: str) -> Any:
+        """Find the first matching raw metadata value.
+        Args:
+            keys: Metadata keys to search for in order.
+        Returns:
+            First matching value or None.
+        """
         for wanted_key in keys:
             for current_key, current_value in _walk_values(self.raw_metadata):
                 if current_key == wanted_key:
@@ -463,6 +591,12 @@ class WorldViewMetadata:
         return None
 
     def find_first_number(self, *keys: str) -> Optional[float]:
+        """Find the first matching numeric metadata value.
+        Args:
+            keys: Metadata keys to search for in order.
+        Returns:
+            First matching numeric value or None.
+        """
         value = self.find_first(*keys)
         if value is None:
             return None
@@ -472,6 +606,12 @@ class WorldViewMetadata:
             return None
 
     def find_first_datetime(self, *keys: str) -> Optional[datetime]:
+        """Find the first matching datetime metadata value.
+        Args:
+            keys: Metadata keys to search for in order.
+        Returns:
+            First matching UTC datetime or None.
+        """
         raw_value = self.find_first(*keys)
         if raw_value in (None, ""):
             return None
@@ -484,6 +624,12 @@ class WorldViewMetadata:
         return parsed.astimezone(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert parsed metadata to a dictionary.
+        Args:
+            self: WorldView metadata instance.
+        Returns:
+            Dictionary representation of the metadata.
+        """
         return {
             "imd_file": self.imd_file,
             "photo_basename": self.photo_basename,
@@ -524,8 +670,14 @@ def load_worldview_scenes_from_tif_files(
     return enrich_worldview_scenes_with_metadata(iter_worldview_scenes(scene_tree))
 
 
-def find_files(root_folder_path, filter_basenames=None):
-    """Backward-compatible flattened discovery wrapper for a folder root."""
+def find_files(root_folder_path: str, filter_basenames: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, object]]:
+    """Discover WorldView scenes under a folder root.
+    Args:
+        root_folder_path: Root folder to scan for tif files.
+        filter_basenames: Optional basenames to keep.
+    Returns:
+        Flattened scene dictionary keyed by scene and catalog id.
+    """
     tif_files: List[str] = []
     for root, _, files in os.walk(root_folder_path):
         for file_name in files:

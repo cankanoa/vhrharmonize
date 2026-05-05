@@ -6,13 +6,20 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 
 from vhrharmonize.preprocess.atmospheric_correction import (
     run_flaash,
 )
 
 
-def _load_params(args) -> dict:
+def _load_params(args: argparse.Namespace) -> dict[str, Any]:
+    """Load FLAASH parameters from CLI input.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Deserialized FLAASH parameter dictionary.
+    """
     if bool(args.params_json) == bool(args.params_json_file):
         raise ValueError("Provide exactly one of --params-json or --params-json-file.")
 
@@ -27,7 +34,13 @@ def _load_params(args) -> dict:
     return params
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the FLAASH CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(description="Run ENVI FLAASH with a supplied parameter object.")
     parser.add_argument("--params-json", help="Inline JSON object of FLAASH parameters.")
     parser.add_argument("--params-json-file", help="Path to a JSON file containing FLAASH parameters.")
@@ -45,8 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    """Run the FLAASH CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
+    args = _build_parser().parse_args(argv)
     params = _load_params(args)
     output_raster = params.get("OUTPUT_RASTER_URI")
     input_raster = None

@@ -1,27 +1,25 @@
-# `vhr-radiometric-normalization`
+# vhr-radiometric-normalization
 
-Run the shared radiometric normalization step directly from the CLI.
+## Overview
 
-Install extras with:
+`vhr-radiometric-normalization` runs the shared SpectralMatch wrapper directly. Any `--match-*` argument is forwarded into the upstream SpectralMatch pipeline after the `match_` prefix is stripped.
+
+## Installation
 
 ```bash
-pip install -e ".[radiometric-normalization]"
+pip install "vhrharmonize[radiometric-normalization]"
 ```
 
-This command wraps the upstream `spectralmatch.pipeline(...)` function and passes
-through `match_*` parameters after stripping the prefix.
-
-## Example
+## Usage
 
 ```bash
 vhr-radiometric-normalization \
-  rrn \
   --input-image /data/image_a.tif \
   --input-image /data/image_b.tif \
-  --output-image /data/out/normalized.tif
+  --output-image /data/normalized.tif
 ```
 
-## Notes
-
-- any `match_*` argument is forwarded into spectralmatch after stripping `match_`
-- shared defaults such as temp dir, nodata, and output dtype can still be supplied from the vhrharmonize CLI layer
+- Required: `--input-image` (repeatable), `--output-image`
+- Shared runtime controls: `--temp-dir`, `--delete-temp-dir/--no-delete-temp-dir`, `--debug-logs/--no-debug-logs`, `--cache`
+- Shared data controls: `--nodata-value`, `--window-size`, `--image-threads`, `--io-threads`, `--tile-threads`, `--calculation-dtype`, `--output-dtype`, `--save-as-cog/--no-save-as-cog`
+- Extra SpectralMatch kwargs: `--extra-kwargs-json` and any `--match-*` argument

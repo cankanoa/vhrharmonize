@@ -14,6 +14,12 @@ from vhrharmonize.cli.cli_helpers import load_yaml_config
 
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
+    """Normalize optional basename filters.
+    Args:
+        raw_values: Repeated or comma-delimited basename filters.
+    Returns:
+        Flattened basename filter list.
+    """
     if not raw_values:
         return []
     parsed: List[str] = []
@@ -26,6 +32,12 @@ def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
 
 
 def _normalize_config_defaults(config_defaults: Dict) -> Dict:
+    """Normalize YAML-derived CLI defaults.
+    Args:
+        config_defaults: Raw config defaults mapping.
+    Returns:
+        Normalized config defaults mapping.
+    """
     normalized = dict(config_defaults)
     for list_key in ("input_dir", "filter_basename"):
         if list_key in normalized and isinstance(normalized[list_key], str):
@@ -34,6 +46,12 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
 
 
 def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, float]:
+    """Load a scene footprint bounding box in WGS84.
+    Args:
+        shp_path: Path to the scene footprint shapefile.
+    Returns:
+        Bounding box as min lon, min lat, max lon, max lat.
+    """
     import geopandas as gpd
 
     gdf = gpd.read_file(shp_path)
@@ -47,12 +65,25 @@ def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, floa
 
 
 def _write_json(path: str, payload: Dict) -> None:
+    """Write a JSON file.
+    Args:
+        path: Output JSON path.
+        payload: JSON-serializable payload.
+    Returns:
+        None.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def run_py6s_only(args: argparse.Namespace) -> int:
+def _run_py6s_only(args: argparse.Namespace) -> int:
+    """Run the Py6S-only scene workflow.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Process exit code.
+    """
     from vhrharmonize.preprocess.atmospheric_correction import (
         run_py6s,
     )
@@ -197,7 +228,13 @@ def run_py6s_only(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the Py6S CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(description="Run Py6S-only atmospheric correction on WorldView scenes.")
     parser.add_argument("--config-yaml", help="Optional YAML config file.")
     parser.add_argument("--input-dir", action="append", help="Input directory to scan for scenes.")
@@ -264,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Run the Py6S CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config-yaml")
     config_args, _ = config_parser.parse_known_args(argv)
@@ -272,7 +315,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if config_args.config_yaml:
         config_defaults = _normalize_config_defaults(load_yaml_config(config_args.config_yaml))
 
-    parser = build_parser()
+    parser = _build_parser()
     if config_defaults:
         parser.set_defaults(**config_defaults)
     args = parser.parse_args(argv)
@@ -287,7 +330,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--py6s-auto-atmos-timeout-s must be > 0.")
     if args.epsg is not None and not args.dem_file_path:
         parser.error("--dem-file-path is required when --epsg is set.")
-    return run_py6s_only(args)
+    return _run_py6s_only(args)
 
 
 if __name__ == "__main__":

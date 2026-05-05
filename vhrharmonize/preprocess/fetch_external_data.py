@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -99,6 +99,14 @@ class AtmosphereEstimate:
 
 
 def _linspace(min_v: float, max_v: float, n: int) -> List[float]:
+    """Return evenly spaced values.
+    Args:
+        min_v: Minimum value.
+        max_v: Maximum value.
+        n: Number of values to generate.
+    Returns:
+        Evenly spaced values across the range.
+    """
     if n <= 1:
         return [(min_v + max_v) / 2.0]
     step = (max_v - min_v) / float(n - 1)
@@ -112,6 +120,16 @@ def _grid_points_from_bbox_wgs84(
     max_lat: float,
     grid_size: int,
 ) -> List[Tuple[float, float]]:
+    """Build a regular point grid for a WGS84 bbox.
+    Args:
+        min_lon: Minimum longitude.
+        min_lat: Minimum latitude.
+        max_lon: Maximum longitude.
+        max_lat: Maximum latitude.
+        grid_size: Number of samples per side.
+    Returns:
+        Grid point longitude and latitude pairs.
+    """
     if grid_size < 1:
         raise ValueError("grid_size must be >= 1")
     lons = _linspace(min_lon, max_lon, grid_size)
@@ -119,7 +137,13 @@ def _grid_points_from_bbox_wgs84(
     return [(lon, lat) for lat in lats for lon in lons]
 
 
-def _parse_power_value(value) -> Optional[float]:
+def _parse_power_value(value: object) -> Optional[float]:
+    """Parse a NASA POWER scalar value.
+    Args:
+        value: Raw POWER value.
+    Returns:
+        Parsed float value or None.
+    """
     if value is None:
         return None
     try:
@@ -139,6 +163,16 @@ def _fetch_power_daily_point(
     endpoint: str = "https://power.larc.nasa.gov/api/temporal/daily/point",
     timeout_s: float = 30.0,
 ) -> Dict[str, Optional[float]]:
+    """Fetch POWER atmosphere values for one point and day.
+    Args:
+        day_utc: Query day in UTC.
+        lon: Longitude in WGS84.
+        lat: Latitude in WGS84.
+        endpoint: NASA POWER endpoint.
+        timeout_s: Request timeout in seconds.
+    Returns:
+        POWER atmosphere values for the point.
+    """
     ymd = day_utc.strftime("%Y%m%d")
     params = {
         "parameters": "AOD_55,PW,TO3",
@@ -268,10 +302,22 @@ class ModisWaterVaporEstimate:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Optional[float] | Optional[str]]:
+        """Convert the MODIS estimate to a dictionary.
+        Args:
+            self: MODIS estimate instance.
+        Returns:
+            Dictionary representation of the estimate.
+        """
         return asdict(self)
 
 
 def _load_env_file(env_file_path: Optional[str]) -> Dict[str, str]:
+    """Load key-value pairs from an env file.
+    Args:
+        env_file_path: Optional env file path.
+    Returns:
+        Loaded environment-style key-value pairs.
+    """
     values: Dict[str, str] = {}
     if not env_file_path or not os.path.exists(env_file_path):
         return values
@@ -289,6 +335,13 @@ def _load_env_file(env_file_path: Optional[str]) -> Dict[str, str]:
 
 
 def _resolve_ee_project(cli_value: Optional[str], env_values: Dict[str, str]) -> Optional[str]:
+    """Resolve the Earth Engine project id.
+    Args:
+        cli_value: CLI-provided Earth Engine project id.
+        env_values: Loaded env-file values.
+    Returns:
+        Resolved Earth Engine project id or None.
+    """
     if cli_value:
         return cli_value
     for key in ("GEE_PROJECT", "EE_PROJECT", "GOOGLE_EARTH_ENGINE_PROJECT"):
@@ -302,7 +355,7 @@ def init_ee_client(
     ee_project: Optional[str] = None,
     authenticate: bool = False,
     env_file: Optional[str] = None,
-):
+ ) -> Any:
     """Initialize and return an Earth Engine client."""
     import ee
 
@@ -318,7 +371,7 @@ def init_ee_client(
 
 
 def _fetch_collection_value(
-    ee,
+    ee: Any,
     collection_id: str,
     band_name: str,
     *,
@@ -329,7 +382,22 @@ def _fetch_collection_value(
     scene_dt_utc: datetime,
     hours_window: int,
     reduce_scale_m: int,
-):
+) -> Optional[Dict[str, object]]:
+    """Fetch a MODIS collection value near a scene time.
+    Args:
+        ee: Initialized Earth Engine module or client.
+        collection_id: Earth Engine collection id.
+        band_name: Band name to query.
+        min_lon: Minimum longitude.
+        min_lat: Minimum latitude.
+        max_lon: Maximum longitude.
+        max_lat: Maximum latitude.
+        scene_dt_utc: Scene datetime in UTC.
+        hours_window: Search window in hours.
+        reduce_scale_m: Reduce-region scale in meters.
+    Returns:
+        Best collection match summary or None.
+    """
     start = (scene_dt_utc - timedelta(hours=hours_window)).strftime("%Y-%m-%dT%H:%M:%S")
     end = (scene_dt_utc + timedelta(hours=hours_window)).strftime("%Y-%m-%dT%H:%M:%S")
     ee_geom = ee.Geometry.Rectangle([min_lon, min_lat, max_lon, max_lat])
@@ -340,7 +408,13 @@ def _fetch_collection_value(
     if size == 0:
         return None
 
-    def _add_time_diff(img):
+    def _add_time_diff(img: Any) -> Any:
+        """Attach absolute time difference to an image.
+        Args:
+            img: Earth Engine image.
+        Returns:
+            Image with an abs_time_diff property.
+        """
         diff = ee.Number(img.get("system:time_start")).subtract(scene_ms).abs()
         return img.set("abs_time_diff", diff)
 
@@ -384,7 +458,7 @@ def _fetch_collection_value(
 
 
 def _fetch_first_available_band_value(
-    ee,
+    ee: Any,
     collection_id: str,
     band_candidates: List[str],
     *,
@@ -395,7 +469,22 @@ def _fetch_first_available_band_value(
     scene_dt_utc: datetime,
     hours_window: int,
     reduce_scale_m: int,
-):
+) -> Optional[Dict[str, object]]:
+    """Fetch the first available candidate band near a scene time.
+    Args:
+        ee: Initialized Earth Engine module or client.
+        collection_id: Earth Engine collection id.
+        band_candidates: Candidate band names in priority order.
+        min_lon: Minimum longitude.
+        min_lat: Minimum latitude.
+        max_lon: Maximum longitude.
+        max_lat: Maximum latitude.
+        scene_dt_utc: Scene datetime in UTC.
+        hours_window: Search window in hours.
+        reduce_scale_m: Reduce-region scale in meters.
+    Returns:
+        Best candidate-band summary or None.
+    """
     start = (scene_dt_utc - timedelta(hours=hours_window)).strftime("%Y-%m-%dT%H:%M:%S")
     end = (scene_dt_utc + timedelta(hours=hours_window)).strftime("%Y-%m-%dT%H:%M:%S")
     ee_geom = ee.Geometry.Rectangle([min_lon, min_lat, max_lon, max_lat])
@@ -406,7 +495,13 @@ def _fetch_first_available_band_value(
     if size == 0:
         return None
 
-    def _add_time_diff(img):
+    def _add_time_diff(img: Any) -> Any:
+        """Attach absolute time difference to an image.
+        Args:
+            img: Earth Engine image.
+        Returns:
+            Image with an abs_time_diff property.
+        """
         diff = ee.Number(img.get("system:time_start")).subtract(scene_ms).abs()
         return img.set("abs_time_diff", diff)
 
@@ -458,6 +553,12 @@ def _fetch_first_available_band_value(
 
 
 def _choose_best_candidate(candidates: List[Dict]) -> Optional[Dict]:
+    """Choose the closest valid MODIS candidate.
+    Args:
+        candidates: Candidate result dictionaries.
+    Returns:
+        Best candidate or None.
+    """
     valid = [
         candidate
         for candidate in candidates
@@ -472,6 +573,13 @@ def _choose_best_candidate(candidates: List[Dict]) -> Optional[Dict]:
 
 
 def _choose_modtran_atm_by_lat_month(lat_deg: float, month: int) -> str:
+    """Choose a MODTRAN atmosphere profile.
+    Args:
+        lat_deg: Scene centroid latitude in degrees.
+        month: Scene month number.
+    Returns:
+        Suggested MODTRAN atmosphere profile name.
+    """
     if abs(lat_deg) <= 23.5:
         return "Tropical Atmosphere"
     if month in (12, 1, 2):
@@ -480,6 +588,12 @@ def _choose_modtran_atm_by_lat_month(lat_deg: float, month: int) -> str:
 
 
 def _visibility_from_aod(aod: float) -> float:
+    """Estimate visibility from AOD.
+    Args:
+        aod: Aerosol optical depth.
+    Returns:
+        Approximate visibility in kilometers.
+    """
     if aod < 0.10:
         return 30.0
     if aod < 0.20:
@@ -498,7 +612,7 @@ def fetch_modis_water_vapor_for_bbox(
     min_lat: float,
     max_lon: float,
     max_lat: float,
-    ee=None,
+    ee: Any = None,
     ee_project: Optional[str] = None,
     authenticate: bool = False,
     env_file: Optional[str] = None,
@@ -514,7 +628,31 @@ def fetch_modis_water_vapor_for_bbox(
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> ModisWaterVaporEstimate:
-    """Fetch MODIS water vapor and companion AOD-derived FLAASH inputs for a bbox."""
+    """Fetch MODIS water vapor and AOD-derived inputs for a bbox.
+    Args:
+        scene_datetime_utc: Scene acquisition datetime in UTC.
+        min_lon: Minimum longitude.
+        min_lat: Minimum latitude.
+        max_lon: Maximum longitude.
+        max_lat: Maximum latitude.
+        ee: Optional initialized Earth Engine module or client.
+        ee_project: Optional Earth Engine project id.
+        authenticate: Whether to run Earth Engine authentication.
+        env_file: Optional env file containing Earth Engine settings.
+        hours_window: Search window in hours around the scene time.
+        terra_collection: Terra collection id.
+        aqua_collection: Aqua collection id.
+        band_name: Water vapor band name.
+        aod_band_candidates: Candidate AOD band names.
+        aod_scale_factor: Scale factor for AOD values.
+        modis_scale_factor: Scale factor for MODIS water vapor values.
+        modtran_baseline_water_vapor: Baseline water vapor used to derive the FLAASH preset.
+        reduce_scale_m: Reduce-region scale in meters.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        MODIS atmosphere lookup result.
+    """
     log(
         "Querying MODIS atmosphere data",
         enabled=log_to_console,

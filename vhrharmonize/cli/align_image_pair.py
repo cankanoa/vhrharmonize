@@ -10,7 +10,7 @@ from typing import Optional
 from vhrharmonize.preprocess.alignment import align_image_pair
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
     """Build CLI parser for pairwise image alignment."""
     parser = argparse.ArgumentParser(
         description=(
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entrypoint for tile-aware pairwise image alignment."""
-    parser = build_parser()
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.moving_image):

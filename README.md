@@ -10,20 +10,18 @@
 
 ## Overview
 
-`vhrharmonize` is an open-source Python library and CLI suite for preprocessing very high resolution (VHR) satellite imagery into analysis-ready products.
-
-Current tested/supported end-to-end workflow: **WorldView**.  
-Additional providers and sensors (for example, Planet) are being added.
+`vhrharmonize` is an open-source Python library and CLI suite for preprocessing very high resolution (VHR) satellite imagery into analysis-ready products. Current supported end-to-end workflows: **WorldView-3 B1 imagery**. Additional providers and sensors (for example, Planet) will be added.
 
 ---
 
 ## Features
 
-- Atmospheric correction workflows (Py6S default, FLAASH optional backend)
-- RPC orthorectification
-- Pansharpening
-- Optional cloud masking with OmniCloudMask
-- Tile utilities and tile-aware pairwise alignment (elastix)
+- Atmospheric correction workflows ([Py6S](https://github.com/robintw/Py6S) default, [FLAASH](https://github.com/envi-idl/envipyengine) optional backend)
+- RPC orthorectification with [Orthority](https://github.com/leftfield-geospatial/orthority)
+- Pansharpening with [Orthority](https://github.com/leftfield-geospatial/orthority)
+- Optional cloud masking with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
+- Pairwise alignment ([coregix](https://github.com/iosefa/coregix))
+- Relative Radiometric Normalization with spectralmatch
 - WorldView scene discovery, IMD parsing, and standardized metadata mapping
 - CLI and library-first interfaces
 
@@ -31,57 +29,30 @@ Additional providers and sensors (for example, Planet) are being added.
 
 ## Installation
 
-### 1. Requirements
-
-- Python `>=3.9`
-- GDAL-compatible environment
-- `6S` executable for Py6S workflows (default)
-- ENVI Task Engine only for FLAASH workflows
-
-### 2. Create environment (example)
+See [getting-started/installation.md](getting-started/installation.md) for detailed installation instructions or simply install like this: 
 
 ```bash
-conda create -n vhrharmonize python=3.11 -c conda-forge
+conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
 conda activate vhrharmonize
+pip install vhrharmonize[default]
 ```
-
-### 3. Install package
-
-```bash
-git clone https://github.com/cankanoa/vhrharmonize.git
-cd vhrharmonize
-pip install -e .
-```
-
-Optional extras by step:
-
-```bash
-pip install -e ".[fetch-atmosphere]"            # requests
-pip install -e ".[cloud]"                       # omnicloudmask + scipy + gdal
-pip install -e ".[py6s]"                        # Py6S + tqdm
-pip install -e ".[flaash]"                      # envipyengine + gdal + tqdm
-pip install -e ".[orthorectification]"          # orthority + gdal + pyproj
-pip install -e ".[pansharpen]"                  # orthority
-pip install -e ".[align]"                       # itk-elastix
-pip install -e ".[radiometric-normalization]"   # spectralmatch
-pip install -e ".[docs]"
-pip install -e ".[all]"
-```
-
-For conda users, install 6S separately when using Py6S:
-
-```bash
-mamba install -n vhrharmonize -c conda-forge py6s sixs
-```
-
 ## Getting Started
+For an overview of using the library see [getting-started/quickstart.md](getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [configs/worldview.example.yml](configs/worldview.example.yml) and running:
 
-For usage docs:
+```bash
+vhr-worldview --config-yaml worldview.example.yml
+```
+Or pass in arguments directly from the command line:
 
-- `docs/getting-started/quickstart.md`
-- `docs/cli/overview.md`
+```bash
+vhr-worldview \
+  --input-file-glob "/data/worldview/**/*.TIF" \
+  --output-dir ../../processed \
+  --run-alignment \
+  --alignment-fixed-image /data/reference.tif
+```
 
-Primary CLI commands:
+For detailed arguments use:
 
 ```bash
 vhr-worldview --help
@@ -95,20 +66,9 @@ vhr-radiometric-normalization --help
 vhr-py6s --help
 ```
 
-Docs site:
-
-```bash
-python -m mkdocs serve -f docs/mkdocs.yml
-```
-
 ## Contributing
 
-We welcome all contributions! To get started:
-1. Fork the repository and create a new feature branch.
-2. Make your changes.
-3. Open a Pull Request against the main repository.
-
-We appreciate any feedback, suggestions, or pull requests to improve this project.
+We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See [getting-started/contributing.md](getting-started/contributing.md).
 
 ---
 

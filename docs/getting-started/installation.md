@@ -1,90 +1,71 @@
 # Installation
 
-## System Requirements
+## Install with PyPI
 
-- Python `>=3.9`
-- A GDAL-compatible environment for raster-heavy steps
-- `6S` executable only when using Py6S workflows
-- ENVI Task Engine only when using FLAASH workflows
-
-The base install now keeps only widely shared Python dependencies. Step-specific
-packages are installed through extras.
-
-Recommended conda setup for Py6S + 6S:
+1. Create and activate a conda environment.
 
 ```bash
-mamba install -n vhrharmonize -c conda-forge py6s sixs
+conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
+conda activate vhrharmonize
 ```
 
-## Install in Editable Mode
+2. Install the package with default dependencies.
+
+```bash
+pip install vhrharmonize[default]
+```
+
+3. Install specific dependencies as needed.
+
+```bash
+pip install "vhrharmonize[cloud]"
+pip install "vhrharmonize[py6s]"
+pip install "vhrharmonize[flaash]"
+pip install "vhrharmonize[orthorectification]"
+pip install "vhrharmonize[pansharpen]"
+pip install "vhrharmonize[align]"
+pip install "vhrharmonize[radiometric-normalization]"
+pip install "vhrharmonize[docs]"
+pip install "vhrharmonize[all]"
+```
+
+## Install from source
+
+1. Create and activate a conda environment.
+
+```bash
+conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
+conda activate vhrharmonize
+```
+
+2. Clone the repository.
 
 ```bash
 git clone https://github.com/cankanoa/vhrharmonize.git
 cd vhrharmonize
-pip install -e .
 ```
 
-With cloud masking extras:
+3. Install the default packages.
+
+```bash
+pip install -e '.[default]'
+```
+
+4. Install specific dependencies as needed.
 
 ```bash
 pip install -e ".[cloud]"
-```
-
-With external atmosphere fetch extras:
-
-```bash
-pip install -e ".[fetch-atmosphere]"
-```
-
-With Py6S atmospheric correction extras:
-
-```bash
 pip install -e ".[py6s]"
-```
-
-With FLAASH extras:
-
-```bash
 pip install -e ".[flaash]"
-```
-
-With orthorectification extras:
-
-```bash
 pip install -e ".[orthorectification]"
-```
-
-With pansharpening extras:
-
-```bash
 pip install -e ".[pansharpen]"
-```
-
-With radiometric normalization extras:
-
-```bash
-pip install -e ".[radiometric-normalization]"
-```
-
-With `coregix` alignment extras:
-
-```bash
 pip install -e ".[align]"
-```
-
-With everything:
-
-```bash
+pip install -e ".[radiometric-normalization]"
+pip install -e ".[docs]"
 pip install -e ".[all]"
 ```
 
-With docs extras:
-
-```bash
-pip install -e ".[docs]"
-```
-
-## Verify CLI Entry Points
+5. Verify the entry points if desired.
 
 ```bash
 vhr-worldview --help
@@ -96,18 +77,4 @@ vhr-align-image-pair --help
 vhr-orthorectification --help
 vhr-radiometric-normalization --help
 vhr-py6s --help
-```
-
-## Build Docs Locally
-
-From repository root:
-
-```bash
-mkdocs serve -f docs/mkdocs.yml
-```
-
-Or build static output:
-
-```bash
-mkdocs build -f docs/mkdocs.yml
 ```

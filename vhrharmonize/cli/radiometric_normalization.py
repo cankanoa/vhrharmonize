@@ -11,6 +11,12 @@ from vhrharmonize.preprocess.radiometric_normalization import radiometric_normal
 
 
 def _coerce_unknown_arg_value(raw_value: str) -> Any:
+    """Coerce an unknown CLI value into a Python scalar.
+    Args:
+        raw_value: Raw CLI token value.
+    Returns:
+        Parsed Python value.
+    """
     lowered = raw_value.lower()
     if lowered == "true":
         return True
@@ -27,6 +33,13 @@ def _coerce_unknown_arg_value(raw_value: str) -> Any:
 
 
 def _apply_unknown_match_args(args: argparse.Namespace, unknown_args: list[str]) -> None:
+    """Apply passthrough SpectralMatch CLI arguments.
+    Args:
+        args: Parsed CLI namespace to mutate.
+        unknown_args: Unknown CLI tokens to interpret as match_* arguments.
+    Returns:
+        None.
+    """
     idx = 0
     while idx < len(unknown_args):
         token = unknown_args[idx]
@@ -54,6 +67,13 @@ def _apply_unknown_match_args(args: argparse.Namespace, unknown_args: list[str])
 
 
 def _collect_prefixed_kwargs(namespace: argparse.Namespace, prefix: str) -> dict[str, Any]:
+    """Collect namespace values with a shared prefix.
+    Args:
+        namespace: Parsed CLI namespace.
+        prefix: Prefix to strip from matching keys.
+    Returns:
+        Collected keyword arguments.
+    """
     collected: dict[str, Any] = {}
     for key, value in vars(namespace).items():
         if not key.startswith(prefix) or value is None:
@@ -65,6 +85,12 @@ def _collect_prefixed_kwargs(namespace: argparse.Namespace, prefix: str) -> dict
 
 
 def _json_dict(value: str | None) -> dict[str, Any]:
+    """Parse an optional JSON object string.
+    Args:
+        value: Optional JSON object string.
+    Returns:
+        Parsed JSON dictionary.
+    """
     if not value:
         return {}
     parsed = json.loads(value)
@@ -73,7 +99,13 @@ def _json_dict(value: str | None) -> dict[str, Any]:
     return parsed
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the radiometric normalization CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(description="Run radiometric normalization via SpectralMatch.")
     parser.add_argument("--input-image", action="append", required=True, help="Input raster. Repeat for multiple images.")
     parser.add_argument(
@@ -100,8 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
-    parser = build_parser()
+def main(argv: list[str] | None = None) -> int:
+    """Run the radiometric normalization CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
+    parser = _build_parser()
     args, unknown_args = parser.parse_known_args(argv)
     _apply_unknown_match_args(args, unknown_args)
 

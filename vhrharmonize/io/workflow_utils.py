@@ -19,14 +19,26 @@ class StepOutputPlan:
 
 
 def resolve_relative_to_input(path: str, input_folder: str) -> str:
-    """Resolve relative paths against an input folder while preserving absolute paths."""
+    """Resolve a path against an input folder.
+    Args:
+        path: Candidate relative or absolute path.
+        input_folder: Input folder used for relative resolution.
+    Returns:
+        Resolved absolute or normalized path.
+    """
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(input_folder, path))
 
 
 def resolve_temp_dir(configured_dir: Optional[str], *, input_folder: str) -> str:
-    """Resolve a workflow temp directory, creating a real temp folder when unset."""
+    """Resolve a workflow temp directory.
+    Args:
+        configured_dir: Configured temp directory or None.
+        input_folder: Input folder used for relative resolution.
+    Returns:
+        Resolved temp directory path.
+    """
     if configured_dir in (None, ""):
         return tempfile.mkdtemp(prefix="vhrharmonize_")
     resolved_dir = resolve_relative_to_input(str(configured_dir), input_folder)
@@ -40,7 +52,14 @@ def resolve_output_dir(
     temp_dir: str,
     step_name: str,
 ) -> str:
-    """Resolve and create an output directory for a workflow step."""
+    """Resolve a workflow output directory.
+    Args:
+        configured_dir: Configured output directory or None.
+        temp_dir: Temp directory used when no explicit output directory is provided.
+        step_name: Workflow step name.
+    Returns:
+        Resolved output directory path.
+    """
     output_dir = (
         os.path.join(temp_dir, step_name)
         if configured_dir in (None, "")
@@ -57,7 +76,15 @@ def build_output_path_from_input(
     suffix: str = "",
     extension: Optional[str] = None,
 ) -> str:
-    """Build an output path from an input file basename."""
+    """Build an output path from an input basename.
+    Args:
+        input_path: Source file path.
+        output_dir: Output directory.
+        suffix: Suffix to append before the extension.
+        extension: Optional extension override.
+    Returns:
+        Resolved output file path.
+    """
     basename = os.path.splitext(os.path.basename(input_path))[0]
     ext = extension if extension is not None else os.path.splitext(input_path)[1]
     return os.path.join(output_dir, f"{basename}{suffix}{ext}")
@@ -71,7 +98,16 @@ def plan_step_outputs(
     extension: Optional[str] = None,
     skip_existing: bool = False,
 ) -> StepOutputPlan:
-    """Resolve output paths and determine which inputs still need processing."""
+    """Plan step outputs and pending work.
+    Args:
+        input_paths: Input file paths for the step.
+        output_dir: Output directory for generated files.
+        suffix: Suffix to append before the extension.
+        extension: Optional extension override.
+        skip_existing: Whether to exclude already existing outputs from pending work.
+    Returns:
+        Planned output paths and pending work details.
+    """
     normalized_input_paths = [str(path) for path in input_paths]
     output_paths = [
         build_output_path_from_input(path, output_dir, suffix=suffix, extension=extension)

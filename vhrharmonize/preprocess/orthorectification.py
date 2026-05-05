@@ -2,7 +2,7 @@ import json
 import os
 from tempfile import NamedTemporaryFile
 from osgeo import gdal
-from typing import Union, Tuple
+from typing import Any, Optional, Tuple, Union
 
 import orthority as oty
 import pyproj
@@ -13,8 +13,14 @@ from vhrharmonize.preprocess.helpers import log
 def resolve_output_resolution_for_crs(
     output_epsg: int,
     product_resolution: Union[float, None],
-):
-    """Return a safe output resolution for the requested target CRS."""
+) -> Optional[float]:
+    """Return a safe output resolution for the target CRS.
+    Args:
+        output_epsg: Target output EPSG code.
+        product_resolution: Source product resolution.
+    Returns:
+        Safe output resolution or None.
+    """
     if product_resolution is None:
         return None
     crs = pyproj.CRS.from_epsg(int(output_epsg))
@@ -24,18 +30,32 @@ def resolve_output_resolution_for_crs(
 
 
 def gcp_refined_rpc_orthorectification(
-    input_image_path,
-    output_image_path,
-    dem_image_path,
-    output_epsg,
-    gcp_geojson_file_path=None,
-    output_nodata_value=None,
-    dtype=None,
-    output_resolution: Union[float, Tuple[float, float]]=None,
+    input_image_path: str,
+    output_image_path: str,
+    dem_image_path: str,
+    output_epsg: int,
+    gcp_geojson_file_path: Optional[str] = None,
+    output_nodata_value: Optional[float] = None,
+    dtype: Optional[str] = None,
+    output_resolution: Union[float, Tuple[float, float], None] = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
-    ):
-    """Orthorectify an image using RPC metadata, with optional GCP-based RPC refinement."""
+    ) -> None:
+    """Orthorectify an image using RPC metadata.
+    Args:
+        input_image_path: Input raster path.
+        output_image_path: Output orthorectified raster path.
+        dem_image_path: DEM raster path.
+        output_epsg: Target output EPSG code.
+        gcp_geojson_file_path: Optional RPC refinement GeoJSON path.
+        output_nodata_value: Optional output nodata value.
+        dtype: Optional GDAL output dtype name.
+        output_resolution: Optional output resolution scalar or x/y tuple.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        None.
+    """
     log(
         f"Running orthorectification input={os.path.basename(input_image_path)} dem={os.path.basename(dem_image_path)} epsg={output_epsg}",
         enabled=log_to_console,
@@ -168,22 +188,19 @@ def gcp_refined_rpc_orthorectification(
 
 
 def qgis_gcps_to_csv(
-    input_gcp_path,
-    output_epsg=None,
+    input_gcp_path: str,
+    output_epsg: Optional[int] = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
-    ):
-
-    """
-    Convert QGIS GCP format to GDAL-compatible CSV format, with optional map coordinate transformation.
-
-    Parameters:
-        input_gcp_path (str): Path to the QGIS GCP file.
-        output_epsg (int or str, optional): EPSG code to transform map coordinates to.
-                                            If None, map coordinates are not transformed.
-
+    ) -> str:
+    """Convert QGIS GCP text to GDAL CSV text.
+    Args:
+        input_gcp_path: QGIS GCP text file path.
+        output_epsg: Optional EPSG code used to transform map coordinates.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
     Returns:
-        str: CSV text containing GDAL-compatible GCPs.
+        GDAL-compatible CSV text.
     """
     output_csv_text = "mapX,mapY,sourceX,sourceY,z\n"
 
@@ -244,11 +261,18 @@ def qgis_gcps_to_csv(
 
 
 def geo_to_image_coords(
-    dataset,
-    x,
-    y
-    ):
-    """Transform map coordinates into image pixel coordinates using dataset GCPs."""
+    dataset: Any,
+    x: float,
+    y: float
+    ) -> tuple[int, tuple[float, float, float]]:
+    """Transform map coordinates into image coordinates.
+    Args:
+        dataset: GDAL dataset with GCPs.
+        x: Input x coordinate.
+        y: Input y coordinate.
+    Returns:
+        Success flag and transformed pixel coordinates.
+    """
 
     transform_options = ["METHOD=GCP_POLYNOMIAL"] # "METHOD=GCP_TPS" or "METHOD=GCP_POLYNOMIAL"
 
@@ -262,16 +286,28 @@ def geo_to_image_coords(
 
 
 def qgis_gcps_to_geojson(
-    input_image_path,
-    qgis_gcp_file_path,
-    file_name,
-    dem_file_path,
-    output_geojson_path,
-    force_positive_pixel_values=False,
+    input_image_path: str,
+    qgis_gcp_file_path: str,
+    file_name: str,
+    dem_file_path: str,
+    output_geojson_path: str,
+    force_positive_pixel_values: bool = False,
     log_to_console: bool = False,
     scene_basename: str | None = None,
-    ):
-    """Convert a QGIS GCP text file into Orthority-compatible GeoJSON control points."""
+    ) -> None:
+    """Convert QGIS GCP text into Orthority GeoJSON control points.
+    Args:
+        input_image_path: Input raster path.
+        qgis_gcp_file_path: QGIS GCP text file path.
+        file_name: File name stored in control point properties.
+        dem_file_path: DEM raster path used to sample elevations.
+        output_geojson_path: Output GeoJSON path.
+        force_positive_pixel_values: Whether to force positive pixel coordinates.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        None.
+    """
 
     geojson = {
         "type": "FeatureCollection",
@@ -285,7 +321,14 @@ def qgis_gcps_to_geojson(
     dem_band = dem_dataset.GetRasterBand(1)
     dem_transform = dem_dataset.GetGeoTransform()
 
-    def get_elevation(lon, lat):
+    def get_elevation(lon: float, lat: float) -> float:
+        """Sample DEM elevation at a lon-lat point.
+        Args:
+            lon: Longitude coordinate.
+            lat: Latitude coordinate.
+        Returns:
+            Sampled elevation value.
+        """
         # Convert lon/lat into pixel coords within the DEM
         x_pixel = int((lon - dem_transform[0]) / dem_transform[1])
         y_pixel = int((lat - dem_transform[3]) / dem_transform[5])

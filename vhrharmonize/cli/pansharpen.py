@@ -4,10 +4,16 @@
 import argparse
 import os
 import sys
+from typing import Optional
 
 
-def main(argv=None) -> int:
-    """CLI entrypoint to pansharpen existing orthorectified MS and PAN rasters."""
+def main(argv: Optional[list[str]] = None) -> int:
+    """Run the standalone pansharpen CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
     parser = argparse.ArgumentParser(
         description="Run pansharpening from existing orthorectified MS/PAN rasters.",
     )

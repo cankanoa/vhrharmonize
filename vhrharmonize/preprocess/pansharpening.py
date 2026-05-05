@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import numpy as np
 import orthority as oty
@@ -8,14 +9,24 @@ from vhrharmonize.preprocess.helpers import log
 
 
 def pansharpen_image(
-    input_low_resolution_path,
-    input_high_resolution_path,
-    output_image_path,
-    change_nodata_value = None,
+    input_low_resolution_path: str,
+    input_high_resolution_path: str,
+    output_image_path: str,
+    change_nodata_value: Optional[float] = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
-    ):
-    """Pansharpen a multispectral raster with a higher-resolution panchromatic raster."""
+    ) -> None:
+    """Pansharpen a multispectral raster.
+    Args:
+        input_low_resolution_path: Input multispectral raster path.
+        input_high_resolution_path: Input panchromatic raster path.
+        output_image_path: Output pansharpened raster path.
+        change_nodata_value: Optional nodata value to apply after pansharpening.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        None.
+    """
     log(
         f"Running pansharpen mul={os.path.basename(input_low_resolution_path)} pan={os.path.basename(input_high_resolution_path)}",
         enabled=log_to_console,
@@ -42,21 +53,22 @@ def pansharpen_image(
 
 
 def _change_nodata_value(
-    input_image_path,
-    new_nodata_value,
-    old_nodata,
+    input_image_path: str,
+    new_nodata_value: float,
+    old_nodata: float,
     *,
     log_to_console: bool = False,
     scene_basename: str | None = None,
-    ):
-
-    """
-    Replaces all pixels equal to `old_nodata` with `new_nodata_value` in-place.
-    Uses block-wise IO to avoid loading very large rasters into memory.
-
-    :param input_image_path: Path to the original raster file.
-    :param new_nodata_value: Value to use as the new NoData.
-    :param old_nodata: The pixel value currently used as NoData.
+    ) -> None:
+    """Replace nodata values in-place.
+    Args:
+        input_image_path: Raster path to update in-place.
+        new_nodata_value: New nodata value to assign.
+        old_nodata: Old nodata value to replace.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        None.
     """
     replaced_any = False
     with rasterio.open(input_image_path, "r+") as src:

@@ -77,6 +77,13 @@ class SceneWorkflowState:
 
 
 def _require_scene_image(scene: WorldViewScene, role: str) -> WorldViewImage:
+    """Return a required scene image.
+    Args:
+        scene: Scene to query.
+        role: Requested image role.
+    Returns:
+        Matching scene image.
+    """
     image = scene.get_image(role)
     if image is None:
         raise ValueError(f"WorldView scene is missing required {role} image: {scene.scene_id}_{scene.catalog_id}")
@@ -84,6 +91,14 @@ def _require_scene_image(scene: WorldViewScene, role: str) -> WorldViewImage:
 
 
 def _get_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: str) -> str:
+    """Return a stored scene step path.
+    Args:
+        scene: Scene to query.
+        role: Requested image role.
+        step_name: Workflow step name.
+    Returns:
+        Stored step output path.
+    """
     image = _require_scene_image(scene, role)
     if step_name == "raw":
         return image.tif_file
@@ -97,11 +112,26 @@ def _get_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: 
 
 
 def _set_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: str, output_path: str) -> None:
+    """Store a scene step path.
+    Args:
+        scene: Scene to update.
+        role: Image role to update.
+        step_name: Workflow step name.
+        output_path: Output path to store.
+    Returns:
+        None.
+    """
     image = _require_scene_image(scene, role)
     image.step_file_paths[step_name] = output_path
 
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
+    """Normalize optional basename filters.
+    Args:
+        raw_values: Repeated or comma-delimited basename filters.
+    Returns:
+        Flattened basename filter list.
+    """
     if not raw_values:
         return []
     parsed: List[str] = []
@@ -114,6 +144,12 @@ def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
 
 
 def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, float]:
+    """Load a scene footprint bounding box in WGS84.
+    Args:
+        shp_path: Scene footprint shapefile path.
+    Returns:
+        Bounding box as min lon, min lat, max lon, max lat.
+    """
     gdf = gpd.read_file(shp_path)
     if gdf.empty:
         raise ValueError(f"Empty scene footprint shapefile: {shp_path}")
@@ -125,6 +161,12 @@ def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, floa
 
 
 def _parse_int_csv(raw_values: str) -> List[int]:
+    """Parse comma-delimited integers.
+    Args:
+        raw_values: Comma-delimited integer string.
+    Returns:
+        Parsed integer values.
+    """
     parsed = []
     for value in raw_values.split(","):
         value = value.strip()
@@ -134,6 +176,12 @@ def _parse_int_csv(raw_values: str) -> List[int]:
 
 
 def _parse_json_dict(raw_json: Optional[object]) -> Dict:
+    """Parse an optional JSON object value.
+    Args:
+        raw_json: Optional JSON string or mapping.
+    Returns:
+        Parsed dictionary value.
+    """
     if raw_json is None or raw_json == "":
         return {}
     if isinstance(raw_json, dict):
@@ -150,8 +198,16 @@ def _collect_prefixed_kwargs(
     namespace: argparse.Namespace,
     prefix: str,
     *,
-    transform_key=None,
+    transform_key: object = None,
 ) -> Dict:
+    """Collect namespace values with a shared prefix.
+    Args:
+        namespace: Parsed CLI namespace.
+        prefix: Prefix to strip from matching keys.
+        transform_key: Optional callable used to transform stripped keys.
+    Returns:
+        Collected keyword arguments.
+    """
     collected = {}
     for key, value in vars(namespace).items():
         if not key.startswith(prefix) or value is None:
@@ -166,12 +222,24 @@ def _collect_prefixed_kwargs(
 
 
 def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
+    """Build radiometric normalization keyword arguments.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Radiometric normalization keyword arguments.
+    """
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
     radiometric_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
     return radiometric_kwargs
 
 
-def _coerce_unknown_arg_value(raw_value: str):
+def _coerce_unknown_arg_value(raw_value: str) -> object:
+    """Coerce an unknown CLI value into a Python scalar.
+    Args:
+        raw_value: Raw CLI token value.
+    Returns:
+        Parsed Python value.
+    """
     lowered = raw_value.lower()
     if lowered == "true":
         return True
@@ -188,6 +256,13 @@ def _coerce_unknown_arg_value(raw_value: str):
 
 
 def _apply_unknown_prefixed_args(args: argparse.Namespace, unknown_args: List[str]) -> None:
+    """Apply passthrough CLI arguments to the namespace.
+    Args:
+        args: Parsed CLI namespace to mutate.
+        unknown_args: Unknown CLI tokens to interpret.
+    Returns:
+        None.
+    """
     idx = 0
     while idx < len(unknown_args):
         token = unknown_args[idx]
@@ -215,9 +290,22 @@ def _apply_unknown_prefixed_args(args: argparse.Namespace, unknown_args: List[st
 
 
 def _load_worldview_yaml_config(config_yaml_path: str) -> Dict:
+    """Load and flatten a WorldView workflow config.
+    Args:
+        config_yaml_path: YAML config file path.
+    Returns:
+        Flattened config dictionary.
+    """
     loaded = load_yaml_config(config_yaml_path)
 
     def _flatten_mapping(mapping: Dict, out: Dict) -> None:
+        """Flatten nested config mappings.
+        Args:
+            mapping: Mapping to flatten.
+            out: Output mapping to populate.
+        Returns:
+            None.
+        """
         for key, value in mapping.items():
             normalized_key = str(key).replace("-", "_")
             if isinstance(value, dict):
@@ -235,6 +323,12 @@ def _load_worldview_yaml_config(config_yaml_path: str) -> Dict:
 
 
 def _normalize_config_defaults(config_defaults: Dict) -> Dict:
+    """Normalize YAML-derived workflow defaults.
+    Args:
+        config_defaults: Raw config defaults mapping.
+    Returns:
+        Normalized config defaults mapping.
+    """
     normalized = dict(config_defaults)
     for list_key in ("input_file_glob", "input_dir", "filter_basename"):
         if list_key in normalized and isinstance(normalized[list_key], str):
@@ -245,6 +339,12 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
 
 
 def _resolve_fetch_atmosphere_source(args: argparse.Namespace) -> str:
+    """Resolve the active atmosphere source.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Atmosphere source name.
+    """
     if args.fetch_atmosphere_source != "auto":
         return args.fetch_atmosphere_source
     if args.atmospheric_method == "flaash":
@@ -253,6 +353,13 @@ def _resolve_fetch_atmosphere_source(args: argparse.Namespace) -> str:
 
 
 def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Namespace) -> Optional[str]:
+    """Resolve the DEM path for a scene.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Resolved DEM path or None.
+    """
     if state.dem_file_path:
         return state.dem_file_path
     if args.dem_file_path in (None, ""):
@@ -307,12 +414,25 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
 
 
 def _write_json(path: str, payload: Dict) -> None:
+    """Write a JSON file.
+    Args:
+        path: Output JSON path.
+        payload: JSON-serializable payload.
+    Returns:
+        None.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
 
 
 def _read_json(path: str) -> Dict:
+    """Read a JSON object file.
+    Args:
+        path: Input JSON path.
+    Returns:
+        Parsed JSON dictionary.
+    """
     with open(path, "r", encoding="utf-8") as handle:
         loaded = json.load(handle)
     if not isinstance(loaded, dict):
@@ -321,6 +441,12 @@ def _read_json(path: str) -> Dict:
 
 
 def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
+    """Collect tif files from recursive globs.
+    Args:
+        input_file_globs: Recursive glob patterns to scan.
+    Returns:
+        Unique absolute tif paths.
+    """
     tif_files: List[str] = []
     for pattern in input_file_globs:
         matches = glob.glob(pattern, recursive=True)
@@ -333,6 +459,12 @@ def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
 
 
 def _resolve_concurrent_processing(value: object) -> int:
+    """Resolve the scene concurrency setting.
+    Args:
+        value: Raw concurrency config value.
+    Returns:
+        Resolved worker count.
+    """
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized == "num_cpu":
@@ -352,10 +484,22 @@ def _resolve_concurrent_processing(value: object) -> int:
 
 
 def _short_path(path: str) -> str:
+    """Return a shortened display path.
+    Args:
+        path: Full file path.
+    Returns:
+        Path basename.
+    """
     return os.path.basename(path)
 
 
 def _short_paths(paths: List[str]) -> str:
+    """Join shortened display paths.
+    Args:
+        paths: Full file paths.
+    Returns:
+        Comma-delimited basenames.
+    """
     return ", ".join(_short_path(path) for path in paths)
 
 
@@ -368,6 +512,17 @@ def _log_step_plan(
     enabled: bool = False,
     scene_basename: str | None = None,
 ) -> None:
+    """Log a concise step plan message.
+    Args:
+        step: Step name for the log prefix.
+        inputs: Optional input paths.
+        outputs: Optional output paths.
+        message: Optional human-readable message.
+        enabled: Whether logging is enabled.
+        scene_basename: Optional scene basename for the log prefix.
+    Returns:
+        None.
+    """
     parts: List[str] = []
     if message:
         parts.append(message)
@@ -385,6 +540,15 @@ def _resolve_step_save_dir(
     output_root: str,
     relative_base_folder: str,
 ) -> str:
+    """Resolve a configured step save directory.
+    Args:
+        save_value: Step save target configuration value.
+        temp_root: Temp root directory.
+        output_root: Output root directory.
+        relative_base_folder: Base folder used for relative resolution.
+    Returns:
+        Resolved step save directory.
+    """
     save_mode = (save_value or "$temp").strip()
     if save_mode == "$temp":
         resolved_dir = temp_root
@@ -405,11 +569,23 @@ def _resolve_step_save_dir(
 
 
 def _is_temp_save_value(save_value: Optional[str]) -> bool:
+    """Return whether a save target points into temp storage.
+    Args:
+        save_value: Step save target configuration value.
+    Returns:
+        True when the save target uses the temp root.
+    """
     normalized = (save_value or "$temp").strip()
     return normalized == "$temp" or normalized.startswith("$temp/")
 
 
 def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
+    """Return the last enabled raster step.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Last enabled raster step name.
+    """
     if args.run_alignment:
         return "alignment"
     if args.run_cloud_mask:
@@ -424,10 +600,23 @@ def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
 
 
 def _step_outputs_exist(output_paths: List[str]) -> bool:
+    """Return whether all output paths exist.
+    Args:
+        output_paths: Output file paths to check.
+    Returns:
+        True when every output path exists.
+    """
     return bool(output_paths) and all(os.path.exists(path) for path in output_paths)
 
 
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
+    """Resolve per-scene step directories.
+    Args:
+        args: Parsed CLI arguments.
+        scene: Scene being prepared.
+    Returns:
+        Mapping of step names to resolved directories.
+    """
     mul_image = _require_scene_image(scene, "mul")
     relative_output_base = os.path.dirname(mul_image.tif_file)
     default_output_root = os.path.normpath(os.path.join(relative_output_base, "..", "Processed"))
@@ -501,10 +690,23 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
 
 
 def _get_atmospheric_extension(args: argparse.Namespace) -> str:
+    """Return the atmospheric output extension.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Atmospheric output file extension.
+    """
     return ".dat" if args.atmospheric_method == "flaash" else ".tif"
 
 
 def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> Dict[str, List[str]]:
+    """Plan expected outputs for all enabled scene steps.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Mapping of step names to expected output paths.
+    """
     mul_image = _require_scene_image(state.scene, "mul")
     expected_outputs: Dict[str, List[str]] = {
         "raw": [mul_image.tif_file],
@@ -585,6 +787,13 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
 
 
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
+    """Initialize workflow state for a scene.
+    Args:
+        scene: Scene to initialize.
+        args: Parsed CLI arguments.
+    Returns:
+        Initialized scene workflow state.
+    """
     mul_image = _require_scene_image(scene, "mul")
     pan_image = _require_scene_image(scene, "pan")
     if mul_image.standardized_metadata is None:
@@ -610,6 +819,15 @@ def _register_step_outputs(
     *,
     image_role: str = "mul",
 ) -> List[str]:
+    """Register step outputs on the scene state.
+    Args:
+        state: Scene workflow state to update.
+        step_name: Workflow step name.
+        output_paths: Step output paths to register.
+        image_role: Image role whose stored step path should be updated.
+    Returns:
+        Registered output paths.
+    """
     state.scene.step_outputs[step_name] = list(output_paths)
     if output_paths:
         _set_worldview_scene_step_path(state.scene, image_role, step_name, output_paths[0])
@@ -617,6 +835,13 @@ def _register_step_outputs(
 
 
 def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: argparse.Namespace) -> None:
+    """Mark a scene as complete from existing outputs.
+    Args:
+        state: Scene workflow state to update.
+        args: Parsed CLI arguments.
+    Returns:
+        None.
+    """
     expected_outputs = _get_expected_scene_step_outputs(state, args)
     last_step = _get_last_enabled_raster_step(args)
     existing_output = expected_outputs[last_step][0]
@@ -627,6 +852,13 @@ def _mark_scene_complete_from_existing_output(state: SceneWorkflowState, args: a
 
 
 def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Return required outputs for scene-level skipping.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Required non-temp output paths.
+    """
     expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs: List[str] = []
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
@@ -647,7 +879,13 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
     return required_outputs
 
 
-def _normalize_group_by_basename_spec(raw_spec):
+def _normalize_group_by_basename_spec(raw_spec: object) -> object:
+    """Normalize a radiometric grouping specification.
+    Args:
+        raw_spec: Raw grouping specification value.
+    Returns:
+        Normalized grouping specification.
+    """
     if raw_spec in (None, "", []):
         return None
     if isinstance(raw_spec, str):
@@ -661,6 +899,13 @@ def _normalize_group_by_basename_spec(raw_spec):
 
 
 def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
+    """Match radiometric input patterns against available paths.
+    Args:
+        pattern: Glob-like pattern to match.
+        available_paths: Available scene output paths.
+    Returns:
+        Matching scene output paths.
+    """
     matches = [
         path
         for path in available_paths
@@ -672,6 +917,12 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
 
 
 def _dedupe_paths(paths: List[str]) -> List[str]:
+    """Remove duplicate paths while preserving order.
+    Args:
+        paths: Candidate file paths.
+    Returns:
+        Deduplicated file paths.
+    """
     seen = set()
     deduped: List[str] = []
     for path in paths:
@@ -689,6 +940,15 @@ def _resolve_radiometric_group_output_path(
     group_label: str,
     is_root: bool,
 ) -> str:
+    """Resolve a radiometric group output path.
+    Args:
+        args: Parsed CLI arguments.
+        output_dir: Base output directory for radiometric products.
+        group_label: Group label used in default output naming.
+        is_root: Whether this is the root radiometric group.
+    Returns:
+        Resolved radiometric group output path.
+    """
     configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
     if configured_output is None and is_root:
         configured_output = args.radiometric_normalization_output
@@ -702,7 +962,7 @@ def _resolve_radiometric_group_output_path(
 
 
 def _run_radiometric_group(
-    group_spec,
+    group_spec: object,
     *,
     available_paths: List[str],
     args: argparse.Namespace,
@@ -710,6 +970,17 @@ def _run_radiometric_group(
     temp_root: str,
     label_parts: List[int],
 ) -> str | List[str]:
+    """Run or resolve a radiometric group.
+    Args:
+        group_spec: Group specification string or nested list.
+        available_paths: Available scene output paths.
+        args: Parsed CLI arguments.
+        output_dir: Radiometric output directory.
+        temp_root: Temp root used for SpectralMatch temp files.
+        label_parts: Hierarchical label parts for nested groups.
+    Returns:
+        Group output path or matched input paths.
+    """
     if isinstance(group_spec, str):
         return _match_radiometric_input_patterns(group_spec, available_paths)
     if not isinstance(group_spec, list) or not group_spec:
@@ -779,6 +1050,14 @@ def _run_radiometric_normalization_workflow(
     args: argparse.Namespace,
     reference_state: SceneWorkflowState,
 ) -> Optional[str]:
+    """Run grouped radiometric normalization.
+    Args:
+        scene_output_paths: Per-scene output raster paths.
+        args: Parsed CLI arguments.
+        reference_state: Reference scene state used for directory resolution.
+    Returns:
+        Final radiometric output path or None.
+    """
     if not args.run_radiometric_normalization:
         return None
     available_paths = _dedupe_paths([str(path) for path in scene_output_paths if str(path)])
@@ -811,6 +1090,18 @@ def _run_cloud_mask_command(
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> None:
+    """Run an external cloud mask command template.
+    Args:
+        command_template: Shell command template to execute.
+        input_image_path: Input raster path.
+        output_image_path: Output raster path.
+        scene_root_path: Scene root directory.
+        image_basename: Scene image basename.
+        log_to_console: Whether to emit console logs.
+        scene_basename: Optional scene basename for log prefixes.
+    Returns:
+        None.
+    """
     command = command_template.format(
         input=input_image_path,
         output=output_image_path,
@@ -827,6 +1118,13 @@ def _run_cloud_mask_command(
 
 
 def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespace) -> None:
+    """Run the fetch-atmosphere step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        None.
+    """
     if not args.run_fetch_atmosphere:
         return
     mul_image = state.scene.mul_image
@@ -913,6 +1211,13 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
 
 
 def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the atmospheric correction step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Current raster paths after atmospheric correction.
+    """
     if not args.run_atmospheric_correction:
         return state.current_files
     mul_image = state.scene.mul_image
@@ -1047,6 +1352,13 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
 
 
 def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the orthorectification step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Current raster paths after orthorectification.
+    """
     if not args.run_orthorectification:
         return state.current_files
     mul_image = state.scene.mul_image
@@ -1170,6 +1482,13 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
 
 
 def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the pansharpen step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Current raster paths after pansharpening.
+    """
     if not args.run_pansharpen:
         return state.current_files
     if state.pan_ortho_path is None:
@@ -1221,6 +1540,13 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
 
 
 def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the cloud mask step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Current raster paths after cloud masking.
+    """
     if not args.run_cloud_mask:
         return state.current_files
     mul_image = state.scene.mul_image
@@ -1321,6 +1647,13 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
 
 
 def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the alignment step.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Current raster paths after alignment.
+    """
     if not args.run_alignment:
         return state.current_files
     plan = plan_step_outputs(
@@ -1389,6 +1722,13 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
 
 
 def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> tuple[str, str]:
+    """Resolve final scene output paths.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Final raster path and final metadata report path.
+    """
     final_image_path = _get_expected_scene_step_outputs(state, args)["final_raster"][0]
     final_base = os.path.splitext(final_image_path)[0]
     final_metadata_path = f"{final_base}_metadata.json"
@@ -1396,6 +1736,13 @@ def _final_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> 
 
 
 def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Namespace) -> bool:
+    """Return whether final scene outputs are complete.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        True when the scene has all required outputs.
+    """
     expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs = _scene_skip_required_outputs(state, args)
     if required_outputs and not _step_outputs_exist(required_outputs):
@@ -1406,9 +1753,22 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
 
 
 def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Collect saved scene output paths.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Saved non-temp output paths.
+    """
     saved_paths: List[str] = []
 
     def _extend(step_name: str) -> None:
+        """Extend saved paths from a step.
+        Args:
+            step_name: Step name whose outputs should be added.
+        Returns:
+            None.
+        """
         saved_paths.extend(state.scene.step_outputs.get(step_name, []))
 
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
@@ -1430,6 +1790,12 @@ def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespac
 
 
 def _scene_cloud_cover_percent(scene: WorldViewScene) -> Optional[float]:
+    """Return the scene cloud cover percent.
+    Args:
+        scene: Scene to inspect.
+    Returns:
+        Cloud cover percent or None.
+    """
     image = scene.mul_image or scene.pan_image
     if image is None or image.standardized_metadata is None:
         return None
@@ -1437,15 +1803,34 @@ def _scene_cloud_cover_percent(scene: WorldViewScene) -> Optional[float]:
 
 
 def _delete_files(paths: List[str]) -> None:
+    """Delete files from a path list.
+    Args:
+        paths: File paths to delete if they exist.
+    Returns:
+        None.
+    """
     for path in _dedupe_paths([str(path) for path in paths if str(path)]):
         if os.path.isfile(path):
             os.remove(path)
 
 
 def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Collect temp cleanup paths for a scene.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+    Returns:
+        Temp-backed file paths safe to delete after scene completion.
+    """
     temp_paths: List[str] = []
 
     def _extend(step_name: str) -> None:
+        """Extend temp paths from a step.
+        Args:
+            step_name: Step name whose outputs should be added.
+        Returns:
+            None.
+        """
         temp_paths.extend(state.scene.step_outputs.get(step_name, []))
 
     if args.run_fetch_atmosphere and _is_temp_save_value(args.save_fetch_atmosphere):
@@ -1474,6 +1859,14 @@ def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespac
 
 
 def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, scene_started_utc: str) -> None:
+    """Write the final scene report.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+        scene_started_utc: Scene start timestamp in UTC.
+    Returns:
+        None.
+    """
     mul_image = state.scene.mul_image
     pan_image = state.scene.pan_image
     if mul_image is None or pan_image is None:
@@ -1559,6 +1952,14 @@ def _write_cloud_cover_skip_report(
     *,
     cloud_cover: float,
 ) -> None:
+    """Write a cloud-cover skip report.
+    Args:
+        state: Scene workflow state.
+        args: Parsed CLI arguments.
+        cloud_cover: Scene cloud cover percent.
+    Returns:
+        None.
+    """
     _, scene_metadata_path = _final_output_paths(state, args)
     message = (
         f"Max cloud cover of {cloud_cover:.2f}% does not meet "
@@ -1569,6 +1970,13 @@ def _write_cloud_cover_skip_report(
 
 
 def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
+    """Process a single WorldView scene.
+    Args:
+        scene: Scene to process.
+        args: Parsed CLI arguments.
+    Returns:
+        Final scene workflow state.
+    """
     state = _initialize_scene_state(scene, args)
     cloud_cover = _scene_cloud_cover_percent(scene)
     if args.max_cloud_cover_to_process is not None and cloud_cover is not None and cloud_cover > args.max_cloud_cover_to_process:
@@ -1635,8 +2043,13 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
     return state
 
 
-def run_workflow(args: argparse.Namespace) -> int:
-    """Run full-scene WorldView preprocessing using input tif globs."""
+def _run_workflow(args: argparse.Namespace) -> int:
+    """Run the full WorldView preprocessing workflow.
+    Args:
+        args: Parsed CLI arguments.
+    Returns:
+        Process exit code.
+    """
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     tif_files = _collect_input_tif_files(args.input_file_glob)
     if not tif_files:
@@ -1692,8 +2105,13 @@ def run_workflow(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the argument parser for the WorldView preprocessing CLI."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the WorldView CLI parser.
+    Args:
+        None.
+    Returns:
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser(description="Run WorldView preprocessing on discovered tif scenes.")
     parser.add_argument("--config-yaml", help="Optional YAML config file.")
     parser.add_argument(
@@ -1836,7 +2254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if config_args.config_yaml:
         config_defaults = _normalize_config_defaults(_load_worldview_yaml_config(config_args.config_yaml))
 
-    parser = build_parser()
+    parser = _build_parser()
     if config_defaults:
         parser.set_defaults(**config_defaults)
     args, unknown_args = parser.parse_known_args(argv)
@@ -1953,7 +2371,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _normalize_group_by_basename_spec(args.group_by_basename)
     except Exception as exc:
         parser.error(f"Invalid --group-by-basename: {exc}")
-    return run_workflow(args)
+    return _run_workflow(args)
 
 
 if __name__ == "__main__":

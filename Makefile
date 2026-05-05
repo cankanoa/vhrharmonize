@@ -18,7 +18,7 @@ LOCAL_HOME ?= $(HOME)
 GOAL_ITEMS := $(filter-out upload download,$(MAKECMDGOALS))
 EFFECTIVE_ITEMS := $(strip $(if $(ITEMS),$(ITEMS),$(GOAL_ITEMS)))
 
-.PHONY: help login upload download setup-ssh-cache cache-open cache-close cache-check clean-package build-python version tag release
+.PHONY: help login upload download setup-ssh-cache cache-open cache-close cache-check clean-package python-build version tag release
 
 ifneq (,$(filter upload download,$(MAKECMDGOALS)))
 $(GOAL_ITEMS):
@@ -39,7 +39,7 @@ help:
 	@echo ""
 	@echo "Python package release helpers:"
 	@echo "  make clean-package"
-	@echo "  make build-python"
+	@echo "  make python-build"
 	@echo "  make version version=0.0.2"
 	@echo "  make tag version=0.0.2"
 	@echo "  make release version=0.0.2"
@@ -120,11 +120,11 @@ setup-ssh-cache:
 	chmod 600 "$(SSH_CONFIG)"; \
 	echo "Updated $(SSH_CONFIG) with Host $(SSH_ALIAS)"
 
-clean:
+clean-package:
 	rm -rf build dist *.egg-info vhrharmonize.egg-info
 
-build-python: clean-package
-	python -m build --sdist --wheel --outdir dist/
+python-build: clean-package
+	python -m build --sdist --wheel --no-isolation --outdir dist/
 
 tag:
 	@if [ -z "$(version)" ]; then \

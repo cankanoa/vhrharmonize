@@ -1,103 +1,101 @@
 # Quickstart
 
-## 1. Start from the default config
+## WorldView-3
+WorldView-3 is the only currently streamlined end-to-end sensor workflow. For easy setup,use the example config as your starting point at [configs/worldview.example.yml](configs/worldview.example.yml)
 
-Create a local config from the tracked template, then adjust paths for your machine.
-
-```bash
-cp configs/worldview.example.yml configs/worldview.yml
-```
-
-If you keep the default `dem_file_path: online`, set an OpenTopography API key first:
-
-```bash
-export OPENTOPOGRAPHY_API_KEY=your_key_here
-```
-
-## 2. Run full-scene preprocessing
-
-`vhr-worldview` runs the main end-to-end workflow for each discovered scene:
-
-- recursive TIFF discovery, WorldView scene grouping, and metadata loading
-- optional atmosphere fetch
-- atmospheric correction (`py6s`, `flaash`, or `none`; default `py6s`)
-- RPC orthorectification (MS and PAN)
-- pansharpening
-- optional cloud masking (if enabled in args/config)
-- optional alignment
-- optional radiometric normalization
-- step outputs written according to each `save_*` setting
-- final raster taken from the last enabled raster step
+### Full workflow
+Assuming you already have the library installed.
+1. Obtain the example config:
+   2. If you have installed from Pypi as a Python library, download this file: [configs/worldview.example.yml](configs/worldview.example.yml). 
+   3. If you have cloned the repository, navigate to the configs/worldview.example.yml file.
+2. Run the config from the command line with:
 
 ```bash
 vhr-worldview --config-yaml configs/worldview.yml
 ```
-
-## Optional standalone tools
-
-### Fetch MODIS water vapor (optional)
-
-Fetches per-scene atmospheric water vapor from Google Earth Engine MODIS collections, using scene footprint + acquisition time, and writes JSON/CSV reports.
+Or specify the parameters directly in the command line:
+```bash
+# Example: override a few settings at runtime
+vhr-worldview \
+  --config-yaml configs/worldview.yml \
+  --input-file-glob "/data/worldview/**/*.TIF" \
+  --output-dir ../../processed \
+  --run-alignment \
+  --alignment-fixed-image /data/reference.tif
+```
 
 ```bash
+# Example: run with a local DEM and limit cloudier scenes
+vhr-worldview \
+  --dem-file-path /data/dem.tif \
+  --max-cloud-cover-to-process 50 \
+  --concurrent-processing 4
+```
+
+## Individual steps
+
+```bash
+# Fetch MODIS water vapor reports
 vhr-fetch-modis-water-vapor \
   --input-dir /data/worldview_batch \
-  --output-json outputs/modis_water_vapor_results.json \
-  --output-csv outputs/modis_water_vapor_results.csv
+  --ee-project your-ee-project \
+  --output-json outputs/modis.json \
+  --output-csv outputs/modis.csv
 ```
 
-### Cloud mask an existing raster (optional)
-
 ```bash
-vhr-cloudmask-raster \
-  --input-raster /data/out/scene_final.tif \
-  --buffer-pixels 3
-```
-
-### Pansharpen existing orthorectified rasters (optional)
-
-```bash
-vhr-pansharpen-orthos \
-  --mul-ortho /data/mul_ortho.tif \
-  --pan-ortho /data/pan_ortho.tif \
-  --output /data/out/pansharp.tif
-```
-
-### Align one image to another with coregix (optional)
-
-```bash
-vhr-align-image-pair \
-  --moving-image /data/image_a_cloudmasked.tif \
-  --fixed-image /data/image_b_lidar.tif \
-  --output-image /data/out/image_a_aligned_to_b.tif
-```
-
-### Run Py6S atmospheric correction only (optional)
-
-```bash
-vhr-py6s \
-  --input-dir /data/worldview_batch \
-  --output-dir /data/out/py6s_only \
-  --output-suffix _py6s \
-  --py6s-atmosphere-profile user \
-  --py6s-auto-atmos-source nasa_power
-```
-
-### Run FLAASH directly (optional)
-
-```bash
+# Run FLAASH from a prepared parameter file
 vhr-flaash \
   --params-json-file outputs/flaash_params.json \
   --output-params-path outputs/flaash_params_used.json \
   --envi-engine-path /path/to/taskengine.exe
 ```
 
-### Run radiometric normalization directly (optional)
+```bash
+# Mask an existing raster
+vhr-cloudmask-raster \
+  --input-raster /data/pansharpened.tif \
+  --output-raster /data/pansharpened_cloudmasked.tif \
+  --output-mask /data/pansharpened_cloudmask.tif
+```
 
 ```bash
+# Pansharpen orthorectified rasters
+vhr-pansharpen-orthos \
+  --mul-ortho /data/mul_ortho.tif \
+  --pan-ortho /data/pan_ortho.tif \
+  --output /data/pansharpened.tif
+```
+
+```bash
+# Align one raster to another
+vhr-align-image-pair \
+  --moving-image /data/moving.tif \
+  --fixed-image /data/fixed.tif \
+  --output-image /data/aligned.tif
+```
+
+```bash
+# Orthorectify directly
+vhr-orthorectification orthorectify \
+  --input-image-path /data/input.tif \
+  --output-image-path /data/output_ortho.tif \
+  --dem-image-path /data/dem.tif \
+  --output-epsg 6635
+```
+
+```bash
+# Run Py6S-only processing
+vhr-py6s \
+  --input-dir /data/worldview_batch \
+  --output-dir /data/py6s_only \
+  --output-suffix _py6s
+```
+
+```bash
+# Run radiometric normalization directly
 vhr-radiometric-normalization \
-  rrn \
   --input-image /data/image_a.tif \
   --input-image /data/image_b.tif \
-  --output-image /data/out/normalized.tif
+  --output-image /data/normalized.tif
 ```

@@ -84,12 +84,24 @@ def cloudmask_raster(
 
 
 def _ensure_parent_dir(path: str) -> None:
+    """Create a parent directory when needed.
+    Args:
+        path: File path whose parent should exist.
+    Returns:
+        None.
+    """
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
 
 
 def _normalize_omnicloud_output(prediction: np.ndarray) -> np.ndarray:
+    """Normalize OmniCloudMask output to a 2D class mask.
+    Args:
+        prediction: Raw OmniCloudMask prediction array.
+    Returns:
+        Normalized 2D uint8 class mask.
+    """
     pred = np.asarray(prediction)
     pred = np.squeeze(pred)
     if pred.ndim == 3:
@@ -112,6 +124,12 @@ def _normalize_omnicloud_output(prediction: np.ndarray) -> np.ndarray:
 
 
 def _is_cuda_oom_error(exc: Exception) -> bool:
+    """Return whether an exception is a CUDA OOM error.
+    Args:
+        exc: Exception to inspect.
+    Returns:
+        True when the exception indicates CUDA OOM.
+    """
     msg = str(exc).lower()
     return "cuda out of memory" in msg or "torch.outofmemoryerror" in msg
 
@@ -121,6 +139,14 @@ def _build_cloud_binary_mask(
     cloud_classes: Sequence[int],
     buffer_pixels: int = 0,
 ) -> np.ndarray:
+    """Build a binary cloud mask from class values.
+    Args:
+        class_mask: OmniCloudMask class mask.
+        cloud_classes: Class ids treated as cloudy.
+        buffer_pixels: Optional dilation buffer in pixels.
+    Returns:
+        Binary uint8 cloud mask.
+    """
     binary_mask = np.isin(class_mask, np.array(list(cloud_classes), dtype=np.uint8))
     if buffer_pixels > 0:
         binary_mask = binary_dilation(binary_mask, iterations=buffer_pixels)
@@ -188,6 +214,15 @@ def create_cloud_mask_with_omnicloudmask(
             from osgeo import gdal
 
             def _read_band_gdal_buffer(path: str, band_index: int, out_h: int, out_w: int) -> np.ndarray:
+                """Read and resample a band with GDAL buffering.
+                Args:
+                    path: Input raster path.
+                    band_index: 1-based band index.
+                    out_h: Output height in pixels.
+                    out_w: Output width in pixels.
+                Returns:
+                    Buffered float32 band array.
+                """
                 ds = gdal.Open(path, gdal.GA_ReadOnly)
                 if ds is None:
                     raise RuntimeError(f"Unable to open raster with GDAL: {path}")

@@ -1,13 +1,10 @@
-"""Public package API with lazy-loaded exports."""
-
 from importlib import import_module
+from typing import Any
 
 _EXPORTS = {
     "find_files": (".providers.worldview", "find_files"),
     "shp_to_gpkg": (".io.geospatial", "shp_to_gpkg"),
-    "get_image_largest_value": (".io.geospatial", "get_image_largest_value"),
     "get_image_percentile_value": (".io.geospatial", "get_image_percentile_value"),
-    "wsl_to_windows_path": (".io.geospatial", "wsl_to_windows_path"),
     "qgis_gcps_to_geojson": (
         ".preprocess.orthorectification",
         "qgis_gcps_to_geojson",
@@ -38,13 +35,18 @@ _EXPORTS = {
     ),
     "align_image_pair": (".preprocess.alignment", "align_image_pair"),
     "AlignmentResult": (".preprocess.alignment", "AlignmentResult"),
-    "tile_image": (".io.tiling", "tile_image"),
 }
 
 __all__ = list(_EXPORTS.keys())
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
+    """Lazily resolve a public package export.
+    Args:
+        name: Export name requested from the package namespace.
+    Returns:
+        The resolved export object.
+    """
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _EXPORTS[name]

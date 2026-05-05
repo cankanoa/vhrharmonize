@@ -5,10 +5,16 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
-def _parse_json_dict(raw_json: Optional[str]) -> Dict:
+def _parse_json_dict(raw_json: Optional[str]) -> Dict[str, Any]:
+    """Parse optional JSON keyword arguments.
+    Args:
+        raw_json: Optional JSON object string.
+    Returns:
+        Parsed keyword arguments dictionary.
+    """
     if not raw_json:
         return {}
     parsed = json.loads(raw_json)
@@ -18,12 +24,24 @@ def _parse_json_dict(raw_json: Optional[str]) -> Dict:
 
 
 def _build_output_path(input_path: str, suffix: str) -> str:
+    """Build an output path by appending a suffix.
+    Args:
+        input_path: Input raster path.
+        suffix: Suffix to append before the file extension.
+    Returns:
+        Output raster path.
+    """
     base, ext = os.path.splitext(input_path)
     return f"{base}{suffix}{ext}"
 
 
-def main(argv=None) -> int:
-    """CLI entrypoint for applying OmniCloudMask to a single raster."""
+def main(argv: Optional[list[str]] = None) -> int:
+    """Run the standalone cloud mask CLI.
+    Args:
+        argv: Optional command line arguments.
+    Returns:
+        Process exit code.
+    """
     parser = argparse.ArgumentParser(
         description="Apply OmniCloudMask to an existing raster (standalone).",
     )
