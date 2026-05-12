@@ -1,6 +1,6 @@
 site_name: vhrharmonize
 site_description: WorldView preprocessing library and CLI documentation
-site_url: https://example.com/vhrharmonize
+site_url: https://vhrharmonize.sefa.ai/
 repo_url: https://github.com/cankanoa/vhrharmonize
 repo_name: cankanoa/vhrharmonize
 
