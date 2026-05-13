@@ -1,0 +1,280 @@
+# This file has arguments to process WorldView-3 B1 images and brief setup instructions below.
+
+# 1. To install the required system level libraries run:
+  # `conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11`
+  # `conda activate vhrharmonize`
+
+# 2. To install the library, depending on if you are installing from pip or source:
+  # From source: `pip install -e ".[defaults]"`
+  # From pip: `pip install vhrharmonize[defaults]`
+
+# 3. Set the arguments in this yml file
+
+# 4. To process images:
+  # Navigate to the folder with this yml file (may need to be changed): `cd configs`
+  # Run: `vhr-worldview --config-yaml worldview.example.yml`
+
+shared:
+  input_file_glob:
+    - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
+  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
+  epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
+  concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing
+  dem_file_path: /path.tif  # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
+
+  # dem_online_api_key: your-opentopography-api-key # Or set OPENTOPOGRAPHY_API_KEY in the environment
+  # dem_online_source: SRTMGL1_Ellip
+  # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
+  # dem_online_timeout_s: 120.0
+
+  #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
+  keep_temp_dir: false
+  nodata_value: -9999 # Shared nodata value used by raster-writing steps
+  dtype: int16 # Shared output dtype for raster-writing steps
+  log_to_console: true
+  overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true
+  skip_existing: true # Skip the whole scene only if all requested non-temp outputs already exist
+  run_from_existing: true # At each step, if the expected output exists, reuse it instead of rerunning that step
+  max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold
+
+workflow:
+  # Atmospheric correction
+  run_atmospheric_correction: true
+  atmospheric_correction_output_suffix: _py6s # Filename suffix for this step
+  save_atmospheric_correction: $temp/atmospheric_correction # $temp/folder | $output/folder | ./custom/relative/to/input | /custom/absolute | relative/to/pwd
+  calculate_overviews_atmospheric_correction: false # Weather or not to calculate overviews for this step
+  run_fetch_atmosphere: true
+  fetch_atmosphere_output_suffix: _atmosphere # Filename suffix for fetched atmosphere JSON
+  save_fetch_atmosphere: $temp/fetch_atmosphere
+
+  # Orthorectification
+  run_orthorectification: true
+  orthorectification_output_suffix: _ortho # Filename suffix for orthorectified multispectral output
+  orthorectification_pan_output_suffix: _pan_ortho # Filename suffix for orthorectified panchromatic output
+  save_orthorectification: $temp/orthorectification
+  calculate_overviews_orthorectification: false
+
+  # Pansharpening
+  run_pansharpen: true
+  pansharpen_output_suffix: _pansharpen # Filename suffix for pansharpened output
+  save_pansharpen: $temp/pansharpen
+  calculate_overviews_pansharpen: false
+
+  # Cloud masking
+  run_cloud_mask: true
+  cloud_mask_output_suffix: _cloudmasked # Filename suffix for masked image output
+  cloud_mask_mask_suffix: _cloudmask # Filename suffix for binary cloud mask output
+  save_cloud_mask: $output # or $temp/cloud_mask if running next step
+  calculate_overviews_cloud_mask: true
+
+  # Spatially match to external dataset (remember to set reference dataset below)
+  run_alignment: false
+  alignment_output_suffix: _aligned # Filename suffix for aligned output
+  save_alignment: $output
+  calculate_overviews_alignment: true
+
+  # Radiometrically match images to each other
+  run_radiometric_normalization: false
+  save_radiometric_normalization: # /custom/absolute
+  calculate_overviews_radiometric_normalization: true
+
+# STEP SPECIFIC SETTINGS HEREAFTER (defaults are often okay)
+atmospheric_correction:
+  atmospheric_method: py6s # py6s | flaash | none
+
+  fetch_atmosphere:
+    fetch_atmosphere_source: auto # auto | nasa_power | modis_gee
+    fetch_atmosphere_grid_size: 3 # Number of sample points per bbox side
+    fetch_atmosphere_search_days: 1 # Search +/- this many days for matching atmosphere data
+    fetch_atmosphere_timeout_s: 30.0 # HTTP timeout in seconds
+    fetch_atmosphere_power_endpoint: https://power.larc.nasa.gov/api/temporal/daily/point # NASA POWER endpoint
+    fetch_atmosphere_hours_window: 24 # MODIS/GEE scene-time search window in hours
+    # fetch_atmosphere_ee_project: your-ee-project
+    # fetch_atmosphere_env_file: /path/to/.env
+
+  flaash:
+    # Required only when atmospheric_method: flaash
+    # envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe"
+    # flaash_modtran_atm: Mid-Latitude Summer
+    # flaash_modtran_aer: Maritime
+    # flaash_use_aerosol: Disabled
+    # flaash_default_visibility: 20.0
+
+    # Any extra FLAASH task params can be passed through with the `flaash_param_` prefix.
+    # Example:
+    # flaash_param_SENSOR_TYPE: "UNKNOWN"
+    # flaash_param_INPUT_SCALE: 1.0
+    # flaash_param_OUTPUT_SCALE: 10000.0
+    # flaash_param_CALIBRATION_FILE: /path/to/calibration.txt
+    # flaash_param_CALIBRATION_FORMAT: "ENVI"
+    # flaash_param_CALIBRATION_UNITS: "uW/(cm^2 sr nm)"
+    # flaash_param_LAT_LONG: [0.0, 0.0]
+    # flaash_param_SENSOR_ALTITUDE: 617.0
+    # flaash_param_DATE_TIME: "2026-01-01T00:00:00Z"
+    # flaash_param_USE_ADJACENCY: true
+    # flaash_param_DEFAULT_VISIBILITY: 20.0
+    # flaash_param_USE_POLISHING: false
+    # flaash_param_POLISHING_RESOLUTION: 100.0
+    # flaash_param_SENSOR_AUTOCALIBRATION: false
+    # flaash_param_SENSOR_CAL_PRECISION: 0.01
+    # flaash_param_SENSOR_CAL_FEATURE_LIST: []
+    # flaash_param_GROUND_ELEVATION: 0.5
+    # flaash_param_SOLAR_AZIMUTH: 180.0
+    # flaash_param_SOLAR_ZENITH: 30.0
+    # flaash_param_LOS_AZIMUTH: 90.0
+    # flaash_param_LOS_ZENITH: 10.0
+    # flaash_param_IFOV: 0.002
+    # flaash_param_MODTRAN_ATM: "Mid-Latitude Summer"
+    # flaash_param_MODTRAN_AER: "Maritime"
+    # flaash_param_MODTRAN_RES: 5.0
+    # flaash_param_MODTRAN_MSCAT: "DISORT"
+    # flaash_param_CO2_MIXING: 400.0
+    # flaash_param_WATER_ABS_CHOICE: "BAND_MODEL"
+    # flaash_param_WATER_MULT: 1.0
+    # flaash_param_WATER_VAPOR_PRESET: 1.0
+    # flaash_param_USE_AEROSOL: "Disabled"
+    # flaash_param_AEROSOL_SCALE_HT: 2.0
+    # flaash_param_AER_BAND_RATIO: 0.5
+    # flaash_param_AER_BAND_WAVL: 660
+    # flaash_param_AER_REFERENCE_VALUE: 0.1
+    # flaash_param_AER_REFERENCE_PIXEL: [0, 0]
+    # flaash_param_AER_BANDLOW_WAVL: 425
+    # flaash_param_AER_BANDLOW_MAXREFL: 0.2
+    # flaash_param_AER_BANDHIGH_WAVL: 660
+    # flaash_param_AER_BANDHIGH_MAXREFL: 0.2
+    # flaash_param_INPUT_RASTER: {url: /path/to/input, factory: URLRaster}
+    # flaash_param_OUTPUT_RASTER_URI: /path/to/output.dat
+    # flaash_param_CLOUD_RASTER_URI: /path/to/cloud_mask.tif
+    # flaash_param_WATER_RASTER_URI: /path/to/water_mask.tif
+
+  py6s:
+    py6s_atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter
+    py6s_aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric
+    py6s_aot550: 0.2 # Used when visibility is not set
+    # py6s_visibility: 40.0
+    py6s_water_vapor: 2.5 # g/cm^2
+    py6s_ozone: 0.3 # cm-atm
+    # py6s_executable: /usr/local/bin/sixsV1.1
+    py6s_output_scale_factor: 10000.0 # Reflectance scale factor applied before writing
+    py6s_output_dtype: int16 # Output dtype for Py6S rasters
+    py6s_use_imd_radiance_calibration: true
+    py6s_use_worldview_gain_offset_adjustment: true
+    py6s_auto_atmos_source: nasa_power # none | nasa_power
+    py6s_auto_atmos_grid_size: 3 # Number of sample points per bbox side
+    py6s_auto_atmos_search_days: 1 # Search +/- this many days for matching atmosphere data
+    py6s_auto_atmos_timeout_s: 30.0 # HTTP timeout in seconds
+
+orthorectification:
+  # orthorectification_rpc_refinement_geojson: /path/to/rpc_refinement_gcps.geojson # GCPs GeoJSON used to refine the RPC model before orthorectification in the standard orthority format: https://orthority.readthedocs.io/en/stable/file_formats/oty_gcps.html
+
+cloud_mask:
+  cloud_mask_method: omnicloudmask # omnicloudmask
+  cloud_buffer_pixels: 10 # Buffer cloud mask outward by this many pixels
+  cloud_mask_inference_resolution_m: 10.0 # Resolution used for OmniCloudMask inference
+  # cloud_mask_omnicloud_kwargs_json:
+  #   inference_device: cuda
+  #   mosaic_device: cpu
+  #   batch_size: 1
+  #   patch_size: 768
+  #   patch_overlap: 192
+
+alignment:
+  alignment_fixed_image: /path/to/fixed/reference.tif # Required when run_alignment step. This can be an image, LiDAR intensity raster, or another dataset
+  alignment_band_index: 0 # 0-based band index used for registration metric
+  # alignment_moving_band_index: 0 # Optional override for moving-image registration band
+  # alignment_fixed_band_index: 0 # Optional override for fixed-image registration band
+  # alignment_moving_nodata: -9999 # Optional override nodata for moving image
+  # alignment_fixed_nodata: -9999 # Optional override nodata for fixed image
+  # alignment_output_nodata: -9999 # Optional override nodata for output image
+  alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
+  alignment_use_edge_proxies: true
+  alignment_split_factor: 0 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
+  alignment_clip_fixed_to_moving: true
+  alignment_output_on_moving_grid: true
+  alignment_trim_edge_invalid: true
+  alignment_edge_trim_depth: 8 # Number of edge pixels to trim
+  alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
+  alignment_edge_trim_invalid_below: -3000 # Values <= this are treated as invalid during edge trimming
+  # alignment_edge_trim_invalid_above: 65535 # Values >= this are treated as invalid during edge trimming
+  alignment_enforce_mutual_valid_mask: true
+  # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
+
+radiometric_normalization:
+  radiometric_normalization_method: spectralmatch # spectralmatch
+  # radiometric_normalization_output: radiometric_root.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the group label
+  # SpectralMatch pipeline kwargs:
+  # Pass any SpectralMatch argument through using the `match_` prefix.
+  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
+
+  # Optionally run mulitple spectralmatches in a row using groups
+  # group_by_basename: ["**/*.tif"] # Match all finished scene outputs together
+  # group_by_basename: ["*893242343*", "*123456789*"] # Match only images whose basename or full path matches these patterns
+  # group_by_basename: ["*893242343*", ["*111111111*", "*222222222*"], "*123456789*"] # Nested lists run inner spectralmatch first, then include that output in the outer one
+
+
+  # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
+  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]
+  # match_shared_output_image_path: /path/to/radiometric/group_output.tif
+  # match_shared_temp_dir: ./temp/spectralmatch
+  # match_delete_temp_dir: true
+  # match_shared_debug_logs: false
+  # match_shared_output_dtype: int16
+
+  # Other optional SpectralMatch pipeline kwargs:
+  # match_shared_cache: auto
+  # match_shared_custom_nodata_value: -9999
+  # match_shared_window_size: 1024
+  # match_shared_image_threads: auto
+  # match_shared_io_threads: auto
+  # match_shared_tile_threads: auto
+  # match_shared_calculation_dtype: float32
+  # match_shared_output_dtype: int16
+  # match_shared_save_as_cog: false
+  # match_matching_order: [global_regression, local_block_adjustment]
+  # match_align_method: align_rasters
+  # match_seamline_method: voronoi_center_seamline
+  # match_clip_method: mask_rasters
+  # match_merge_method: merge_rasters
+  # match_global_regression_output_images: /path/to/global_outputs
+  # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
+  # match_global_regression_estimate_stats: true
+  # match_global_regression_specify_model_images: [include, [image_a, image_b]]
+  # match_global_regression_custom_mean_factor: 1.0
+  # match_global_regression_custom_std_factor: 1.0
+  # match_global_regression_save_adjustments: /path/to/adjustments.json
+  # match_global_regression_load_adjustments: /path/to/adjustments.json
+  # match_global_regression_pif_method: entire
+  # match_global_regression_pif_red_band_index: 2
+  # match_global_regression_pif_nir_band_index: 6
+  # match_global_regression_pif_vegetation_threshold: 0.2
+  # match_global_regression_pif_inz_threshold: 0.25
+  # match_global_regression_pif_region_radius: 5
+  # match_global_regression_pif_max_samples: 100000
+  # match_global_regression_pif_min_samples: 32
+  # match_global_regression_pif_feature_method: orb
+  # match_global_regression_build_overviews: false
+  # match_local_block_adjustment_output_images: /path/to/local_outputs
+  # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
+  # match_local_block_adjustment_number_of_blocks: 100
+  # match_local_block_adjustment_alpha: 1.0
+  # match_local_block_adjustment_correction_method: offset
+  # match_local_block_adjustment_save_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps/$.tif]
+  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
+  # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
+  # match_local_block_adjustment_build_overviews: false
+  # match_align_rasters_output_images: /path/to/aligned_outputs
+  # match_align_rasters_resampling_method: bilinear
+  # match_align_rasters_tap: true
+  # match_align_rasters_resolution: highest
+  # match_voronoi_center_seamline_output_mask: /path/to/seamline_mask.gpkg
+  # match_voronoi_center_seamline_aoi_path: /path/to/aoi.gpkg
+  # match_voronoi_center_seamline_vector_mask: [/path/to/footprints.gpkg, image]
+  # match_voronoi_center_seamline_image_field_name: image
+  # match_voronoi_center_seamline_min_point_spacing: 10
+  # match_voronoi_center_seamline_min_cut_length: 0
+  # match_voronoi_center_seamline_debug_vectors_path: /path/to/debug_vectors.gpkg
+  # match_mask_rasters_output_images: /path/to/masked_outputs
+  # match_mask_rasters_vector_mask: [include, /path/to/seamline_mask.gpkg, image]
+  # match_mask_rasters_include_touched_pixels: false
+  # match_merge_rasters_resolution: highest
+  # match_merge_rasters_build_overviews: true
