@@ -1,0 +1,75 @@
+site_name: vhrharmonize
+site_description: WorldView preprocessing library and CLI documentation
+site_url: https://vhrharmonize.sefa.ai/
+repo_url: https://github.com/cankanoa/vhrharmonize
+repo_name: cankanoa/vhrharmonize
+
+docs_dir: .
+site_dir: ../site
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Contributing: getting-started/contributing.md
+  - CLI:
+      - vhr-worldview: cli/vhr-worldview.md
+      - vhr-fetch-modis-water-vapor: cli/vhr-fetch-modis-water-vapor.md
+      - vhr-flaash: cli/vhr-flaash.md
+      - vhr-cloudmask-raster: cli/vhr-cloudmask-raster.md
+      - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
+      - vhr-align-image-pair: cli/vhr-align-image-pair.md
+      - vhr-orthorectification: cli/vhr-orthorectification.md
+      - vhr-radiometric-normalization: cli/vhr-radiometric-normalization.md
+      - vhr-py6s: cli/vhr-py6s.md
+  - Configuration:
+      - WorldView Config: configuration/worldview-config.md
+  - Pre-Processing Steps:
+      - Py6S: pre-processing-steps/py6s.md
+      - WorldView Pipeline: pre-processing-steps/worldview-pipeline.md
+  - API Reference:
+      - io.geospatial: api/io-geospatial.md
+      - io.workflow_utils: api/io-workflow-utils.md
+      - preprocess.alignment: api/preprocess-alignment.md
+      - preprocess.atmospheric_correction: api/preprocess-atmospheric-correction.md
+      - preprocess.cloudmasking: api/preprocess-cloudmasking.md
+      - preprocess.helpers: api/preprocess-helpers.md
+      - preprocess.orthorectification: api/preprocess-orthorectification.md
+      - preprocess.pansharpening: api/preprocess-pansharpening.md
+      - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
+      - providers.standardized: api/providers-standardized.md
+      - providers.worldview: api/providers-worldview.md
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_section_style: table
+            members_order: source
+            show_source: false
+            show_root_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            filters:
+              - "!^_"
