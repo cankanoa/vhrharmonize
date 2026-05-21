@@ -2,110 +2,110 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://vhrharmonize.sefa.ai/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/io-geospatial/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/io-workflow-utils/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-alignment/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-atmospheric-correction/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-cloudmasking/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-helpers/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-orthorectification/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-pansharpening/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/preprocess-radiometric-normalization/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/providers-standardized/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/api/providers-worldview/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-align-image-pair/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-cloudmask-raster/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-fetch-modis-water-vapor/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-flaash/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-orthorectification/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-pansharpen-orthos/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-py6s/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-radiometric-normalization/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/cli/vhr-worldview/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/configuration/worldview-config/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/getting-started/contributing/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/getting-started/installation/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/getting-started/quickstart/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/pre-processing-steps/py6s/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
     <url>
          <loc>https://vhrharmonize.sefa.ai/pre-processing-steps/worldview-pipeline/</loc>
-         <lastmod>2026-05-13</lastmod>
+         <lastmod>2026-05-21</lastmod>
     </url>
 </urlset>
