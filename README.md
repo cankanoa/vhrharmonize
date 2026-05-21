@@ -17,11 +17,11 @@
 ## Features
 
 - Atmospheric correction workflows ([Py6S](https://github.com/robintw/Py6S) default, [FLAASH](https://github.com/envi-idl/envipyengine) optional backend)
-- RPC orthorectification with [Orthority](https://github.com/leftfield-geospatial/orthority)
-- Pansharpening with [Orthority](https://github.com/leftfield-geospatial/orthority)
-- Optional cloud masking with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask)
+- RPC orthorectification ([Orthority](https://github.com/leftfield-geospatial/orthority))
+- Pansharpening ([Orthority](https://github.com/leftfield-geospatial/orthority))
+- Optional cloud masking ([OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask))
 - Pairwise alignment ([coregix](https://github.com/iosefa/coregix))
-- Relative Radiometric Normalization with spectralmatch
+- Relative Radiometric Normalization ([spectralmatch](https://github.com/spectralmatch/spectralmatch))
 - WorldView scene discovery, IMD parsing, and standardized metadata mapping
 - CLI and library-first interfaces
 
