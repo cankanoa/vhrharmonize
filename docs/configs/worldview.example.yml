@@ -16,7 +16,7 @@
 
 shared:
   input_file_glob:
-    - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
+    - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together). Uses wcmatch.glob to find files, see: https://facelessuser.github.io/wcmatch/glob/
   output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing

@@ -44,6 +44,7 @@ dependencies = [
     "gdal>=3.11",
     "pyproj>=3.7",
     "tqdm",
+    "wcmatch>=10.0",
 ]
 
 [project.optional-dependencies]

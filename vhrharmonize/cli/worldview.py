@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import fnmatch
-import glob
 import json
 import os
 import subprocess
@@ -16,6 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import geopandas as gpd
+from wcmatch import glob
 
 from vhrharmonize.cli.cli_helpers import load_yaml_config
 from vhrharmonize.io.geospatial import calculate_raster_overviews, get_image_percentile_value, shp_to_gpkg
@@ -440,22 +440,18 @@ def _read_json(path: str) -> Dict:
     return loaded
 
 
-def _collect_input_tif_files(input_file_globs: List[str]) -> List[str]:
-    """Collect tif files from recursive globs.
+def _collect_input_files(input_file_globs: List[str]) -> List[str]:
+    """Collect input files from glob patterns.
     Args:
-        input_file_globs: Recursive glob patterns to scan.
+        input_file_globs: Glob patterns to scan.
     Returns:
-        Unique absolute tif paths.
+        Unique absolute file paths.
     """
-    tif_files: List[str] = []
+    matched_files: List[str] = []
     for pattern in input_file_globs:
-        matches = glob.glob(pattern, recursive=True)
-        tif_files.extend(
-            path
-            for path in matches
-            if os.path.isfile(path) and os.path.splitext(path)[1].lower() == ".tif"
-        )
-    return sorted({os.path.abspath(path) for path in tif_files})
+        matches = glob.glob(pattern, flags=glob.GLOBSTAR | glob.BRACE | glob.EXTGLOB | glob.GLOBTILDE | glob.GLOBSTARLONG | glob.NEGATE)
+        matched_files.extend(path for path in matches if os.path.isfile(path))
+    return sorted({os.path.abspath(path) for path in matched_files})
 
 
 def _resolve_concurrent_processing(value: object) -> int:
@@ -2051,13 +2047,13 @@ def _run_workflow(args: argparse.Namespace) -> int:
         Process exit code.
     """
     filter_basenames = _parse_filter_basenames(args.filter_basename)
-    tif_files = _collect_input_tif_files(args.input_file_glob)
-    if not tif_files:
-        raise ValueError("No tif files matched --input-file-glob.")
+    input_files = _collect_input_files(args.input_file_glob)
+    if not input_files:
+        raise ValueError("No files matched --input-file-glob.")
 
-    scenes = load_worldview_scenes_from_tif_files(tif_files, filter_basenames=filter_basenames)
+    scenes = load_worldview_scenes_from_tif_files(input_files, filter_basenames=filter_basenames)
     log(
-        f"Discovered {len(tif_files)} tif files across {len(scenes)} scenes",
+        f"Discovered {len(input_files)} input files across {len(scenes)} scenes",
         enabled=args.log_to_console,
         step="workflow",
     )
@@ -2117,7 +2113,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--input-file-glob",
         action="append",
-        help="Recursive glob used to find input tif files, for example '/data/**/*.tif'.",
+        help="Glob used to find input files, for example '/data/**/*.TIF'.",
     )
     parser.add_argument("--input-dir", dest="input_file_glob", action="append", help=argparse.SUPPRESS)
     parser.add_argument(
