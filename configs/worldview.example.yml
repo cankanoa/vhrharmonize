@@ -34,7 +34,9 @@ shared:
   log_to_console: true
   overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true
   skip_existing: true # Skip the whole scene only if all requested non-temp outputs already exist
+  skip_existing_check_validity: true # Before skipping a whole scene, verify existing raster outputs are GDAL-readable
   run_from_existing: true # At each step, if the expected output exists, reuse it instead of rerunning that step
+  run_from_existing_check_validity: true # Before reusing a step output, verify existing raster outputs are GDAL-readable
   max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold
 
 workflow:

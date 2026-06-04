@@ -38,6 +38,8 @@ The workflow also supports:
 
 - step-level reuse with `run_from_existing`
 - scene-level skipping with `skip_existing`
+- GDAL readability checks for reused rasters with `run_from_existing_check_validity`
+- GDAL readability checks before whole-scene skips with `skip_existing_check_validity`
 - grouped per-scene multiprocessing with `concurrent_processing`
 
 ## Processing Steps

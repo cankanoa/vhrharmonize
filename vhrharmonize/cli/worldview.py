@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import geopandas as gpd
+from osgeo import gdal
 from wcmatch import glob
 
 from vhrharmonize.cli.cli_helpers import load_yaml_config
@@ -605,6 +606,90 @@ def _step_outputs_exist(output_paths: List[str]) -> bool:
     return bool(output_paths) and all(os.path.exists(path) for path in output_paths)
 
 
+def _is_gdal_raster_path(path: str) -> bool:
+    """Return whether a path should be validated as a GDAL raster."""
+    extension = os.path.splitext(path)[1].lower()
+    return extension in {".tif", ".tiff", ".dat", ".img", ".vrt"}
+
+
+def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
+    """Check that a raster can be opened and read by GDAL.
+    Args:
+        path: Raster path to validate.
+    Returns:
+        Tuple of validity and optional reason.
+    """
+    if not os.path.exists(path):
+        return False, "missing"
+    dataset = gdal.OpenEx(path, gdal.OF_RASTER)
+    if dataset is None:
+        return False, "GDAL open failed"
+    try:
+        band_count = dataset.RasterCount
+        width = dataset.RasterXSize
+        height = dataset.RasterYSize
+        if band_count < 1 or width < 1 or height < 1:
+            return False, f"invalid raster shape bands={band_count} size={width}x{height}"
+
+        read_w = min(width, 256)
+        read_h = min(height, 256)
+        offsets = [
+            (0, 0),
+            (max(0, width - read_w), max(0, height - read_h)),
+        ]
+        for band_index in range(1, band_count + 1):
+            band = dataset.GetRasterBand(band_index)
+            if band is None:
+                return False, f"missing band {band_index}"
+            for xoff, yoff in offsets:
+                data = band.ReadRaster(xoff, yoff, read_w, read_h)
+                if data is None:
+                    return False, f"GDAL ReadRaster failed for band {band_index}"
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        dataset = None
+    return True, None
+
+
+def _existing_outputs_are_reusable(
+    output_paths: List[str],
+    *,
+    check_validity: bool,
+    log_to_console: bool,
+    step: str,
+    scene_basename: str | None = None,
+) -> bool:
+    """Return whether existing outputs can be reused.
+    Args:
+        output_paths: Output file paths expected for reuse.
+        check_validity: Whether GDAL-readable raster outputs must be valid.
+        log_to_console: Whether to log validation failures.
+        step: Step name used for concise logging.
+        scene_basename: Optional scene basename for the log prefix.
+    Returns:
+        True when all outputs exist and enabled validity checks pass.
+    """
+    if not _step_outputs_exist(output_paths):
+        return False
+    if not check_validity:
+        return True
+    for output_path in output_paths:
+        if not _is_gdal_raster_path(output_path):
+            continue
+        is_valid, reason = _gdal_raster_is_valid(output_path)
+        if not is_valid:
+            _log_step_plan(
+                step,
+                outputs=[output_path],
+                message=f"Existing output invalid; rerunning ({reason})",
+                enabled=log_to_console,
+                scene_basename=scene_basename,
+            )
+            return False
+    return True
+
+
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
     """Resolve per-scene step directories.
     Args:
@@ -1006,7 +1091,12 @@ def _run_radiometric_group(
         group_label=group_label,
         is_root=not label_parts,
     )
-    if args.run_from_existing and os.path.exists(output_path):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        [output_path],
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="radiometric",
+    ):
         _log_step_plan(
             "radiometric",
             outputs=[output_path],
@@ -1133,7 +1223,13 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         extension=".json",
         skip_existing=False,
     )
-    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        plan.output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="fetch_atmosphere",
+        scene_basename=state.scene.primary_basename,
+    ):
         _log_step_plan(
             "fetch_atmosphere",
             outputs=plan.output_paths,
@@ -1230,7 +1326,13 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         extension=_get_atmospheric_extension(args),
         skip_existing=False,
     )
-    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        plan.output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="atmospheric_correction",
+        scene_basename=state.scene.primary_basename,
+    ):
         _log_step_plan(
             "atmospheric_correction",
             outputs=plan.output_paths,
@@ -1374,7 +1476,13 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             suffix=args.orthorectification_output_suffix,
             skip_existing=False,
         )
-        if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+        if args.run_from_existing and _existing_outputs_are_reusable(
+            plan.output_paths,
+            check_validity=args.run_from_existing_check_validity,
+            log_to_console=args.log_to_console,
+            step="orthorectification",
+            scene_basename=state.scene.primary_basename,
+        ):
             _log_step_plan(
                 "orthorectification",
                 outputs=plan.output_paths,
@@ -1428,7 +1536,13 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 suffix=args.orthorectification_pan_output_suffix,
                 skip_existing=False,
             )
-            if args.run_from_existing and _step_outputs_exist(pan_plan.output_paths):
+            if args.run_from_existing and _existing_outputs_are_reusable(
+                pan_plan.output_paths,
+                check_validity=args.run_from_existing_check_validity,
+                log_to_console=args.log_to_console,
+                step="orthorectification_pan",
+                scene_basename=state.scene.primary_basename,
+            ):
                 _log_step_plan(
                     "orthorectification_pan",
                     outputs=pan_plan.output_paths,
@@ -1495,7 +1609,13 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         suffix=args.pansharpen_output_suffix,
         skip_existing=False,
     )
-    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        plan.output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="pansharpen",
+        scene_basename=state.scene.primary_basename,
+    ):
         _log_step_plan(
             "pansharpen",
             outputs=plan.output_paths,
@@ -1562,7 +1682,13 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         skip_existing=False,
     )
 
-    if args.run_from_existing and _step_outputs_exist(output_plan.output_paths) and _step_outputs_exist(mask_plan.output_paths):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        output_plan.output_paths + mask_plan.output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="cloud_mask",
+        scene_basename=state.scene.primary_basename,
+    ):
         _log_step_plan(
             "cloud_mask",
             outputs=output_plan.output_paths + mask_plan.output_paths,
@@ -1658,7 +1784,13 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
         suffix=args.alignment_output_suffix,
         skip_existing=False,
     )
-    if args.run_from_existing and _step_outputs_exist(plan.output_paths):
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        plan.output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="alignment",
+        scene_basename=state.scene.primary_basename,
+    ):
         _log_step_plan(
             "alignment",
             outputs=plan.output_paths,
@@ -1741,11 +1873,31 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
     """
     expected_outputs = _get_expected_scene_step_outputs(state, args)
     required_outputs = _scene_skip_required_outputs(state, args)
-    if required_outputs and not _step_outputs_exist(required_outputs):
+    if required_outputs and not _existing_outputs_are_reusable(
+        required_outputs,
+        check_validity=args.skip_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="workflow",
+        scene_basename=state.scene.primary_basename,
+    ):
         return False
     if args.run_radiometric_normalization:
-        return os.path.isfile(expected_outputs["final_raster"][0])
-    return True if required_outputs else os.path.isfile(expected_outputs["final_raster"][0])
+        return _existing_outputs_are_reusable(
+            expected_outputs["final_raster"],
+            check_validity=args.skip_existing_check_validity,
+            log_to_console=args.log_to_console,
+            step="workflow",
+            scene_basename=state.scene.primary_basename,
+        )
+    if required_outputs:
+        return True
+    return _existing_outputs_are_reusable(
+        expected_outputs["final_raster"],
+        check_validity=args.skip_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="workflow",
+        scene_basename=state.scene.primary_basename,
+    )
 
 
 def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
@@ -1896,6 +2048,8 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
         },
         "workflow": {
             "run_from_existing": args.run_from_existing,
+            "run_from_existing_check_validity": args.run_from_existing_check_validity,
+            "skip_existing_check_validity": args.skip_existing_check_validity,
             "run_fetch_atmosphere": args.run_fetch_atmosphere,
             "run_atmospheric_correction": args.run_atmospheric_correction,
             "run_orthorectification": args.run_orthorectification,
@@ -2132,6 +2286,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="int16")
     parser.add_argument("--log-to-console", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-from-existing", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--run-from-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--flaash-dem-ground-percentile", type=float, default=50.0)
     parser.add_argument("--flaash-modtran-atm")
     parser.add_argument("--flaash-modtran-aer")
@@ -2165,6 +2320,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--orthorectification-rpc-refinement-geojson")
     parser.add_argument("--pansharpen-output-suffix", default="_pansharpen")
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--skip-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--concurrent-processing", default=1)
     parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
