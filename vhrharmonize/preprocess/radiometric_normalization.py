@@ -2,35 +2,11 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
+from spectralmatch.chain import pipeline as spectralmatch_pipeline
 from vhrharmonize.preprocess.helpers import log
-
-
-def _load_spectralmatch_pipeline() -> Callable[..., Any]:
-    """Import the upstream ``spectralmatch.pipeline`` callable."""
-    candidate_paths = [
-        ("spectralmatch.chain", "pipeline"),
-        ("spectralmatch", "pipeline"),
-        ("spectralmatch.pipeline", "pipeline"),
-    ]
-    errors = []
-    for module_name, attr_name in candidate_paths:
-        try:
-            module = import_module(module_name)
-            pipeline = getattr(module, attr_name, None)
-            if callable(pipeline):
-                return pipeline
-        except Exception as exc:
-            errors.append(f"{module_name}.{attr_name}: {exc}")
-    raise RuntimeError(
-        "spectralmatch pipeline function could not be imported. "
-        "Install extras with `pip install -e \".[radiometric-normalization]\"` and ensure the package "
-        "exposes `pipeline(...)`."
-        + (f" Tried: {'; '.join(errors)}" if errors else "")
-    )
 
 
 def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
@@ -125,8 +101,7 @@ def radiometric_normalization(
         if value is not None:
             pipeline_kwargs[key] = value
 
-    pipeline = _load_spectralmatch_pipeline()
-    result = pipeline(**pipeline_kwargs)
+    result = spectralmatch_pipeline(**pipeline_kwargs)
 
     if output_path.exists():
         log(f"Wrote output {output_path.name}", enabled=log_to_console, step="radiometric")

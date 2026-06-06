@@ -5,17 +5,18 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import geopandas as gpd
 from osgeo import gdal
+from wcmatch import fnmatch as wc_fnmatch
 from wcmatch import glob
 
 from vhrharmonize.cli.cli_helpers import load_yaml_config
@@ -43,6 +44,7 @@ from vhrharmonize.preprocess.orthorectification import (
 )
 from vhrharmonize.preprocess.pansharpening import pansharpen_image
 from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
+from vhrharmonize.preprocess.seamline_metadata import write_seamline_metadata_gpkg
 from vhrharmonize.providers.worldview import (
     WorldViewImage,
     WorldViewScene,
@@ -57,6 +59,22 @@ RASTER_STEP_ORDER = [
     "cloud_mask",
     "alignment",
 ]
+
+WCMATCH_INPUT_FLAGS = (
+    glob.GLOBSTAR
+    | glob.BRACE
+    | glob.EXTGLOB
+    | glob.GLOBTILDE
+    | glob.GLOBSTARLONG
+    | glob.NEGATE
+)
+WCMATCH_GROUP_FLAGS = (
+    getattr(wc_fnmatch, "BRACE", 0)
+    | getattr(wc_fnmatch, "EXTMATCH", 0)
+    | getattr(wc_fnmatch, "EXTGLOB", 0)
+    | getattr(wc_fnmatch, "NEGATE", 0)
+    | getattr(wc_fnmatch, "GLOBSTAR", 0)
+)
 
 @dataclass
 class SceneWorkflowState:
@@ -232,6 +250,12 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
     radiometric_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
     return radiometric_kwargs
+
+
+def _explicit_cli_arg_present(argv: List[str], arg_name: str) -> bool:
+    """Return whether a long CLI option was explicitly provided."""
+    option = f"--{arg_name.replace('_', '-')}"
+    return any(token == option or token.startswith(f"{option}=") for token in argv)
 
 
 def _coerce_unknown_arg_value(raw_value: str) -> object:
@@ -450,7 +474,7 @@ def _collect_input_files(input_file_globs: List[str]) -> List[str]:
     """
     matched_files: List[str] = []
     for pattern in input_file_globs:
-        matches = glob.glob(pattern, flags=glob.GLOBSTAR | glob.BRACE | glob.EXTGLOB | glob.GLOBTILDE | glob.GLOBSTARLONG | glob.NEGATE)
+        matches = glob.glob(pattern, flags=WCMATCH_INPUT_FLAGS)
         matched_files.extend(path for path in matches if os.path.isfile(path))
     return sorted({os.path.abspath(path) for path in matched_files})
 
@@ -466,15 +490,13 @@ def _resolve_concurrent_processing(value: object) -> int:
         normalized = value.strip().lower()
         if normalized == "num_cpu":
             return max(1, os.cpu_count() or 1)
-        try:
-            resolved = int(normalized)
-        except ValueError as exc:
-            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+        if not re.fullmatch(r"[-+]?\d+", normalized):
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.")
+        resolved = int(normalized)
     else:
-        try:
-            resolved = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+        if not isinstance(value, int):
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.")
+        resolved = int(value)
     if resolved < 1:
         raise ValueError("concurrent_processing must be >= 1.")
     return resolved
@@ -530,12 +552,75 @@ def _log_step_plan(
     log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
+def _classify_save_target(save_value: Optional[str], *, default: str) -> tuple[str, str]:
+    """Return a normalized save target and target kind."""
+    normalized = (save_value if save_value not in (None, "") else default).strip()
+    if normalized == "$temp":
+        return normalized, "temp_root"
+    if normalized.startswith("$temp/"):
+        return normalized, "temp_child"
+    if normalized == "$output":
+        return normalized, "output_root"
+    if normalized.startswith("$output/"):
+        return normalized, "output_child"
+    if normalized.startswith("./"):
+        return normalized, "input_relative"
+    if os.path.isabs(normalized):
+        return normalized, "absolute"
+    return normalized, "cwd_relative"
+
+
+def _format_allowed_save_targets(allowed_modes: set[str]) -> str:
+    """Return a human-readable list of accepted save target forms."""
+    labels = [
+        ("temp_root", "$temp"),
+        ("temp_child", "$temp/..."),
+        ("output_root", "$output"),
+        ("output_child", "$output/..."),
+        ("input_relative", "./relative/to/input"),
+        ("absolute", "/custom/absolute"),
+        ("cwd_relative", "relative/to/pwd"),
+    ]
+    return " | ".join(label for mode, label in labels if mode in allowed_modes)
+
+
+def _resolve_save_target(
+    save_value: Optional[str],
+    *,
+    default: str,
+    temp_root: str,
+    output_root: str,
+    relative_base_folder: str,
+    accepted_modes: set[str],
+) -> str:
+    """Resolve a save target after checking that its target kind is accepted."""
+    save_mode, save_kind = _classify_save_target(save_value, default=default)
+    if save_kind not in accepted_modes:
+        raise ValueError(
+            f"Unsupported save target '{save_mode}'. Accepted forms: {_format_allowed_save_targets(accepted_modes)}"
+        )
+    if save_kind == "temp_root":
+        return temp_root
+    if save_kind == "temp_child":
+        return os.path.join(temp_root, save_mode[len("$temp/"):])
+    if save_kind == "output_root":
+        return output_root
+    if save_kind == "output_child":
+        return os.path.join(output_root, save_mode[len("$output/"):])
+    if save_kind == "input_relative":
+        return resolve_relative_to_input(save_mode, relative_base_folder)
+    if save_kind == "absolute":
+        return save_mode
+    return os.path.abspath(save_mode)
+
+
 def _resolve_step_save_dir(
     save_value: Optional[str],
     *,
     temp_root: str,
     output_root: str,
     relative_base_folder: str,
+    accepted_modes: set[str] | None = None,
 ) -> str:
     """Resolve a configured step save directory.
     Args:
@@ -546,23 +631,55 @@ def _resolve_step_save_dir(
     Returns:
         Resolved step save directory.
     """
-    save_mode = (save_value or "$temp").strip()
-    if save_mode == "$temp":
-        resolved_dir = temp_root
-    elif save_mode.startswith("$temp/"):
-        resolved_dir = os.path.join(temp_root, save_mode[len("$temp/"):])
-    elif save_mode == "$output":
-        resolved_dir = output_root
-    elif save_mode.startswith("$output/"):
-        resolved_dir = os.path.join(output_root, save_mode[len("$output/"):])
-    elif save_mode.startswith("./"):
-        resolved_dir = resolve_relative_to_input(save_mode, relative_base_folder)
-    elif os.path.isabs(save_mode):
-        resolved_dir = save_mode
-    else:
-        resolved_dir = os.path.abspath(save_mode)
+    resolved_dir = _resolve_save_target(
+        save_value,
+        default="$temp",
+        temp_root=temp_root,
+        output_root=output_root,
+        relative_base_folder=relative_base_folder,
+        accepted_modes=accepted_modes
+        or {"temp_root", "temp_child", "output_root", "output_child", "input_relative", "absolute", "cwd_relative"},
+    )
     os.makedirs(resolved_dir, exist_ok=True)
     return resolved_dir
+
+
+def _resolve_single_output_save_path(
+    save_value: Optional[str],
+    *,
+    default: str,
+    temp_root: str,
+    output_root: str,
+    relative_base_folder: str,
+    accepted_modes: set[str] | None = None,
+) -> str:
+    """Resolve a configured single-output save path."""
+    resolved_path = _resolve_save_target(
+        save_value,
+        default=default,
+        temp_root=temp_root,
+        output_root=output_root,
+        relative_base_folder=relative_base_folder,
+        accepted_modes=accepted_modes or {"temp_child", "absolute", "cwd_relative"},
+    )
+    os.makedirs(os.path.dirname(resolved_path) or ".", exist_ok=True)
+    return resolved_path
+
+
+def _validate_save_target_value(
+    save_value: Optional[str],
+    *,
+    arg_name: str,
+    default: str,
+    accepted_modes: set[str],
+) -> None:
+    """Validate a save target before workflow execution."""
+    normalized, save_kind = _classify_save_target(save_value, default=default)
+    if save_kind not in accepted_modes:
+        raise ValueError(
+            f"--{arg_name.replace('_', '-')} does not support '{normalized}'. "
+            f"Accepted forms: {_format_allowed_save_targets(accepted_modes)}"
+        )
 
 
 def _is_temp_save_value(save_value: Optional[str]) -> bool:
@@ -760,9 +877,18 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
         )
+    if args.run_seamline_metadata:
+        step_dirs["seamline_metadata"] = _resolve_single_output_save_path(
+            args.save_seamline_metadata,
+            default="$temp/seamline_metadata.gpkg",
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
     if args.run_radiometric_normalization:
-        step_dirs["radiometric_normalization"] = _resolve_step_save_dir(
+        step_dirs["radiometric_normalization"] = _resolve_single_output_save_path(
             args.save_radiometric_normalization,
+            default="$temp/radiometric_root.tif",
             temp_root=resolved_temp_root,
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
@@ -960,23 +1086,30 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
     return required_outputs
 
 
-def _normalize_group_by_basename_spec(raw_spec: object) -> object:
+def _normalize_group_by_basename_spec(raw_spec: object, *, _nested: bool = False) -> object:
     """Normalize a radiometric grouping specification.
     Args:
         raw_spec: Raw grouping specification value.
+        _nested: Whether this value is inside the top-level list.
     Returns:
         Normalized grouping specification.
     """
-    if raw_spec in (None, "", []):
+    if raw_spec in (None, ""):
         return None
     if isinstance(raw_spec, str):
         stripped = raw_spec.strip()
         if stripped.startswith("["):
-            return _normalize_group_by_basename_spec(json.loads(stripped))
-        return raw_spec
+            return _normalize_group_by_basename_spec(json.loads(stripped), _nested=_nested)
+        if _nested:
+            return raw_spec
+        raise ValueError("group_by_basename must be a list of string patterns, for example ['*893242343*', '*123456789*'].")
     if not isinstance(raw_spec, list):
-        raise ValueError("group_by_basename must be a string or nested list of strings.")
-    return [_normalize_group_by_basename_spec(item) for item in raw_spec]
+        raise ValueError("group_by_basename must be a list of string patterns or nested lists of string patterns.")
+    if not raw_spec:
+        if _nested:
+            raise ValueError("Nested group_by_basename lists must not be empty.")
+        return None
+    return [_normalize_group_by_basename_spec(item, _nested=True) for item in raw_spec]
 
 
 def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
@@ -990,7 +1123,7 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
     matches = [
         path
         for path in available_paths
-        if fnmatch.fnmatch(os.path.basename(path), pattern) or fnmatch.fnmatch(path, pattern)
+        if wc_fnmatch.fnmatch(path, pattern, flags=WCMATCH_GROUP_FLAGS)
     ]
     if not matches:
         raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
@@ -1015,31 +1148,23 @@ def _dedupe_paths(paths: List[str]) -> List[str]:
 
 
 def _resolve_radiometric_group_output_path(
-    args: argparse.Namespace,
-    output_dir: str,
     *,
+    output_path: str,
     group_label: str,
-    is_root: bool,
 ) -> str:
     """Resolve a radiometric group output path.
     Args:
-        args: Parsed CLI arguments.
-        output_dir: Base output directory for radiometric products.
+        output_path: Configured aggregate radiometric output path.
         group_label: Group label used in default output naming.
-        is_root: Whether this is the root radiometric group.
     Returns:
         Resolved radiometric group output path.
     """
-    configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
-    if configured_output is None and is_root:
-        configured_output = args.radiometric_normalization_output
-    if configured_output:
-        if "$" in configured_output:
-            configured_output = configured_output.replace("$", group_label)
-        if os.path.isabs(configured_output):
-            return configured_output
-        return os.path.normpath(os.path.join(output_dir, configured_output))
-    return os.path.join(output_dir, f"{group_label}.tif")
+    if "$" in output_path:
+        return output_path.replace("$", group_label)
+    if group_label == "radiometric_root":
+        return output_path
+    root, extension = os.path.splitext(output_path)
+    return f"{root}_{group_label}{extension or '.tif'}"
 
 
 def _run_radiometric_group(
@@ -1047,7 +1172,7 @@ def _run_radiometric_group(
     *,
     available_paths: List[str],
     args: argparse.Namespace,
-    output_dir: str,
+    output_path: str,
     temp_root: str,
     label_parts: List[int],
 ) -> str | List[str]:
@@ -1056,7 +1181,7 @@ def _run_radiometric_group(
         group_spec: Group specification string or nested list.
         available_paths: Available scene output paths.
         args: Parsed CLI arguments.
-        output_dir: Radiometric output directory.
+        output_path: Configured aggregate radiometric output path.
         temp_root: Temp root used for SpectralMatch temp files.
         label_parts: Hierarchical label parts for nested groups.
     Returns:
@@ -1074,7 +1199,7 @@ def _run_radiometric_group(
             item,
             available_paths=available_paths,
             args=args,
-            output_dir=output_dir,
+            output_path=output_path,
             temp_root=temp_root,
             label_parts=child_label_parts,
         )
@@ -1085,29 +1210,28 @@ def _run_radiometric_group(
 
     child_inputs = _dedupe_paths(child_inputs)
     group_label = "radiometric_root" if not label_parts else "radiometric_group_" + "_".join(str(part) for part in label_parts)
-    output_path = _resolve_radiometric_group_output_path(
-        args,
-        output_dir,
+    radiometric_kwargs = _build_radiometric_kwargs(args)
+    configured_output_path = radiometric_kwargs.get("shared_output_image_path") or output_path
+    group_output_path = _resolve_radiometric_group_output_path(
+        output_path=str(configured_output_path),
         group_label=group_label,
-        is_root=not label_parts,
     )
     if args.run_from_existing and _existing_outputs_are_reusable(
-        [output_path],
+        [group_output_path],
         check_validity=args.run_from_existing_check_validity,
         log_to_console=args.log_to_console,
         step="radiometric",
     ):
         _log_step_plan(
             "radiometric",
-            outputs=[output_path],
+            outputs=[group_output_path],
             message=f"Skipping group {group_label} because output exists",
             enabled=args.log_to_console,
         )
-        return output_path
+        return group_output_path
 
-    radiometric_kwargs = _build_radiometric_kwargs(args)
     radiometric_kwargs.setdefault("shared_input_images", child_inputs)
-    radiometric_kwargs.setdefault("shared_output_image_path", output_path)
+    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
     radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
     radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
     radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
@@ -1115,7 +1239,7 @@ def _run_radiometric_group(
     _log_step_plan(
         "radiometric",
         inputs=child_inputs,
-        outputs=[output_path],
+        outputs=[group_output_path],
         message=f"Running SpectralMatch group {group_label}",
         enabled=args.log_to_console,
     )
@@ -1126,8 +1250,8 @@ def _run_radiometric_group(
     )
     if args.calculate_overviews_radiometric_normalization:
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(output_path, args.overview_scales)
-    return output_path
+        calculate_raster_overviews(group_output_path, args.overview_scales)
+    return group_output_path
 
 
 def _run_radiometric_normalization_workflow(
@@ -1160,10 +1284,74 @@ def _run_radiometric_normalization_workflow(
         group_spec,
         available_paths=available_paths,
         args=args,
-        output_dir=reference_state.step_dirs["radiometric_normalization"],
+        output_path=reference_state.step_dirs["radiometric_normalization"],
         temp_root=reference_state.step_dirs["temp_root"],
         label_parts=[],
     )
+
+
+def _run_seamline_metadata_workflow(
+    states: List[SceneWorkflowState],
+    *,
+    args: argparse.Namespace,
+    reference_state: SceneWorkflowState,
+) -> str | None:
+    """Run the aggregate seamline metadata GeoPackage step.
+    Args:
+        states: Processed scene states.
+        args: Parsed CLI arguments.
+        reference_state: State used to resolve aggregate output directories.
+    Returns:
+        Seamline metadata GeoPackage path or None.
+    """
+    if not args.run_seamline_metadata:
+        return None
+
+    output_path = reference_state.step_dirs["seamline_metadata"]
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        [output_path],
+        check_validity=False,
+        log_to_console=args.log_to_console,
+        step="seamline_metadata",
+    ):
+        _log_step_plan(
+            "seamline_metadata",
+            outputs=[output_path],
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+        )
+        return output_path
+
+    _log_step_plan(
+        "seamline_metadata",
+        inputs=[state.current_files[0] for state in states if state.current_files],
+        outputs=[output_path],
+        message="Writing footprint metadata GeoPackage",
+        enabled=args.log_to_console,
+    )
+    return write_seamline_metadata_gpkg(
+        states,
+        output_path,
+        layer=args.seamline_metadata_layer,
+        image_field_name=args.seamline_metadata_image_field_name,
+        footprint_source=args.seamline_metadata_footprint_source,
+        calculate_bounds_eight_connected=args.seamline_metadata_calculate_bounds_eight_connected,
+        epsg=args.epsg,
+    )
+
+
+def _apply_weighted_seamline_metadata_defaults(args: argparse.Namespace, seamline_metadata_output: str | None) -> None:
+    """Default weighted seamline inputs from the generated WorldView metadata GPKG."""
+    if not seamline_metadata_output:
+        return
+    if getattr(args, "match_seamline_method", None) != "weighted_seamline":
+        return
+    if not getattr(args, "match_weighted_seamline_input_polygons", None):
+        setattr(args, "match_weighted_seamline_input_polygons", seamline_metadata_output)
+    if not getattr(args, "match_weighted_seamline_input_layer", None):
+        setattr(args, "match_weighted_seamline_input_layer", args.seamline_metadata_layer)
+    if not getattr(args, "match_weighted_seamline_image_field_name", None):
+        setattr(args, "match_weighted_seamline_image_field_name", args.seamline_metadata_image_field_name)
 
 
 def _run_cloud_mask_command(
@@ -2056,6 +2244,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "run_pansharpen": args.run_pansharpen,
             "run_cloud_mask": args.run_cloud_mask,
             "run_alignment": args.run_alignment,
+            "run_seamline_metadata": args.run_seamline_metadata,
             "run_radiometric_normalization": args.run_radiometric_normalization,
             "atmospheric_method": args.atmospheric_method,
             "epsg": args.epsg,
@@ -2233,6 +2422,21 @@ def _run_workflow(args: argparse.Namespace) -> int:
         for scene in scenes:
             processed_states.append(_process_scene(scene, args))
 
+    seamline_metadata_output = None
+    if processed_states and args.run_seamline_metadata:
+        seamline_metadata_output = _run_seamline_metadata_workflow(
+            processed_states,
+            args=args,
+            reference_state=processed_states[0],
+        )
+        if seamline_metadata_output:
+            log(
+                f"Wrote seamline metadata {seamline_metadata_output}",
+                enabled=args.log_to_console,
+                step="seamline_metadata",
+            )
+        _apply_weighted_seamline_metadata_defaults(args, seamline_metadata_output)
+
     if processed_states and args.run_radiometric_normalization:
         log(
             f"Preparing grouped radiometric normalization for {len([state for state in processed_states if state.current_files])} scene outputs",
@@ -2314,7 +2518,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir")
     parser.add_argument("--fetch-atmosphere-output-suffix", default="_atmosphere")
     parser.add_argument("--atmospheric-correction-output-suffix", default="_atmospheric")
-    parser.add_argument("--radiometric-normalization-output")
     parser.add_argument("--orthorectification-output-suffix", default="_ortho")
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
     parser.add_argument("--orthorectification-rpc-refinement-geojson")
@@ -2343,8 +2546,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-alignment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-alignment", default="$temp")
     parser.add_argument("--calculate-overviews-alignment", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--run-seamline-metadata", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save-seamline-metadata", default="$temp/seamline_metadata.gpkg")
+    parser.add_argument("--seamline-metadata-layer", default="footprints")
+    parser.add_argument("--seamline-metadata-image-field-name", default="image")
+    parser.add_argument(
+        "--seamline-metadata-footprint-source",
+        choices=["package_bounds", "calculate_bounds"],
+        default="package_bounds",
+    )
+    parser.add_argument(
+        "--seamline-metadata-calculate-bounds-eight-connected",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--run-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--save-radiometric-normalization", default="$temp")
+    parser.add_argument("--save-radiometric-normalization", default="$temp/radiometric_root.tif")
     parser.add_argument("--calculate-overviews-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip-flaash", action="store_true")
     parser.add_argument("--existing-flaash-input")
@@ -2398,9 +2615,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse CLI/config arguments, validate them, and execute the workflow."""
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config-yaml")
-    config_args, _ = config_parser.parse_known_args(argv)
+    config_args, _ = config_parser.parse_known_args(raw_argv)
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
@@ -2409,7 +2627,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     if config_defaults:
         parser.set_defaults(**config_defaults)
-    args, unknown_args = parser.parse_known_args(argv)
+    args, unknown_args = parser.parse_known_args(raw_argv)
     _apply_unknown_prefixed_args(args, unknown_args)
 
     if not args.input_file_glob:
@@ -2446,6 +2664,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
+    per_scene_save_modes = {
+        "temp_root",
+        "temp_child",
+        "output_root",
+        "output_child",
+        "input_relative",
+        "absolute",
+        "cwd_relative",
+    }
+    aggregate_single_output_modes = {"temp_child", "absolute", "cwd_relative"}
     for arg_name in (
         "save_fetch_atmosphere",
         "save_atmospheric_correction",
@@ -2453,34 +2681,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         "save_pansharpen",
         "save_cloud_mask",
         "save_alignment",
-        "save_radiometric_normalization",
     ):
-        save_value = getattr(args, arg_name)
-        if save_value in (None, ""):
-            continue
-        normalized = str(save_value).strip()
-        if normalized in ("$temp", "$output"):
-            continue
-        if normalized.startswith(("$temp/", "$output/", "./")):
-            continue
-        if os.path.isabs(normalized):
-            continue
-        if normalized.startswith("../"):
-            continue
-        if normalized in ("temp", "output") or normalized.startswith(("temp/", "output/")):
-            parser.error(
-                f"--{arg_name.replace('_', '-')} no longer supports legacy 'temp'/'output' prefixes; "
-                "use '$temp' or '$output' instead."
-            )
+        _validate_save_target_value(
+            getattr(args, arg_name),
+            arg_name=arg_name,
+            default="$temp",
+            accepted_modes=per_scene_save_modes,
+        )
+    for arg_name, default_value in (
+        ("save_seamline_metadata", "$temp/seamline_metadata.gpkg"),
+        ("save_radiometric_normalization", "$temp/radiometric_root.tif"),
+    ):
+        _validate_save_target_value(
+            getattr(args, arg_name),
+            arg_name=arg_name,
+            default=default_value,
+            accepted_modes=aggregate_single_output_modes,
+        )
     if (
         args.max_cloud_cover_to_process is not None
         and (args.max_cloud_cover_to_process < 0 or args.max_cloud_cover_to_process > 100)
     ):
         parser.error("--max-cloud-cover-to-process must be in [0, 100].")
-    try:
-        args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
-    except ValueError as exc:
-        parser.error(str(exc))
+    args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
     if args.overview_scales is not None:
         if isinstance(args.overview_scales, str):
             args.overview_scales = [int(value.strip()) for value in args.overview_scales.split(",") if value.strip()]
@@ -2511,18 +2734,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--alignment-edge-trim-detection-band-index must be >= 0.")
     if args.alignment_solve_resolution is not None and args.alignment_solve_resolution <= 0:
         parser.error("--alignment-solve-resolution must be > 0.")
-    try:
-        _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
-    except Exception as exc:
-        parser.error(f"Invalid --cloud-mask-omnicloud-kwargs-json: {exc}")
-    try:
-        _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    except Exception as exc:
-        parser.error(f"Invalid --radiometric-normalization-kwargs-json: {exc}")
-    try:
-        _normalize_group_by_basename_spec(args.group_by_basename)
-    except Exception as exc:
-        parser.error(f"Invalid --group-by-basename: {exc}")
+    _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
+    radiometric_kwargs_json = _parse_json_dict(args.radiometric_normalization_kwargs_json)
+    save_radiometric_output_is_explicit = (
+        "save_radiometric_normalization" in config_defaults
+        or _explicit_cli_arg_present(raw_argv, "save_radiometric_normalization")
+    )
+    match_shared_output_is_explicit = (
+        getattr(args, "match_shared_output_image_path", None) is not None
+        or "shared_output_image_path" in radiometric_kwargs_json
+    )
+    if save_radiometric_output_is_explicit and match_shared_output_is_explicit:
+        parser.error(
+            "Cannot set both save_radiometric_normalization and "
+            "match_shared_output_image_path/shared_output_image_path; use only one radiometric output path option."
+        )
+    _normalize_group_by_basename_spec(args.group_by_basename)
     return _run_workflow(args)
 
 

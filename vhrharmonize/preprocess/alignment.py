@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import os
 from typing import Any
 
+from coregix import align_image_pair as coregix_align_image_pair
+
 from vhrharmonize.preprocess.helpers import log
 
 
@@ -104,13 +106,6 @@ def align_image_pair(
         raise ValueError("edge_trim_detection_band_index must be >= 0.")
     if solve_resolution is not None and solve_resolution <= 0:
         raise ValueError("solve_resolution must be > 0 when provided.")
-
-    try:
-        from coregix import align_image_pair as coregix_align_image_pair
-    except ImportError as exc:
-        raise RuntimeError(
-            "coregix is not installed. Install alignment extras with `pip install -e \".[align]\"`."
-        ) from exc
 
     log(
         f"Running alignment moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",

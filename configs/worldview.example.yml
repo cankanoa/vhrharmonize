@@ -17,6 +17,10 @@
 shared:
   input_file_glob:
     - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
+  # input_file_glob: "/path/to/multiline/worldivew/image/search/**/@(\
+  # 17DEC08211835-[MP]1BS-016445318010_01_P011*|\
+  # 19SEP09211403-[MP]1BS-200011908666_01_P001*\
+  # ).TIF"
   output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing
@@ -75,9 +79,13 @@ workflow:
   save_alignment: $output
   calculate_overviews_alignment: true
 
-  # Radiometrically match images to each other
+  # Build footprint polygons plus IMD metadata for weighted seamline methods
+  run_seamline_metadata: false
+  save_seamline_metadata: $temp/seamline_metadata.gpkg # $temp/file.gpkg | /custom/absolute.gpkg | relative/to/pwd.gpkg
+
+  # Radiometrically match images to each other, align pixel grids, mask, and merge images
   run_radiometric_normalization: false
-  save_radiometric_normalization: # /custom/absolute
+  save_radiometric_normalization: $temp/radiometric_root.tif # $temp/file.tif | /custom/absolute.tif | relative/to/pwd.tif
   calculate_overviews_radiometric_normalization: true
 
 # STEP SPECIFIC SETTINGS HEREAFTER (defaults are often okay)
@@ -201,28 +209,31 @@ alignment:
   alignment_enforce_mutual_valid_mask: true
   # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
 
+seamline_metadata:
+  seamline_metadata_layer: footprints
+  seamline_metadata_image_field_name: image
+  seamline_metadata_footprint_source: package_bounds # package_bounds | calculate_bounds. package_bounds uses the WorldView footprint shapefile; calculate_bounds polygonizes the processed raster valid-data mask
+  seamline_metadata_calculate_bounds_eight_connected: true # Use 8-connectedness when footprint_source is calculate_bounds
+
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
-  # radiometric_normalization_output: radiometric_root.tif # Relative to the radiometric step folder unless absolute; `$` is replaced with the group label
   # SpectralMatch pipeline kwargs:
-  # Pass any SpectralMatch argument through using the `match_` prefix.
-  # https://spectralmatch.github.io/spectralmatch/api/pipeline/
+  # Pass any SpectralMatch argument (seem here: https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix.
 
-  # Optionally run mulitple spectralmatches in a row using groups
+  # Optionally run multiple SpectralMatch groups. Must be a list; patterns use wcmatch against full path.
   # group_by_basename: ["**/*.tif"] # Match all finished scene outputs together
-  # group_by_basename: ["*893242343*", "*123456789*"] # Match only images whose basename or full path matches these patterns
   # group_by_basename: ["*893242343*", ["*111111111*", "*222222222*"], "*123456789*"] # Nested lists run inner spectralmatch first, then include that output in the outer one
-
 
   # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
   # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]
-  # match_shared_output_image_path: /path/to/radiometric/group_output.tif
+  # match_shared_output_image_path: /path/to/image.tif # This is resolved from save_radiometric_normalization or directly set as match_shared_output_image_path; do not set both
   # match_shared_temp_dir: ./temp/spectralmatch
   # match_delete_temp_dir: true
   # match_shared_debug_logs: false
   # match_shared_output_dtype: int16
 
-  # Other optional SpectralMatch pipeline kwargs:
+  # Other optional SpectralMatch pipeline kwargs, defaults are often sufficient:
+  # Shared runtime/output options
   # match_shared_cache: auto
   # match_shared_custom_nodata_value: -9999
   # match_shared_window_size: 1024
@@ -232,11 +243,10 @@ radiometric_normalization:
   # match_shared_calculation_dtype: float32
   # match_shared_output_dtype: int16
   # match_shared_save_as_cog: false
+
+  # Match
   # match_matching_order: [global_regression, local_block_adjustment]
-  # match_align_method: align_rasters
-  # match_seamline_method: voronoi_center_seamline
-  # match_clip_method: mask_rasters
-  # match_merge_method: merge_rasters
+  # Global regression
   # match_global_regression_output_images: /path/to/global_outputs
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
   # match_global_regression_estimate_stats: true
@@ -255,6 +265,7 @@ radiometric_normalization:
   # match_global_regression_pif_min_samples: 32
   # match_global_regression_pif_feature_method: orb
   # match_global_regression_build_overviews: false
+  # Local block adjustment
   # match_local_block_adjustment_output_images: /path/to/local_outputs
   # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
   # match_local_block_adjustment_number_of_blocks: 100
@@ -264,10 +275,16 @@ radiometric_normalization:
   # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
   # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
+
+  # Alignment
+  # match_align_method: align_rasters
   # match_align_rasters_output_images: /path/to/aligned_outputs
   # match_align_rasters_resampling_method: bilinear
   # match_align_rasters_tap: true
   # match_align_rasters_resolution: highest
+
+  # Seamlines
+  # match_seamline_method: weighted_seamline # voronoi_center_seamline | weighted_seamline
   # match_voronoi_center_seamline_output_mask: /path/to/seamline_mask.gpkg
   # match_voronoi_center_seamline_aoi_path: /path/to/aoi.gpkg
   # match_voronoi_center_seamline_vector_mask: [/path/to/footprints.gpkg, image]
@@ -275,8 +292,23 @@ radiometric_normalization:
   # match_voronoi_center_seamline_min_point_spacing: 10
   # match_voronoi_center_seamline_min_cut_length: 0
   # match_voronoi_center_seamline_debug_vectors_path: /path/to/debug_vectors.gpkg
+  # Weighted seamline inputs. These pair nicely with `run_seamline_metadata: true` above.
+  # match_weighted_seamline_input_polygons: /path/to/seamline_metadata.gpkg
+  # match_weighted_seamline_output_mask: /path/to/weighted_seamline_mask.gpkg
+  # Rank functions support field placeholders plus Python expression operators: +, -, *, /, //, %, **, comparisons, and/or/not, parentheses, and math functions abs, min, max, round, sqrt, log, log10, exp, sin, cos, tan.
+  # match_weighted_seamline_rank_function: "-{cloud_cover} + {sun_elevation}"
+  # match_weighted_seamline_image_field_name: image
+  # match_weighted_seamline_input_layer: footprints
+  # match_weighted_seamline_output_layer: seamlines
+  # match_weighted_seamline_rank_descending: true
+
+  # Masking
+  # match_clip_method: mask_rasters
   # match_mask_rasters_output_images: /path/to/masked_outputs
   # match_mask_rasters_vector_mask: [include, /path/to/seamline_mask.gpkg, image]
   # match_mask_rasters_include_touched_pixels: false
+
+  # Merge
+  # match_merge_method: merge_rasters
   # match_merge_rasters_resolution: highest
   # match_merge_rasters_build_overviews: true

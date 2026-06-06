@@ -146,10 +146,7 @@ def _parse_power_value(value: object) -> Optional[float]:
     """
     if value is None:
         return None
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return None
+    v = float(value)
     if v <= -900:
         return None
     return v
