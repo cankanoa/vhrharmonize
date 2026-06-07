@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
+import math
 import os
 import re
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -729,10 +731,11 @@ def _is_gdal_raster_path(path: str) -> bool:
     return extension in {".tif", ".tiff", ".dat", ".img", ".vrt"}
 
 
-def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
+def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tuple[bool, str | None]:
     """Check that a raster can be opened and read by GDAL.
     Args:
         path: Raster path to validate.
+        validity_check_grid_size: Pixel sampling grid size. 0 disables pixel validity sampling.
     Returns:
         Tuple of validity and optional reason.
     """
@@ -762,6 +765,13 @@ def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
                 data = band.ReadRaster(xoff, yoff, read_w, read_h)
                 if data is None:
                     return False, f"GDAL ReadRaster failed for band {band_index}"
+        if validity_check_grid_size > 0 and not _gdal_raster_has_valid_sample(
+            dataset,
+            width,
+            height,
+            validity_check_grid_size,
+        ):
+            return False, "no finite valid pixels found in validity sample"
     except Exception as exc:
         return False, str(exc)
     finally:
@@ -769,10 +779,114 @@ def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def _gdal_raster_has_valid_sample(dataset: gdal.Dataset, width: int, height: int, grid_size: int) -> bool:
+    """Return whether any sampled raster pixel is finite and non-nodata."""
+    if grid_size < 1:
+        return True
+    block_size = 512 if grid_size == 1 else grid_size
+    for band_index in range(1, dataset.RasterCount + 1):
+        band = dataset.GetRasterBand(band_index)
+        if band is None:
+            continue
+        for yoff in range(0, height, block_size):
+            read_h = min(block_size, height - yoff)
+            sample_y = 0 if grid_size == 1 else min(grid_size // 2, read_h - 1)
+            for xoff in range(0, width, block_size):
+                read_w = min(block_size, width - xoff)
+                sample_x = 0 if grid_size == 1 else min(grid_size // 2, read_w - 1)
+                window_xoff = xoff if grid_size == 1 else xoff + sample_x
+                window_yoff = yoff if grid_size == 1 else yoff + sample_y
+                window_w = read_w if grid_size == 1 else 1
+                window_h = read_h if grid_size == 1 else 1
+                if _gdal_band_window_has_valid_pixel(
+                    band,
+                    window_xoff,
+                    window_yoff,
+                    window_w,
+                    window_h,
+                ):
+                    return True
+    return False
+
+
+def _gdal_band_window_has_valid_pixel(
+    band: gdal.Band,
+    xoff: int,
+    yoff: int,
+    read_w: int,
+    read_h: int,
+) -> bool:
+    """Return whether a sampled band window has a finite non-nodata pixel."""
+    struct_format = _gdal_data_type_struct_format(band.DataType)
+    if struct_format is None:
+        return True
+    data = band.ReadRaster(xoff, yoff, read_w, read_h)
+    if data is None:
+        return False
+    mask = None
+    mask_band = band.GetMaskBand()
+    if mask_band is not None:
+        mask = mask_band.ReadRaster(xoff, yoff, read_w, read_h, buf_type=gdal.GDT_Byte)
+
+    nodata = band.GetNoDataValue()
+    item_size = struct.calcsize(struct_format)
+    if read_w == 1 and read_h == 1:
+        return _sample_pixel_is_valid(
+            struct.unpack_from(struct_format, data, 0)[0],
+            nodata,
+            mask[0] if mask else 255,
+        )
+
+    for pixel_index in range(0, read_w * read_h):
+        mask_value = mask[pixel_index] if mask else 255
+        value = struct.unpack_from(struct_format, data, pixel_index * item_size)[0]
+        if _sample_pixel_is_valid(value, nodata, mask_value):
+            return True
+    return False
+
+
+def _gdal_data_type_struct_format(data_type: int) -> str | None:
+    """Return a struct format for scalar GDAL data types."""
+    formats = {
+        gdal.GDT_Byte: "=B",
+        gdal.GDT_UInt16: "=H",
+        gdal.GDT_Int16: "=h",
+        gdal.GDT_UInt32: "=I",
+        gdal.GDT_Int32: "=i",
+        gdal.GDT_Float32: "=f",
+        gdal.GDT_Float64: "=d",
+    }
+    if hasattr(gdal, "GDT_Int8"):
+        formats[getattr(gdal, "GDT_Int8")] = "=b"
+    if hasattr(gdal, "GDT_UInt64"):
+        formats[getattr(gdal, "GDT_UInt64")] = "=Q"
+    if hasattr(gdal, "GDT_Int64"):
+        formats[getattr(gdal, "GDT_Int64")] = "=q"
+    return formats.get(data_type)
+
+
+def _sample_pixel_is_valid(value: object, nodata: float | int | None, mask_value: int = 255) -> bool:
+    """Return whether a scalar sample is finite and not nodata."""
+    if mask_value == 0:
+        return False
+    try:
+        sample = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(sample):
+        return False
+    if nodata is None:
+        return True
+    if isinstance(nodata, float) and math.isnan(nodata):
+        return True
+    return sample != nodata
+
+
 def _existing_outputs_are_reusable(
     output_paths: List[str],
     *,
     check_validity: bool,
+    validity_check_grid_size: int,
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -794,7 +908,10 @@ def _existing_outputs_are_reusable(
     for output_path in output_paths:
         if not _is_gdal_raster_path(output_path):
             continue
-        is_valid, reason = _gdal_raster_is_valid(output_path)
+        is_valid, reason = _gdal_raster_is_valid(
+            output_path,
+            validity_check_grid_size=validity_check_grid_size,
+        )
         if not is_valid:
             _log_step_plan(
                 step,
@@ -1250,6 +1367,7 @@ def _run_named_radiometric_group(
     if args.run_from_existing and _existing_outputs_are_reusable(
         [group_output_path],
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="radiometric",
     ):
@@ -1318,6 +1436,7 @@ def _run_default_radiometric_normalization(
     if args.run_from_existing and _existing_outputs_are_reusable(
         [group_output_path],
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="radiometric",
     ):
@@ -1411,6 +1530,7 @@ def _run_seamline_metadata_workflow(
     if args.run_from_existing and _existing_outputs_are_reusable(
         [output_path],
         check_validity=False,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="seamline_metadata",
     ):
@@ -1514,6 +1634,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="fetch_atmosphere",
         scene_basename=state.scene.primary_basename,
@@ -1617,6 +1738,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="atmospheric_correction",
         scene_basename=state.scene.primary_basename,
@@ -1767,6 +1889,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
         if args.run_from_existing and _existing_outputs_are_reusable(
             plan.output_paths,
             check_validity=args.run_from_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
             log_to_console=args.log_to_console,
             step="orthorectification",
             scene_basename=state.scene.primary_basename,
@@ -1827,6 +1950,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             if args.run_from_existing and _existing_outputs_are_reusable(
                 pan_plan.output_paths,
                 check_validity=args.run_from_existing_check_validity,
+                validity_check_grid_size=args.validity_check_grid_size,
                 log_to_console=args.log_to_console,
                 step="orthorectification_pan",
                 scene_basename=state.scene.primary_basename,
@@ -1900,6 +2024,7 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="pansharpen",
         scene_basename=state.scene.primary_basename,
@@ -1973,6 +2098,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     if args.run_from_existing and _existing_outputs_are_reusable(
         output_plan.output_paths + mask_plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="cloud_mask",
         scene_basename=state.scene.primary_basename,
@@ -2075,6 +2201,7 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="alignment",
         scene_basename=state.scene.primary_basename,
@@ -2164,6 +2291,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
     if required_outputs and not _existing_outputs_are_reusable(
         required_outputs,
         check_validity=args.skip_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="workflow",
         scene_basename=state.scene.primary_basename,
@@ -2173,6 +2301,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
         return _existing_outputs_are_reusable(
             expected_outputs["final_raster"],
             check_validity=args.skip_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
             log_to_console=args.log_to_console,
             step="workflow",
             scene_basename=state.scene.primary_basename,
@@ -2182,6 +2311,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
     return _existing_outputs_are_reusable(
         expected_outputs["final_raster"],
         check_validity=args.skip_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="workflow",
         scene_basename=state.scene.primary_basename,
@@ -2591,6 +2721,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-to-console", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-from-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--run-from-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--validity-check-grid-size", type=int, default=0)
     parser.add_argument("--flaash-dem-ground-percentile", type=float, default=50.0)
     parser.add_argument("--flaash-modtran-atm")
     parser.add_argument("--flaash-modtran-aer")
@@ -2764,6 +2895,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
+    if args.validity_check_grid_size < 0:
+        parser.error("--validity-check-grid-size must be >= 0.")
     per_scene_save_modes = {
         "temp_root",
         "temp_child",

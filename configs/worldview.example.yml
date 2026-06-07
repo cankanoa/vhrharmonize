@@ -41,6 +41,7 @@ shared:
   skip_existing_check_validity: true # Before skipping a whole scene, verify existing raster outputs are GDAL-readable
   run_from_existing: true # At each step, if the expected output exists, reuse it instead of rerunning that step
   run_from_existing_check_validity: true # Before reusing a step output, verify existing raster outputs are GDAL-readable
+  validity_check_grid_size: 2048 # If validity checks above are enabled, this is an additional check for actual valid pixels: 0 disables pixel sampling; 1 checks every pixel; N samples one pixel per NxN grid cell
   max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold
 
 workflow:

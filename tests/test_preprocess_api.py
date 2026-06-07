@@ -238,3 +238,32 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
         child_output,
         "/scene/auto_123456789.tif",
     ]
+
+
+def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    nan_path = tmp_path / "all_nan.tif"
+    valid_path = tmp_path / "valid.tif"
+    profile = {
+        "driver": "GTiff",
+        "width": 4,
+        "height": 4,
+        "count": 1,
+        "dtype": "float32",
+        "transform": rasterio.transform.from_origin(0, 4, 1, 1),
+        "crs": "EPSG:4326",
+        "nodata": np.nan,
+    }
+    with rasterio.open(nan_path, "w", **profile) as dst:
+        dst.write(np.full((1, 4, 4), np.nan, dtype=np.float32))
+    with rasterio.open(valid_path, "w", **profile) as dst:
+        data = np.full((1, 4, 4), np.nan, dtype=np.float32)
+        data[0, 1, 1] = 1.0
+        dst.write(data)
+
+    assert worldview._gdal_raster_is_valid(str(nan_path), validity_check_grid_size=0) == (True, None)
+    assert worldview._gdal_raster_is_valid(
+        str(nan_path),
+        validity_check_grid_size=1,
+    ) == (False, "no finite valid pixels found in validity sample")
+    assert worldview._gdal_raster_is_valid(str(valid_path), validity_check_grid_size=2) == (True, None)
