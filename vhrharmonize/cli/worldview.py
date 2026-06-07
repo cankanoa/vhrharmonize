@@ -1086,11 +1086,10 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
     return required_outputs
 
 
-def _normalize_group_by_basename_spec(raw_spec: object, *, _nested: bool = False) -> object:
+def _normalize_group_by_basename_spec(raw_spec: object) -> object:
     """Normalize a radiometric grouping specification.
     Args:
         raw_spec: Raw grouping specification value.
-        _nested: Whether this value is inside the top-level list.
     Returns:
         Normalized grouping specification.
     """
@@ -1098,18 +1097,46 @@ def _normalize_group_by_basename_spec(raw_spec: object, *, _nested: bool = False
         return None
     if isinstance(raw_spec, str):
         stripped = raw_spec.strip()
-        if stripped.startswith("["):
-            return _normalize_group_by_basename_spec(json.loads(stripped), _nested=_nested)
-        if _nested:
-            return raw_spec
-        raise ValueError("group_by_basename must be a list of string patterns, for example ['*893242343*', '*123456789*'].")
-    if not isinstance(raw_spec, list):
-        raise ValueError("group_by_basename must be a list of string patterns or nested lists of string patterns.")
-    if not raw_spec:
-        if _nested:
-            raise ValueError("Nested group_by_basename lists must not be empty.")
-        return None
-    return [_normalize_group_by_basename_spec(item, _nested=True) for item in raw_spec]
+        if stripped.startswith("{"):
+            return _normalize_group_by_basename_spec(json.loads(stripped))
+        raise ValueError("group_by_basename must be a JSON object such as {'name.tif': ['auto:*123*', 'file:/tmp/ref.tif']}.")
+    return _validate_radiometric_group_spec(raw_spec)
+
+
+def _validate_radiometric_group_spec(group_spec: object) -> Dict[str, object]:
+    """Validate the named radiometric grouping JSON shape."""
+    if not isinstance(group_spec, dict) or not group_spec:
+        raise ValueError("group_by_basename must be a non-empty object with output filename keys.")
+    normalized: Dict[str, object] = {}
+    for output_name, value in group_spec.items():
+        if not isinstance(output_name, str) or not output_name:
+            raise ValueError("Each radiometric group key must be a non-empty output filename string.")
+        normalized[output_name] = _validate_radiometric_group_value(value)
+    return normalized
+
+
+def _validate_radiometric_group_value(value: object) -> object:
+    """Validate a radiometric group value."""
+    if isinstance(value, str):
+        if not (value.startswith("auto:") or value.startswith("file:")):
+            raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
+        if value in {"auto:", "file:"}:
+            raise ValueError("Radiometric group strings must include a pattern or path after the prefix.")
+        return value
+    if isinstance(value, list):
+        if not value:
+            raise ValueError("Radiometric group lists must not be empty.")
+        return [_validate_radiometric_group_item(item) for item in value]
+    raise ValueError("Radiometric group values must be strings or lists.")
+
+
+def _validate_radiometric_group_item(item: object) -> object:
+    """Validate an item inside a radiometric group list."""
+    if isinstance(item, str):
+        return _validate_radiometric_group_value(item)
+    if isinstance(item, dict):
+        return _validate_radiometric_group_spec(item)
+    raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
 
 
 def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
@@ -1128,6 +1155,16 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
     if not matches:
         raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
     return matches
+
+
+def _resolve_radiometric_input_token(token: str, available_paths: List[str]) -> List[str]:
+    """Resolve a prefixed radiometric group token into input paths."""
+    source, value = token.split(":", 1)
+    if source == "auto":
+        return _match_radiometric_input_patterns(value, available_paths)
+    if source == "file":
+        return [value]
+    raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
 
 
 def _dedupe_paths(paths: List[str]) -> List[str]:
@@ -1149,72 +1186,66 @@ def _dedupe_paths(paths: List[str]) -> List[str]:
 
 def _resolve_radiometric_group_output_path(
     *,
-    output_path: str,
-    group_label: str,
+    output_name: str,
+    temp_root: str,
 ) -> str:
     """Resolve a radiometric group output path.
     Args:
-        output_path: Configured aggregate radiometric output path.
-        group_label: Group label used in default output naming.
+        output_name: Group output save target.
+        temp_root: Temp root directory.
     Returns:
         Resolved radiometric group output path.
     """
-    if "$" in output_path:
-        return output_path.replace("$", group_label)
-    if group_label == "radiometric_root":
-        return output_path
-    root, extension = os.path.splitext(output_path)
-    return f"{root}_{group_label}{extension or '.tif'}"
+    group_output_path = _resolve_save_target(
+        output_name,
+        default=output_name,
+        temp_root=temp_root,
+        output_root="",
+        relative_base_folder="",
+        accepted_modes={"temp_child", "absolute", "cwd_relative"},
+    )
+    os.makedirs(os.path.dirname(group_output_path) or ".", exist_ok=True)
+    return group_output_path
 
 
-def _run_radiometric_group(
-    group_spec: object,
+def _run_named_radiometric_group(
+    output_name: str,
+    group_value: object,
     *,
     available_paths: List[str],
     args: argparse.Namespace,
-    output_path: str,
     temp_root: str,
-    label_parts: List[int],
-) -> str | List[str]:
-    """Run or resolve a radiometric group.
-    Args:
-        group_spec: Group specification string or nested list.
-        available_paths: Available scene output paths.
-        args: Parsed CLI arguments.
-        output_path: Configured aggregate radiometric output path.
-        temp_root: Temp root used for SpectralMatch temp files.
-        label_parts: Hierarchical label parts for nested groups.
-    Returns:
-        Group output path or matched input paths.
-    """
-    if isinstance(group_spec, str):
-        return _match_radiometric_input_patterns(group_spec, available_paths)
-    if not isinstance(group_spec, list) or not group_spec:
-        raise ValueError("Each radiometric normalization group must be a non-empty string or list.")
-
+) -> str:
+    """Run one named radiometric group and return its output path."""
     child_inputs: List[str] = []
-    for index, item in enumerate(group_spec):
-        child_label_parts = [*label_parts, index]
-        child_result = _run_radiometric_group(
-            item,
-            available_paths=available_paths,
-            args=args,
-            output_path=output_path,
-            temp_root=temp_root,
-            label_parts=child_label_parts,
-        )
-        if isinstance(child_result, list):
-            child_inputs.extend(child_result)
-        else:
-            child_inputs.append(child_result)
+    if isinstance(group_value, str):
+        child_inputs.extend(_resolve_radiometric_input_token(group_value, available_paths))
+    elif isinstance(group_value, list):
+        for item in group_value:
+            if isinstance(item, str):
+                child_inputs.extend(_resolve_radiometric_input_token(item, available_paths))
+            elif isinstance(item, dict):
+                for child_output_name, child_value in item.items():
+                    child_inputs.append(
+                        _run_named_radiometric_group(
+                            child_output_name,
+                            child_value,
+                            available_paths=available_paths,
+                            args=args,
+                            temp_root=temp_root,
+                        )
+                    )
+            else:
+                raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
+    else:
+        raise ValueError("Radiometric group values must be strings or lists.")
 
     child_inputs = _dedupe_paths(child_inputs)
-    group_label = "radiometric_root" if not label_parts else "radiometric_group_" + "_".join(str(part) for part in label_parts)
     radiometric_kwargs = _build_radiometric_kwargs(args)
-    configured_output_path = radiometric_kwargs.get("shared_output_image_path") or output_path
+    radiometric_kwargs.pop("shared_output_image_path", None)
     group_output_path = _resolve_radiometric_group_output_path(
-        output_path=str(configured_output_path),
-        group_label=group_label,
+        output_name=output_name,
+        temp_root=temp_root,
     )
     if args.run_from_existing and _existing_outputs_are_reusable(
         [group_output_path],
@@ -1225,7 +1256,7 @@ def _run_radiometric_group(
         _log_step_plan(
             "radiometric",
             outputs=[group_output_path],
-            message=f"Skipping group {group_label} because output exists",
+            message=f"Skipping group {output_name} because output exists",
             enabled=args.log_to_console,
         )
         return group_output_path
@@ -1240,7 +1271,75 @@ def _run_radiometric_group(
         "radiometric",
         inputs=child_inputs,
         outputs=[group_output_path],
-        message=f"Running SpectralMatch group {group_label}",
+        message=f"Running SpectralMatch group {output_name}",
+        enabled=args.log_to_console,
+    )
+    radiometric_normalization(
+        method=args.radiometric_normalization_method,
+        log_to_console=args.log_to_console,
+        **radiometric_kwargs,
+    )
+    if args.calculate_overviews_radiometric_normalization:
+        log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
+        calculate_raster_overviews(group_output_path, args.overview_scales)
+    return group_output_path
+
+
+def _run_named_radiometric_groups(
+    group_spec: Dict[str, object],
+    *,
+    available_paths: List[str],
+    args: argparse.Namespace,
+    temp_root: str,
+) -> Optional[str]:
+    """Run named radiometric groups in order and return the final output path."""
+    final_output: Optional[str] = None
+    for output_name, group_value in group_spec.items():
+        final_output = _run_named_radiometric_group(
+            output_name,
+            group_value,
+            available_paths=available_paths,
+            args=args,
+            temp_root=temp_root,
+        )
+    return final_output
+
+
+def _run_default_radiometric_normalization(
+    available_paths: List[str],
+    *,
+    args: argparse.Namespace,
+    output_path: str,
+    temp_root: str,
+) -> str:
+    """Run one default radiometric normalization over all scene outputs."""
+    radiometric_kwargs = _build_radiometric_kwargs(args)
+    group_output_path = str(radiometric_kwargs.get("shared_output_image_path") or output_path)
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        [group_output_path],
+        check_validity=args.run_from_existing_check_validity,
+        log_to_console=args.log_to_console,
+        step="radiometric",
+    ):
+        _log_step_plan(
+            "radiometric",
+            outputs=[group_output_path],
+            message="Skipping radiometric normalization because output exists",
+            enabled=args.log_to_console,
+        )
+        return group_output_path
+
+    radiometric_kwargs.setdefault("shared_input_images", available_paths)
+    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
+    radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
+    radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
+    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    _log_step_plan(
+        "radiometric",
+        inputs=available_paths,
+        outputs=[group_output_path],
+        message="Running SpectralMatch radiometric normalization",
         enabled=args.log_to_console,
     )
     radiometric_normalization(
@@ -1275,18 +1374,19 @@ def _run_radiometric_normalization_workflow(
         raise ValueError("No scene outputs were available for radiometric normalization.")
 
     group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
-    if group_spec is None:
-        group_spec = available_paths
-    elif isinstance(group_spec, str):
-        group_spec = [group_spec]
+    if group_spec is not None:
+        return _run_named_radiometric_groups(
+            group_spec,
+            available_paths=available_paths,
+            args=args,
+            temp_root=reference_state.step_dirs["temp_root"],
+        )
 
-    return _run_radiometric_group(
-        group_spec,
-        available_paths=available_paths,
+    return _run_default_radiometric_normalization(
+        available_paths,
         args=args,
         output_path=reference_state.step_dirs["radiometric_normalization"],
         temp_root=reference_state.step_dirs["temp_root"],
-        label_parts=[],
     )
 
 
@@ -2749,7 +2849,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Cannot set both save_radiometric_normalization and "
             "match_shared_output_image_path/shared_output_image_path; use only one radiometric output path option."
         )
-    _normalize_group_by_basename_spec(args.group_by_basename)
+    group_by_basename_spec = _normalize_group_by_basename_spec(args.group_by_basename)
+    if group_by_basename_spec is not None and save_radiometric_output_is_explicit:
+        parser.error("Cannot set save_radiometric_normalization when group_by_basename is set; use group keys as output paths.")
+    if group_by_basename_spec is not None and match_shared_output_is_explicit:
+        parser.error("Cannot set match_shared_output_image_path/shared_output_image_path when group_by_basename is set; use group keys as output paths.")
     return _run_workflow(args)
 
 

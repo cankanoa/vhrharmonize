@@ -174,3 +174,67 @@ def test_pansharpen_and_radiometric(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(rad_mod, "_load_spectralmatch_pipeline", lambda: (lambda **kwargs: kwargs["shared_output_image_path"]))
     result = radiometric_normalization([str(out)], str(tmp_path / "norm.tif"), shared_cache="auto")
     assert result.endswith("norm.tif")
+
+
+def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    root_output = str(tmp_path / "root.tif")
+    child_output = str(tmp_path / "child.tif")
+    spec = worldview._normalize_group_by_basename_spec({
+        root_output: [
+            "auto:*893242343*",
+            {child_output: ["file:/external/ref.tif", "auto:*222222222*"]},
+            "auto:*123456789*",
+        ]
+    })
+    assert spec[root_output][1][child_output][0] == "file:/external/ref.tif"
+    assert worldview._resolve_radiometric_group_output_path(
+        output_name="$temp/from_temp.tif",
+        temp_root=str(tmp_path / "tmp"),
+    ) == str(tmp_path / "tmp" / "from_temp.tif")
+    for bad_spec in ({"x.tif": "*missing-prefix*"}, {"": "auto:*"}, {"x.tif": []}):
+        try:
+            worldview._normalize_group_by_basename_spec(bad_spec)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid group spec was accepted")
+
+    calls = []
+    monkeypatch.setattr(
+        worldview,
+        "radiometric_normalization",
+        lambda **kwargs: calls.append(kwargs) or kwargs["shared_output_image_path"],
+    )
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=None,
+        run_from_existing=False,
+        run_from_existing_check_validity=False,
+        log_to_console=False,
+        keep_temp_dir=False,
+        dtype="int16",
+        radiometric_normalization_method="spectralmatch",
+        calculate_overviews_radiometric_normalization=False,
+    )
+    available = [
+        "/scene/auto_893242343.tif",
+        "/scene/auto_222222222.tif",
+        "/scene/auto_123456789.tif",
+    ]
+    result = worldview._run_named_radiometric_groups(
+        spec,
+        available_paths=available,
+        args=args,
+        temp_root=str(tmp_path / "tmp"),
+    )
+    assert result == root_output
+    assert [call["shared_output_image_path"] for call in calls] == [
+        child_output,
+        root_output,
+    ]
+    assert calls[0]["shared_input_images"] == ["/external/ref.tif", "/scene/auto_222222222.tif"]
+    assert calls[1]["shared_input_images"] == [
+        "/scene/auto_893242343.tif",
+        child_output,
+        "/scene/auto_123456789.tif",
+    ]
