@@ -246,6 +246,7 @@ radiometric_normalization:
   # match_shared_calculation_dtype: float32
   # match_shared_output_dtype: int16
   # match_shared_save_as_cog: false
+  # match_shared_resume_from_steps: no # no | yes | validate
 
   # Match
   # match_matching_order: [global_regression, local_block_adjustment]
