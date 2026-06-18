@@ -254,6 +254,21 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
     return radiometric_kwargs
 
 
+def _radiometric_steps_include(args: argparse.Namespace, step_name: str) -> bool:
+    """Return whether the SpectralMatch steps list includes a step."""
+    steps = getattr(args, "match_steps", None)
+    if steps is None:
+        radiometric_kwargs = _parse_json_dict(getattr(args, "radiometric_normalization_kwargs_json", None))
+        steps = radiometric_kwargs.get("steps")
+    if steps is None:
+        return False
+    if isinstance(steps, str):
+        return steps == step_name
+    if isinstance(steps, (list, tuple)):
+        return step_name in steps
+    return False
+
+
 def _explicit_cli_arg_present(argv: List[str], arg_name: str) -> bool:
     """Return whether a long CLI option was explicitly provided."""
     option = f"--{arg_name.replace('_', '-')}"
@@ -1564,7 +1579,7 @@ def _apply_weighted_seamline_metadata_defaults(args: argparse.Namespace, seamlin
     """Default weighted seamline inputs from the generated WorldView metadata GPKG."""
     if not seamline_metadata_output:
         return
-    if getattr(args, "match_seamline_method", None) != "weighted_seamline":
+    if not _radiometric_steps_include(args, "weighted_seamline"):
         return
     if not getattr(args, "match_weighted_seamline_input_polygons", None):
         setattr(args, "match_weighted_seamline_input_polygons", seamline_metadata_output)
@@ -2969,6 +2984,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--alignment-solve-resolution must be > 0.")
     _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
     radiometric_kwargs_json = _parse_json_dict(args.radiometric_normalization_kwargs_json)
+    removed_spectralmatch_keys = {
+        "matching_order": "steps",
+        "match_steps": "steps",
+        "seamline_steps": "steps",
+        "seamline_method": "steps",
+        "global_regression_output_images": "shared_temp_dir/global or shared_output_image_path when it is the final step",
+        "local_block_adjustment_output_images": "shared_temp_dir/local or shared_output_image_path when it is the final step",
+        "align_method": "steps",
+        "align_rasters_output_images": "shared_temp_dir/aligned or shared_output_image_path when it is the final step",
+        "voronoi_center_seamline_output_mask": "shared_output_image_path when it is the final step",
+        "weighted_seamline_output_mask": "shared_output_image_path when it is the final step",
+        "clip_method": "steps",
+        "mask_rasters_output_images": "shared_temp_dir/clip or shared_output_image_path when it is the final step",
+        "merge_method": "steps",
+    }
+    for old_key, replacement in removed_spectralmatch_keys.items():
+        if getattr(args, f"match_{old_key}", None) is not None or old_key in radiometric_kwargs_json:
+            parser.error(f"SpectralMatch no longer accepts {old_key}; use {replacement}.")
     save_radiometric_output_is_explicit = (
         "save_radiometric_normalization" in config_defaults
         or _explicit_cli_arg_present(raw_argv, "save_radiometric_normalization")

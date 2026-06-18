@@ -240,6 +240,29 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
     ]
 
 
+def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=None,
+        match_steps=["global_regression", "weighted_seamline", "mask"],
+        match_weighted_seamline_input_polygons=None,
+        match_weighted_seamline_input_layer=None,
+        match_weighted_seamline_image_field_name=None,
+        seamline_metadata_layer="footprints",
+        seamline_metadata_image_field_name="image",
+    )
+
+    assert worldview._build_radiometric_kwargs(args)["steps"] == [
+        "global_regression",
+        "weighted_seamline",
+        "mask",
+    ]
+    worldview._apply_weighted_seamline_metadata_defaults(args, "/tmp/seamline_metadata.gpkg")
+    assert args.match_weighted_seamline_input_polygons == "/tmp/seamline_metadata.gpkg"
+    assert args.match_weighted_seamline_input_layer == "footprints"
+    assert args.match_weighted_seamline_image_field_name == "image"
+
+
 def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     nan_path = tmp_path / "all_nan.tif"

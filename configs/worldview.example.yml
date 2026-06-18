@@ -248,10 +248,12 @@ radiometric_normalization:
   # match_shared_save_as_cog: false
   # match_shared_resume_from_steps: no # no | yes | validate
 
-  # Match
-  # match_matching_order: [global_regression, local_block_adjustment]
+  # Pipeline order. The `match_` prefix is stripped before calling SpectralMatch, so this becomes SpectralMatch's `steps` parameter.
+  # Allowed steps: global_regression, local_block_adjustment, align, voronoi_center_seamline, weighted_seamline, mask, merge
+  # Only one seamline step may be included.
+  # match_steps: [global_regression, local_block_adjustment, align, voronoi_center_seamline, mask, merge] # For a mosaic
+  # match_steps: [global_regression, local_block_adjustment, align] # For a time series
   # Global regression
-  # match_global_regression_output_images: /path/to/global_outputs
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
   # match_global_regression_estimate_stats: true
   # match_global_regression_specify_model_images: [include, [image_a, image_b]]
@@ -268,9 +270,9 @@ radiometric_normalization:
   # match_global_regression_pif_max_samples: 100000
   # match_global_regression_pif_min_samples: 32
   # match_global_regression_pif_feature_method: orb
+  # match_global_regression_pif_save_inz: /path/to/inz_outputs
   # match_global_regression_build_overviews: false
   # Local block adjustment
-  # match_local_block_adjustment_output_images: /path/to/local_outputs
   # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
   # match_local_block_adjustment_number_of_blocks: 100
   # match_local_block_adjustment_alpha: 1.0
@@ -281,15 +283,12 @@ radiometric_normalization:
   # match_local_block_adjustment_build_overviews: false
 
   # Alignment
-  # match_align_method: align_rasters
-  # match_align_rasters_output_images: /path/to/aligned_outputs
   # match_align_rasters_resampling_method: bilinear
   # match_align_rasters_tap: true
   # match_align_rasters_resolution: highest
 
   # Seamlines
-  # match_seamline_method: weighted_seamline # voronoi_center_seamline | weighted_seamline
-  # match_voronoi_center_seamline_output_mask: /path/to/seamline_mask.gpkg
+  # Select the seamline algorithm by including either `voronoi_center_seamline` or `weighted_seamline` in match_steps.
   # match_voronoi_center_seamline_aoi_path: /path/to/aoi.gpkg
   # match_voronoi_center_seamline_vector_mask: [/path/to/footprints.gpkg, image]
   # match_voronoi_center_seamline_image_field_name: image
@@ -298,7 +297,6 @@ radiometric_normalization:
   # match_voronoi_center_seamline_debug_vectors_path: /path/to/debug_vectors.gpkg
   # Weighted seamline inputs. These pair nicely with `run_seamline_metadata: true` above.
   # match_weighted_seamline_input_polygons: /path/to/seamline_metadata.gpkg
-  # match_weighted_seamline_output_mask: /path/to/weighted_seamline_mask.gpkg
   # Rank functions support field placeholders plus Python expression operators: +, -, *, /, //, %, **, comparisons, and/or/not, parentheses, and math functions abs, min, max, round, sqrt, log, log10, exp, sin, cos, tan.
   # match_weighted_seamline_rank_function: "-{cloud_cover} + {sun_elevation}"
   # match_weighted_seamline_image_field_name: image
@@ -307,12 +305,9 @@ radiometric_normalization:
   # match_weighted_seamline_rank_descending: true
 
   # Masking
-  # match_clip_method: mask_rasters
-  # match_mask_rasters_output_images: /path/to/masked_outputs
   # match_mask_rasters_vector_mask: [include, /path/to/seamline_mask.gpkg, image]
   # match_mask_rasters_include_touched_pixels: false
 
   # Merge
-  # match_merge_method: merge_rasters
   # match_merge_rasters_resolution: highest
   # match_merge_rasters_build_overviews: true
