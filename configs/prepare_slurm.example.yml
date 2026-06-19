@@ -10,7 +10,8 @@ slurm_start_file: configs/worldview.example.sbatch # Uploaded then submitted wit
 
 # Generated files
 staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML.
-staged_slurm_file: configs/slurm.staged.{run_id}.yml # Generated staged Slurm YAML.
+staged_slurm_file: configs/start_slurm.{run_id}.yml # Generated start Slurm YAML.
+debug_logs: false # Print concise debug logs during vhr-slurm start.
 
 # SSH login
 ssh_host: koa.its.hawaii.edu

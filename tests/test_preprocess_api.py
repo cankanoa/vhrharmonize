@@ -345,8 +345,8 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         ),
         encoding="utf-8",
     )
-    slurm_config = tmp_path / "slurm.yml"
-    staged_slurm_file = tmp_path / "slurm.staged.yml"
+    slurm_config = tmp_path / "prepare_slurm.yml"
+    staged_slurm_file = tmp_path / "start_slurm.yml"
     script_path = tmp_path / "worldview.sbatch"
     script_path.write_text("#!/bin/bash\nvhr-worldview --config-yaml \"$1\"\n", encoding="utf-8")
     slurm_config.write_text(
@@ -356,6 +356,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "provider": "vhr-worldview",
                 "provider_config": str(provider_config),
                 "staged_slurm_file": str(staged_slurm_file),
+                "debug_logs": True,
                 "ssh_host": "example.edu",
                 "ssh_user": "user",
                 "remote_output_dir": "/remote/runs/{run_id}/output",
@@ -379,6 +380,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
     assert written_slurm["status"] == "prepared"
+    assert written_slurm["debug_logs"] is True
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
@@ -397,4 +399,53 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert (
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
         == "/remote/runs/RUN123/output/grouped.tif"
+    )
+
+
+def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
+    from vhrharmonize.slurm import _remote_quote, write_sectioned_yaml_file
+
+    output_path = tmp_path / "start_slurm.yml"
+    long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
+    write_sectioned_yaml_file(
+        str(output_path),
+        {"uploaded_input_paths": {long_path: "~/koa_scratch/run/output/image.tif"}},
+        header_by_key={"uploaded_input_paths": "# All mappings are local file: remote file."},
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "? " not in text
+    assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
+    assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
+
+
+def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    local_path = tmp_path / "input.tif"
+    local_path.write_text("data", encoding="utf-8")
+    calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True):
+        calls.append(("ssh", remote_command))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def fake_run_local_command(command, *, check=True):
+        calls.append(("local", command))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    monkeypatch.setattr(slurm_mod, "_run_local_command", fake_run_local_command)
+
+    result = slurm_mod._rsync_upload(
+        {"ssh_user": "user", "ssh_host": "host"},
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+
+    assert result.returncode == 0
+    assert calls[0] == ("ssh", "mkdir -p ~/remote/output")
+    assert calls[1] == (
+        "local",
+        ["rsync", "-a", "--itemize-changes", str(local_path), "user@host:~/remote/output/input.tif"],
     )
