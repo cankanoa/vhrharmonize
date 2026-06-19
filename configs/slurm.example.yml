@@ -1,16 +1,26 @@
+# Provider class
 provider: vhr-worldview # Provider runner to stage.
+
+# Set task ID
+run_id: 1 # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime.
+
+# Editable files
 provider_config: configs/worldview.example.yml # Local provider YAML to rewrite for Slurm.
-log_file: configs/slurm.example.log.yml # Generated file-to-file staging log.
-
-ssh_host: koa.its.hawaii.edu
-ssh_user: milo
-
-remote_output_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/{run_id}/output # Non-temp outputs and uploaded workflow inputs.
-remote_log_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/{run_id}/logs # Slurm/stdout logs.
-remote_temp_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/{run_id}/tmp # $temp outputs.
-remote_reference_dir: /mnt/lustre/koa/scratch/vhrharmonize/references # Shared reference files.
-
 slurm_start_file: configs/worldview.example.sbatch # Uploaded then submitted with sbatch.
+
+# Generated files
+staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML.
+log_file: configs/slurm.example.{run_id}.log.yml # Generated file-to-file staging log.
+
+# SSH login
+ssh_host: koa.its.hawaii.edu
+ssh_user: username
+
+# Remote directories. Optional, {run_id} will be replaced with the run ID.
+remote_output_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/output # Non-temp outputs and uploaded workflow inputs.
+remote_log_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/logs # Slurm/stdout logs.
+remote_temp_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/tmp # $temp outputs.
+remote_reference_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/references # Shared reference files.
 
 # Provider YAML keys to upload. Only upload keys that are set.
 provider_upload_keys:

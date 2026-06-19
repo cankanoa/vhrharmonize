@@ -352,6 +352,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     slurm_config.write_text(
         yaml.safe_dump(
             {
+                "run_id": "RUN123",
                 "provider": "vhr-worldview",
                 "provider_config": str(provider_config),
                 "log_file": str(log_file),
@@ -373,7 +374,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         encoding="utf-8",
     )
 
-    plan = prepare_slurm_plan(str(slurm_config), run_id="RUN123")
+    plan = prepare_slurm_plan(str(slurm_config))
     written_log = load_yaml_file(str(log_file))
 
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
@@ -381,13 +382,13 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
-    assert str(Path(plan["staged_provider_config"]).resolve()) in plan["uploaded_reference_paths"]
+    assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
     assert str(script_path.resolve()) in plan["uploaded_reference_paths"]
     assert plan["remote_slurm_start_file"] == "/remote/references/worldview.sbatch"
     assert all(not Path(remote).suffix == "" for remote in plan["uploaded_reference_paths"].values())
     assert any(remote.startswith("/remote/runs/RUN123/output") for remote in plan["download_output_paths"].values())
 
-    staged = load_yaml_file(plan["staged_provider_config"])
+    staged = load_yaml_file(plan["staged_provider_file"])
     assert staged["shared"]["temp_dir"] == "/remote/runs/RUN123/tmp"
     assert staged["shared"]["output_dir"] == "/remote/runs/RUN123/output"
     assert staged["shared"]["dem_file_path"] == "/remote/references/dem.tif"

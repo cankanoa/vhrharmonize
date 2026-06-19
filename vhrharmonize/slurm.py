@@ -20,7 +20,21 @@ from vhrharmonize.providers.worldview import WorldViewImage, WorldViewScene, loa
 
 
 PATH_TEMPLATE_RUN_ID = "{run_id}"
-STAGING_DIR = ".vhr-slurm"
+SLURM_PREPARE_CONFIG_KEYS = (
+    "run_id",
+    "provider",
+    "provider_config",
+    "staged_provider_file",
+    "slurm_start_file",
+    "log_file",
+    "ssh_host",
+    "ssh_user",
+    "remote_output_dir",
+    "remote_log_dir",
+    "remote_temp_dir",
+    "remote_reference_dir",
+    "provider_upload_keys",
+)
 
 
 def load_yaml_file(path: str) -> Dict[str, Any]:
@@ -39,13 +53,39 @@ def write_yaml_file(path: str, data: Mapping[str, Any]) -> None:
         yaml.safe_dump(dict(data), handle, sort_keys=False)
 
 
+LOG_HEADER_BY_KEY = {
+    "run_id": "# Set task ID",
+    "provider": "# Provider class",
+    "provider_config": "# Editable files",
+    "staged_provider_file": "# Generated files",
+    "ssh_host": "# SSH login",
+    "remote_output_dir": "# Remote directories.",
+    "remote_provider_config": "# Uploaded remote control files.",
+    "submitted_job_id": "# Job status.",
+    "uploaded_input_paths": "# All mappings are local file: remote file.",
+    "raw_status_text": "# Raw scheduler status text.",
+}
+
+
 def _write_log_file(path: str, data: Mapping[str, Any]) -> None:
-    """Write the Slurm log with raw status text at the bottom."""
+    """Write the Slurm log with readable section comments."""
     ordered = dict(data)
     raw_status_text = ordered.pop("raw_status_text", None)
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
-    write_yaml_file(path, ordered)
+    lines: List[str] = []
+    for key, value in ordered.items():
+        header = LOG_HEADER_BY_KEY.get(key)
+        if header:
+            if lines:
+                lines.append("")
+            lines.append(header)
+        rendered = yaml.safe_dump({key: value}, sort_keys=False).rstrip()
+        lines.extend(rendered.splitlines())
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines).rstrip() + "\n")
 
 
 def make_run_id(now: dt.datetime | None = None) -> str:
@@ -71,7 +111,6 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
     required_keys = (
         "provider",
         "provider_config",
-        "log_file",
         "ssh_host",
         "ssh_user",
         "remote_output_dir",
@@ -89,9 +128,73 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
     slurm_start_file = _require_config_value(config, "slurm_start_file")
     if not os.path.isfile(slurm_start_file):
         raise ValueError(f"slurm_start_file does not exist: {slurm_start_file}")
+    staged_provider_file = config.get("staged_provider_file")
+    if staged_provider_file is not None and (
+        not isinstance(staged_provider_file, str) or not staged_provider_file.strip()
+    ):
+        raise ValueError("staged_provider_file must be a non-empty string when set.")
+    log_file = config.get("log_file")
+    if log_file is not None and (not isinstance(log_file, str) or not log_file.strip()):
+        raise ValueError("log_file must be a non-empty string when set.")
+    configured_run_id = config.get("run_id")
+    if configured_run_id is not None and (
+        not isinstance(configured_run_id, str) or not configured_run_id.strip()
+    ):
+        raise ValueError("run_id must be a non-empty string when set.")
     upload_keys = config.get("provider_upload_keys", [])
     if upload_keys is not None and not isinstance(upload_keys, list):
         raise ValueError("provider_upload_keys must be a list of provider YAML keys.")
+
+
+def resolve_run_id(config: Mapping[str, Any]) -> str:
+    """Resolve the Slurm run id from config or timestamp."""
+    configured_run_id = config.get("run_id")
+    if isinstance(configured_run_id, str) and configured_run_id.strip():
+        return configured_run_id.strip()
+    return make_run_id()
+
+
+def _resolve_local_template_path(value: str) -> str:
+    return value if os.path.isabs(value) else os.path.abspath(value)
+
+
+def resolve_staged_provider_file(
+    config: Mapping[str, Any],
+    *,
+    config_path: str,
+    provider_config: str,
+    run_id: str,
+) -> str:
+    """Resolve the local staged provider YAML path."""
+    del config_path
+    configured_path = config.get("staged_provider_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        staged_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        provider_abs = os.path.abspath(provider_config)
+        provider_dir = os.path.dirname(provider_abs)
+        provider_name = os.path.basename(provider_abs)
+        stem, extension = os.path.splitext(provider_name)
+        staged_path = os.path.join(provider_dir, f"{stem}.staged.{run_id}{extension or '.yml'}")
+    if not os.path.isabs(staged_path):
+        staged_path = _resolve_local_template_path(staged_path)
+    if os.path.abspath(staged_path) == os.path.abspath(provider_config):
+        raise ValueError("staged_provider_file must not overwrite provider_config.")
+    return staged_path
+
+
+def resolve_log_file(config: Mapping[str, Any], *, config_path: str, run_id: str) -> str:
+    """Resolve the local Slurm log YAML path."""
+    configured_path = config.get("log_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        log_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        config_name = os.path.basename(config_abs)
+        stem, extension = os.path.splitext(config_name)
+        log_path = os.path.join(config_dir, f"{stem}.log.{run_id}{extension or '.yml'}")
+    return _resolve_local_template_path(log_path)
 
 
 def resolve_slurm_paths(config: Mapping[str, Any], run_id: str) -> Dict[str, str]:
@@ -344,6 +447,158 @@ def rewrite_worldview_config_for_remote(
     return _rewrite_paths_recursive(rewritten, path_rewrites)
 
 
+def _yaml_scalar(value: Any) -> str:
+    """Render a small YAML scalar for text-preserving config edits."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _yaml_key_block(key: str, value: Any, *, indent: int = 2) -> List[str]:
+    """Render a simple YAML key block."""
+    prefix = " " * indent
+    if isinstance(value, list):
+        return [f"{prefix}{key}:"] + [f"{prefix}  - {_yaml_scalar(item)}" for item in value]
+    return [f"{prefix}{key}: {_yaml_scalar(value)}"]
+
+
+def _yaml_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _yaml_key_pattern(key: str, *, indent: int = 2) -> re.Pattern[str]:
+    return re.compile(rf"^{' ' * indent}{re.escape(key)}\s*:")
+
+
+def _yaml_block_end(lines: List[str], start: int, limit: int, *, indent: int) -> int:
+    """Return the end index for a YAML block starting at ``start``."""
+    index = start + 1
+    while index < limit:
+        candidate = lines[index]
+        if candidate.strip() and _yaml_indent(candidate) <= indent:
+            break
+        index += 1
+    return index
+
+
+def _yaml_section_range(lines: List[str], section: str) -> tuple[int, int] | None:
+    section_pattern = re.compile(rf"^{re.escape(section)}\s*:\s*(?:#.*)?$")
+    for index, line in enumerate(lines):
+        if section_pattern.match(line):
+            end = index + 1
+            while end < len(lines):
+                candidate = lines[end]
+                if candidate.strip() and _yaml_indent(candidate) == 0 and not candidate.lstrip().startswith("#"):
+                    break
+                end += 1
+            return index, end
+    return None
+
+
+def _replace_yaml_key(
+    lines: List[str],
+    key: str,
+    value: Any,
+    *,
+    start: int = 0,
+    end: int | None = None,
+    indent: int = 2,
+    replace_all: bool = False,
+) -> None:
+    """Replace or insert a YAML key block inside a line range."""
+    limit = len(lines) if end is None else end
+    key_pattern = _yaml_key_pattern(key, indent=indent)
+    index = start
+    replaced = False
+    while index < limit:
+        if not key_pattern.match(lines[index]):
+            index += 1
+            continue
+        block_end = _yaml_block_end(lines, index, limit, indent=indent)
+        old_span = block_end - index
+        rendered = _yaml_key_block(key, value, indent=indent)
+        lines[index:block_end] = rendered
+        replaced = True
+        index += len(rendered)
+        limit += len(rendered) - old_span
+        if not replace_all:
+            return
+    if not replaced and not replace_all:
+        lines[limit:limit] = _yaml_key_block(key, value, indent=indent)
+
+
+def _replace_yaml_section_key(lines: List[str], section: str, key: str, value: Any, *, indent: int = 2) -> None:
+    """Replace a key under a top-level YAML section."""
+    section_range = _yaml_section_range(lines, section)
+    if section_range is None:
+        raise ValueError(f"WorldView provider config must contain a {section} section.")
+    _replace_yaml_key(
+        lines,
+        key,
+        value,
+        start=section_range[0] + 1,
+        end=section_range[1],
+        indent=indent,
+    )
+
+
+def _replace_yaml_path_literals(text: str, path_rewrites: Mapping[str, str]) -> str:
+    """Replace uploaded local path literals while preserving the rest of the YAML."""
+    rewritten_lines: List[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            rewritten_lines.append(line)
+            continue
+        rewritten_line = line
+        for local_path, remote_path in sorted(path_rewrites.items(), key=lambda item: len(item[0]), reverse=True):
+            rewritten_line = rewritten_line.replace(f"file:{local_path}", f"file:{remote_path}")
+            rewritten_line = rewritten_line.replace(local_path, remote_path)
+        rewritten_lines.append(rewritten_line)
+    return "\n".join(rewritten_lines) + "\n"
+
+
+def write_staged_worldview_config_for_remote(
+    source_config_path: str,
+    staged_config_path: str,
+    provider_config_data: Mapping[str, Any],
+    *,
+    input_tif_paths: Iterable[str] | None,
+    path_rewrites: Mapping[str, str],
+    remote_output_dir: str,
+    remote_temp_dir: str,
+) -> None:
+    """Copy a provider YAML and rewrite only remote execution values."""
+    with open(source_config_path, "r", encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    if _yaml_section_range(lines, "shared") is None:
+        raise ValueError("WorldView provider config must contain a shared section.")
+
+    if input_tif_paths is not None:
+        _replace_yaml_section_key(lines, "shared", "input_file_glob", list(input_tif_paths))
+    _replace_yaml_section_key(lines, "shared", "output_dir", remote_output_dir)
+    _replace_yaml_section_key(lines, "shared", "temp_dir", remote_temp_dir)
+
+    for section_value in provider_config_data.values():
+        if not isinstance(section_value, dict):
+            continue
+        for key, value in section_value.items():
+            if key.startswith("save_"):
+                _replace_yaml_key(
+                    lines,
+                    key,
+                    _remote_save_value_for_key(key, value, remote_output_dir=remote_output_dir),
+                    replace_all=True,
+                )
+
+    staged_text = _replace_yaml_path_literals("\n".join(lines), path_rewrites)
+    os.makedirs(os.path.dirname(os.path.abspath(staged_config_path)) or ".", exist_ok=True)
+    with open(staged_config_path, "w", encoding="utf-8") as handle:
+        handle.write(staged_text)
+
+
 def _rewrite_string_path(value: str, path_rewrites: Mapping[str, str]) -> str:
     if value.startswith("file:"):
         local_path = os.path.abspath(value[len("file:"):])
@@ -468,16 +723,33 @@ def _add_reference_upload(reference_uploads: Dict[str, str], local_path: str, *,
     return remote_path
 
 
-def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[str, Any]:
+def _slurm_config_with_overrides(
+    config_path: str,
+    overrides: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Load a Slurm YAML config and apply explicit caller/CLI overrides."""
+    config = load_yaml_file(config_path)
+    for key, value in (overrides or {}).items():
+        if value is not None:
+            config[key] = value
+    return config
+
+
+def prepare_slurm_plan(
+    config_path: str,
+    *,
+    overrides: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Prepare a Slurm staging log and staged provider config."""
-    slurm_config = load_yaml_file(config_path)
+    slurm_config = _slurm_config_with_overrides(config_path, overrides)
     validate_slurm_config(slurm_config)
     provider = _require_config_value(slurm_config, "provider")
     if provider != "vhr-worldview":
         raise ValueError(f"Unsupported provider: {provider}")
 
-    resolved_run_id = run_id or make_run_id()
+    resolved_run_id = resolve_run_id(slurm_config)
     paths = resolve_slurm_paths(slurm_config, resolved_run_id)
+    log_file = resolve_log_file(slurm_config, config_path=config_path, run_id=resolved_run_id)
     provider_config = _require_config_value(slurm_config, "provider_config")
     provider_config_data = load_yaml_file(provider_config)
     local_args = _load_worldview_args(provider_config)
@@ -513,15 +785,21 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
         if input_uploads
         else None
     )
-    staged_config = os.path.join(STAGING_DIR, resolved_run_id, os.path.basename(provider_config))
-    staged_config_data = rewrite_worldview_config_for_remote(
+    staged_config = resolve_staged_provider_file(
+        slurm_config,
+        config_path=config_path,
+        provider_config=provider_config,
+        run_id=resolved_run_id,
+    )
+    write_staged_worldview_config_for_remote(
+        provider_config,
+        staged_config,
         provider_config_data,
         input_tif_paths=remote_input_tifs,
         path_rewrites=path_rewrites,
         remote_output_dir=paths["remote_output_dir"],
         remote_temp_dir=paths["remote_temp_dir"],
     )
-    write_yaml_file(staged_config, staged_config_data)
     staged_config_abs = os.path.abspath(staged_config)
     remote_provider_config = _add_reference_upload(
         reference_uploads,
@@ -546,12 +824,13 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
         "run_id": resolved_run_id,
         "provider": provider,
         "provider_config": provider_config,
-        "staged_provider_config": staged_config_abs,
-        "remote_provider_config": remote_provider_config,
+        "staged_provider_file": staged_config_abs,
+        "slurm_start_file": slurm_start_file,
+        "log_file": log_file,
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
         **paths,
-        "slurm_start_file": slurm_start_file,
+        "remote_provider_config": remote_provider_config,
         "remote_slurm_start_file": remote_slurm_start_file,
         "submitted_job_id": None,
         "status": "prepared",
@@ -561,7 +840,7 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
         "download_log_paths": {},
         "raw_status_text": "",
     }
-    _write_log_file(_require_config_value(slurm_config, "log_file"), log_data)
+    _write_log_file(log_file, log_data)
     return log_data
 
 
@@ -744,7 +1023,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
 
     prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and log YAML.")
     prepare_parser.add_argument("--config", required=True, help="Path to Slurm config YAML.")
-    prepare_parser.add_argument("--run-id", help="Optional run id. Defaults to current UTC timestamp.")
+    for key in SLURM_PREPARE_CONFIG_KEYS:
+        option = f"--{key.replace('_', '-')}"
+        if key == "provider_upload_keys":
+            prepare_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
+        else:
+            prepare_parser.add_argument(option, help=f"Override Slurm config key: {key}.")
 
     start_parser = subparsers.add_parser("start", help="Upload files and submit the Slurm job.")
     start_parser.add_argument("--config", required=True, help="Path to Slurm log YAML.")
@@ -757,14 +1041,19 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _collect_prepare_overrides(args: argparse.Namespace) -> Dict[str, Any]:
+    """Collect CLI values that should override Slurm YAML config defaults."""
+    return {key: getattr(args, key) for key in SLURM_PREPARE_CONFIG_KEYS if getattr(args, key, None) is not None}
+
+
 def main(argv: List[str] | None = None) -> int:
     """CLI entrypoint for Slurm staging and job control."""
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
     if args.command == "prepare":
-        log_data = prepare_slurm_plan(args.config, run_id=args.run_id)
-        print(f"Wrote Slurm log {load_yaml_file(args.config)['log_file']}")
-        print(f"Wrote staged provider config {log_data['staged_provider_config']}")
+        log_data = prepare_slurm_plan(args.config, overrides=_collect_prepare_overrides(args))
+        print(f"Wrote Slurm log {log_data['log_file']}")
+        print(f"Wrote staged provider file {log_data['staged_provider_file']}")
         return 0
     if args.command == "start":
         start_slurm_job(args.config)
@@ -789,11 +1078,15 @@ __all__ = [
     "load_yaml_file",
     "make_run_id",
     "prepare_slurm_plan",
+    "resolve_log_file",
+    "resolve_run_id",
+    "resolve_staged_provider_file",
     "resolve_slurm_paths",
     "rewrite_worldview_config_for_remote",
     "start_slurm_job",
     "update_status_log",
     "upload_required_files",
     "validate_slurm_config",
+    "write_staged_worldview_config_for_remote",
     "write_yaml_file",
 ]
