@@ -449,3 +449,21 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
         "local",
         ["rsync", "-a", "--itemize-changes", str(local_path), "user@host:~/remote/output/input.tif"],
     )
+
+    calls.clear()
+    slurm_mod._rsync_upload(
+        {"ssh_user": "user", "ssh_host": "host", "debug_logs": True},
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+    assert calls[1] == (
+        "local",
+        [
+            "rsync",
+            "-a",
+            "--itemize-changes",
+            "--info=progress2",
+            str(local_path),
+            "user@host:~/remote/output/input.tif",
+        ],
+    )

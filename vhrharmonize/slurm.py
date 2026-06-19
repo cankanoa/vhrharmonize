@@ -791,14 +791,12 @@ def _rsync_upload(slurm_data: Mapping[str, Any], local_path: str, remote_path: s
     if not os.path.isfile(local_path):
         raise FileNotFoundError(local_path)
     _run_ssh(slurm_data, f"mkdir -p {_remote_quote(_remote_parent(remote_path))}")
+    command = ["rsync", "-a", "--itemize-changes"]
+    if _debug_enabled(slurm_data):
+        command.append("--info=progress2")
+    command.extend([local_path, f"{_ssh_target(slurm_data)}:{remote_path}"])
     return _run_local_command(
-        [
-            "rsync",
-            "-a",
-            "--itemize-changes",
-            local_path,
-            f"{_ssh_target(slurm_data)}:{remote_path}",
-        ]
+        command
     )
 
 
