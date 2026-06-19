@@ -30,6 +30,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "debug_logs",
     "ssh_host",
     "ssh_user",
+    "ssh_private_key",
     "remote_output_dir",
     "remote_log_dir",
     "remote_temp_dir",
@@ -183,6 +184,10 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
         raise ValueError("provider_upload_keys must be a list of provider YAML keys.")
     if "debug_logs" in config:
         _parse_bool(config["debug_logs"], key="debug_logs")
+    for key in ("ssh_private_key",):
+        value = config.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{key} must be a non-empty string when set.")
 
 
 def resolve_run_id(config: Mapping[str, Any]) -> str:
@@ -738,6 +743,7 @@ def prepare_slurm_plan(
         "staged_slurm_file": staged_slurm_file,
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
+        **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
         **paths,
         "remote_provider_config": remote_provider_config,
         "remote_slurm_start_file": remote_slurm_start_file,
@@ -756,6 +762,30 @@ def prepare_slurm_plan(
 
 def _ssh_target(slurm_data: Mapping[str, Any]) -> str:
     return f"{_require_config_value(slurm_data, 'ssh_user')}@{_require_config_value(slurm_data, 'ssh_host')}"
+
+
+def _ssh_private_key(slurm_data: Mapping[str, Any]) -> str | None:
+    configured = slurm_data.get("ssh_private_key")
+    if not isinstance(configured, str) or not configured.strip():
+        return None
+    return os.path.expanduser(configured.strip())
+
+
+def _ssh_option_args(slurm_data: Mapping[str, Any], *, open_master: bool = False) -> List[str]:
+    del open_master
+    option_args: List[str] = []
+    private_key = _ssh_private_key(slurm_data)
+    if private_key:
+        option_args.extend(["-i", private_key])
+    return option_args
+
+
+def _ssh_command(slurm_data: Mapping[str, Any], *, open_master: bool = False) -> List[str]:
+    return ["ssh", *_ssh_option_args(slurm_data, open_master=open_master), _ssh_target(slurm_data)]
+
+
+def _ssh_command_string(slurm_data: Mapping[str, Any]) -> str:
+    return " ".join(shlex.quote(part) for part in ["ssh", *_ssh_option_args(slurm_data)])
 
 
 def _debug_enabled(slurm_data: Mapping[str, Any]) -> bool:
@@ -806,7 +836,7 @@ def _run_ssh(
     stream_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     return _run_local_command(
-        ["ssh", _ssh_target(slurm_data), remote_command],
+        [*_ssh_command(slurm_data), remote_command],
         check=check,
         capture_output=capture_output,
         stream_output=stream_output,
@@ -836,6 +866,8 @@ def _rsync_upload(slurm_data: Mapping[str, Any], local_path: str, remote_path: s
     command = ["rsync", "-a", "--itemize-changes"]
     if debug:
         command.append("--info=progress2")
+    if _ssh_option_args(slurm_data):
+        command.extend(["-e", _ssh_command_string(slurm_data)])
     command.extend([local_path, f"{_ssh_target(slurm_data)}:{remote_path}"])
     _debug(slurm_data, "starting rsync")
     return _run_local_command(command, capture_output=not debug, stream_output=debug)
@@ -843,7 +875,13 @@ def _rsync_upload(slurm_data: Mapping[str, Any], local_path: str, remote_path: s
 
 def _scp_download(slurm_data: Mapping[str, Any], remote_path: str, local_path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(local_path)) or ".", exist_ok=True)
-    _run_local_command(["scp", "-p", f"{_ssh_target(slurm_data)}:{remote_path}", local_path])
+    command = ["scp", "-p"]
+    option_args = _ssh_option_args(slurm_data)
+    for index in range(0, len(option_args), 2):
+        option, value = option_args[index:index + 2]
+        command.extend(["-o", value] if option == "-o" else [option, value])
+    command.extend([f"{_ssh_target(slurm_data)}:{remote_path}", local_path])
+    _run_local_command(command)
 
 
 def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str, str]]:

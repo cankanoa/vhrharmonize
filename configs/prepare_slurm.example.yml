@@ -16,6 +16,7 @@ debug_logs: true # Print debug logs
 # SSH login
 ssh_host: koa.its.hawaii.edu
 ssh_user: username
+# ssh_private_key: ~/.ssh/id_ed25519 # Optional identity file
 
 # Remote directories. Optional, {run_id} will be replaced with the run ID
 remote_output_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/output # Non-temp outputs and uploaded workflow inputs

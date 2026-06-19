@@ -10,7 +10,7 @@ REMOTE := $(REMOTE_USER)@$(REMOTE_HOST)
 SSH_ALIAS ?= koa
 SSH_CONFIG ?= $(HOME)/.ssh/config
 SSH_PERSIST ?= 8h
-SSH_TARGET ?= $(SSH_ALIAS)
+SSH_TARGET ?= $(REMOTE_HOST)
 
 # Default output directories when OUTDIR is not provided.
 REMOTE_HOME ?= ~

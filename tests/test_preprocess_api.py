@@ -359,6 +359,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "debug_logs": True,
                 "ssh_host": "example.edu",
                 "ssh_user": "user",
+                "ssh_private_key": "~/.ssh/id_ed25519",
                 "remote_output_dir": "/remote/runs/{run_id}/output",
                 "remote_log_dir": "/remote/runs/{run_id}/logs",
                 "remote_temp_dir": "/remote/runs/{run_id}/tmp",
@@ -381,6 +382,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
     assert written_slurm["status"] == "prepared"
     assert written_slurm["debug_logs"] is True
+    assert written_slurm["ssh_private_key"] == "~/.ssh/id_ed25519"
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
@@ -452,7 +454,35 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
 
     calls.clear()
     slurm_mod._rsync_upload(
-        {"ssh_user": "user", "ssh_host": "host", "debug_logs": True},
+        {
+            "ssh_user": "user",
+            "ssh_host": "host",
+            "ssh_private_key": "~/.ssh/id_ed25519",
+        },
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+    assert calls[1] == (
+        "local",
+        [
+            "rsync",
+            "-a",
+            "--itemize-changes",
+            "-e",
+            f"ssh -i {Path.home()}/.ssh/id_ed25519",
+            str(local_path),
+            "user@host:~/remote/output/input.tif",
+        ],
+    )
+
+    calls.clear()
+    slurm_mod._rsync_upload(
+        {
+            "ssh_user": "user",
+            "ssh_host": "host",
+            "ssh_private_key": "~/.ssh/id_ed25519",
+            "debug_logs": True,
+        },
         str(local_path),
         "~/remote/output/input.tif",
     )
@@ -463,6 +493,8 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
             "-a",
             "--itemize-changes",
             "--info=progress2",
+            "-e",
+            f"ssh -i {Path.home()}/.ssh/id_ed25519",
             str(local_path),
             "user@host:~/remote/output/input.tif",
         ],
