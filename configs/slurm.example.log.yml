@@ -19,7 +19,7 @@ status: prepared
 
 # All mappings are local file: remote file.
 uploaded_input_paths:
-  /local/path/scene/18JAN02211806-M1BS-200009592532_01_P001.TIF: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/tmp/inputs/18JAN02211806-M1BS-200009592532_01_P001.TIF
+  /local/path/scene/18JAN02211806-M1BS-200009592532_01_P001.TIF: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/output/file_source/18JAN02211806-M1BS-200009592532_01_P001.TIF
 uploaded_reference_paths:
   .vhr-slurm/20260618T220000Z/worldview.example.yml: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.yml
   configs/worldview.example.sbatch: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.sbatch

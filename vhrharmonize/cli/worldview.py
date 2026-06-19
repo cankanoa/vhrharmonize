@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -54,7 +55,7 @@ from vhrharmonize.providers.worldview import (
 )
 
 RASTER_STEP_ORDER = [
-    "raw",
+    "file_source",
     "atmospheric_correction",
     "orthorectification",
     "pansharpen",
@@ -86,7 +87,7 @@ class SceneWorkflowState:
     step_dirs: Dict[str, str]
     scene_bbox_wgs84: tuple[float, float, float, float]
     current_files: List[str]
-    current_step: str = "raw"
+    current_step: str = "file_source"
     pan_ortho_path: Optional[str] = None
     dem_file_path: Optional[str] = None
     fetch_atmosphere_result: Optional[Dict] = None
@@ -121,7 +122,7 @@ def _get_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: 
         Stored step output path.
     """
     image = _require_scene_image(scene, role)
-    if step_name == "raw":
+    if step_name in {"file_source", "raw"}:
         return image.tif_file
     step_path = image.step_file_paths.get(step_name)
     if not step_path:
@@ -727,7 +728,25 @@ def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
         return "orthorectification"
     if args.run_atmospheric_correction:
         return "atmospheric_correction"
-    return "raw"
+    return "file_source"
+
+
+def _enabled_raster_steps(args: argparse.Namespace) -> List[str]:
+    """Return enabled raster processing steps in workflow order."""
+    enabled_steps: List[str] = []
+    if args.run_file_source:
+        enabled_steps.append("file_source")
+    if args.run_atmospheric_correction:
+        enabled_steps.append("atmospheric_correction")
+    if args.run_orthorectification:
+        enabled_steps.append("orthorectification")
+    if args.run_pansharpen:
+        enabled_steps.append("pansharpen")
+    if args.run_cloud_mask:
+        enabled_steps.append("cloud_mask")
+    if args.run_alignment:
+        enabled_steps.append("alignment")
+    return enabled_steps
 
 
 def _step_outputs_exist(output_paths: List[str]) -> bool:
@@ -967,6 +986,13 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
         ),
     }
 
+    if args.run_file_source:
+        step_dirs["file_source"] = _resolve_step_save_dir(
+            args.save_file_source,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
     if args.run_fetch_atmosphere:
         step_dirs["fetch_atmosphere"] = _resolve_step_save_dir(
             args.save_fetch_atmosphere,
@@ -1047,10 +1073,21 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
         Mapping of step names to expected output paths.
     """
     mul_image = _require_scene_image(state.scene, "mul")
+    pan_image = _require_scene_image(state.scene, "pan")
+    if args.run_file_source:
+        file_source_map: Dict[str, str] = {}
+        file_source_map.update(_image_source_file_map(mul_image, state.step_dirs["file_source"]))
+        file_source_map.update(_image_source_file_map(pan_image, state.step_dirs["file_source"]))
+        file_source_outputs = list(file_source_map.values())
+        current_mul_outputs = [file_source_map.get(os.path.abspath(mul_image.tif_file), mul_image.tif_file)]
+    else:
+        file_source_outputs = [mul_image.tif_file]
+        current_mul_outputs = [mul_image.tif_file]
+
     expected_outputs: Dict[str, List[str]] = {
+        "file_source": file_source_outputs,
         "raw": [mul_image.tif_file],
     }
-    current_mul_outputs = [mul_image.tif_file]
 
     if args.run_fetch_atmosphere:
         expected_outputs["fetch_atmosphere"] = plan_step_outputs(
@@ -1125,6 +1162,60 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
     return expected_outputs
 
 
+def _scene_step_output_keys(step_name: str) -> List[str]:
+    """Return expected-output keys that belong to one workflow step."""
+    if step_name == "file_source":
+        return ["file_source"]
+    if step_name == "orthorectification":
+        return ["orthorectification", "orthorectification_pan"]
+    if step_name == "cloud_mask":
+        return ["cloud_mask", "cloud_mask_mask"]
+    return [step_name]
+
+
+def _scene_step_expected_outputs(
+    expected_outputs: Dict[str, List[str]],
+    step_name: str,
+) -> List[str]:
+    """Return expected output paths for a workflow step."""
+    outputs: List[str] = []
+    for key in _scene_step_output_keys(step_name):
+        outputs.extend(expected_outputs.get(key, []))
+    return outputs
+
+
+def _get_scene_upload_source_step(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+) -> str:
+    """Return the latest enabled processed raster step, or file_source."""
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+    for step_name in reversed(_enabled_raster_steps(args)):
+        if step_name == "file_source":
+            continue
+        step_outputs = _scene_step_expected_outputs(expected_outputs, step_name)
+        if _existing_outputs_are_reusable(
+            step_outputs,
+            check_validity=args.run_from_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
+            log_to_console=False,
+            step=step_name,
+            scene_basename=state.scene.primary_basename,
+        ):
+            return step_name
+    return "file_source"
+
+
+def _get_scene_upload_source_files(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+) -> List[str]:
+    """Return files from the latest enabled processed raster step, or file_source."""
+    source_step = _get_scene_upload_source_step(state, args)
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+    return _scene_step_expected_outputs(expected_outputs, source_step)
+
+
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
     """Initialize workflow state for a scene.
     Args:
@@ -1146,7 +1237,7 @@ def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> 
         scene=scene,
         step_dirs=_resolve_scene_step_dirs(args, scene),
         scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file),
-        current_files=[_get_worldview_scene_step_path(scene, "mul", "raw")],
+        current_files=[_get_worldview_scene_step_path(scene, "mul", "file_source")],
     )
     return state
 
@@ -1202,6 +1293,8 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
     required_outputs: List[str] = []
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         required_outputs.extend(expected_outputs.get("fetch_atmosphere", []))
+    if args.run_file_source and not _is_temp_save_value(args.save_file_source):
+        required_outputs.extend(expected_outputs.get("file_source", []))
     if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
         required_outputs.extend(expected_outputs.get("atmospheric_correction", []))
     if args.run_orthorectification and not _is_temp_save_value(args.save_orthorectification):
@@ -1628,6 +1721,108 @@ def _run_cloud_mask_command(
     subprocess.run(command, shell=True, check=True)
 
 
+def _image_source_file_map(image: Optional[WorldViewImage], output_dir: str) -> Dict[str, str]:
+    """Return source bundle files mapped to their staged output paths."""
+    if image is None:
+        return {}
+    source_paths = glob.glob(os.path.join(os.path.dirname(image.tif_file), f"{image.basename}.*"))
+    if image.shp_file:
+        source_paths.extend(glob.glob(f"{os.path.splitext(image.shp_file)[0]}.*"))
+    path_map: Dict[str, str] = {}
+    for source_path in _dedupe_paths([path for path in source_paths if os.path.isfile(path)]):
+        path_map[os.path.abspath(source_path)] = os.path.join(output_dir, os.path.basename(source_path))
+    return path_map
+
+
+def _set_image_file_paths_from_source_map(image: Optional[WorldViewImage], path_map: Mapping[str, str]) -> None:
+    """Update a WorldView image to point at staged source bundle files."""
+    if image is None:
+        return
+    for attr_name in ("tif_file", "imd_file", "shp_file", "til_file"):
+        current_path = getattr(image, attr_name)
+        if current_path is None:
+            continue
+        staged_path = path_map.get(os.path.abspath(current_path))
+        if staged_path:
+            setattr(image, attr_name, staged_path)
+
+
+def _copy_file_source_bundle(path_map: Mapping[str, str]) -> None:
+    """Copy source bundle files to their staged file_source paths."""
+    for source_path, output_path in path_map.items():
+        if os.path.abspath(source_path) == os.path.abspath(output_path):
+            continue
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        shutil.copy2(source_path, output_path)
+
+
+def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the file_source staging step."""
+    if not args.run_file_source:
+        return state.current_files
+    output_dir = state.step_dirs["file_source"]
+    path_map: Dict[str, str] = {}
+    path_map.update(_image_source_file_map(state.scene.mul_image, output_dir))
+    path_map.update(_image_source_file_map(state.scene.pan_image, output_dir))
+    output_paths = list(path_map.values())
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console,
+        step="file_source",
+        scene_basename=state.scene.primary_basename,
+    ):
+        _log_step_plan(
+            "file_source",
+            outputs=output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
+        )
+    else:
+        _log_step_plan(
+            "file_source",
+            inputs=list(path_map.keys()),
+            outputs=output_paths,
+            message="Staging source bundle files",
+            enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
+        )
+        _copy_file_source_bundle(path_map)
+
+    _set_image_file_paths_from_source_map(state.scene.mul_image, path_map)
+    _set_image_file_paths_from_source_map(state.scene.pan_image, path_map)
+    state.scene.step_outputs["file_source"] = output_paths
+    mul_output = path_map.get(
+        os.path.abspath(state.scene.mul_image.tif_file),
+        state.scene.mul_image.tif_file,
+    ) if state.scene.mul_image is not None else expected_outputs["file_source"][0]
+    pan_output = path_map.get(
+        os.path.abspath(state.scene.pan_image.tif_file),
+        state.scene.pan_image.tif_file,
+    ) if state.scene.pan_image is not None else None
+    state.current_files = [mul_output]
+    _set_worldview_scene_step_path(state.scene, "mul", "file_source", mul_output)
+    if pan_output:
+        _set_worldview_scene_step_path(state.scene, "pan", "file_source", pan_output)
+    state.current_step = "file_source"
+    if args.calculate_overviews_file_source:
+        log(
+            "Calculating overviews for step file_source",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
+        for output_path in [mul_output, pan_output]:
+            if not output_path:
+                continue
+            calculate_raster_overviews(output_path, args.overview_scales)
+    return state.current_files
+
+
 def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespace) -> None:
     """Run the fetch-atmosphere step.
     Args:
@@ -1859,7 +2054,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         state.py6s_auto_atmos_estimate = py6s_result.auto_atmos_estimate
     else:
         state.current_files = [input_raster]
-        state.current_step = "raw"
+        state.current_step = "file_source"
         return state.current_files
 
     state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
@@ -2354,6 +2549,8 @@ def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespac
         """
         saved_paths.extend(state.scene.step_outputs.get(step_name, []))
 
+    if args.run_file_source and not _is_temp_save_value(args.save_file_source):
+        _extend("file_source")
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
     if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
@@ -2416,6 +2613,8 @@ def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespac
         """
         temp_paths.extend(state.scene.step_outputs.get(step_name, []))
 
+    if args.run_file_source and _is_temp_save_value(args.save_file_source):
+        _extend("file_source")
     if args.run_fetch_atmosphere and _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
     if args.run_atmospheric_correction and _is_temp_save_value(args.save_atmospheric_correction):
@@ -2485,6 +2684,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "run_from_existing": args.run_from_existing,
             "run_from_existing_check_validity": args.run_from_existing_check_validity,
             "skip_existing_check_validity": args.skip_existing_check_validity,
+            "run_file_source": args.run_file_source,
             "run_fetch_atmosphere": args.run_fetch_atmosphere,
             "run_atmospheric_correction": args.run_atmospheric_correction,
             "run_orthorectification": args.run_orthorectification,
@@ -2593,6 +2793,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
         return state
 
     scene_started_utc = datetime.utcnow().isoformat() + "Z"
+    _run_file_source_step(state, args)
     _run_fetch_atmosphere_step(state, args)
 
     if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
@@ -2777,6 +2978,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
+    parser.add_argument("--run-file-source", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save-file-source", default="$temp/file_source")
+    parser.add_argument("--calculate-overviews-file-source", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-fetch-atmosphere", default="$temp")
     parser.add_argument("--run-atmospheric-correction", action=argparse.BooleanOptionalAction, default=True)
@@ -2925,6 +3129,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     aggregate_single_output_modes = {"temp_child", "absolute", "cwd_relative"}
     for arg_name in (
+        "save_file_source",
         "save_fetch_atmosphere",
         "save_atmospheric_correction",
         "save_orthorectification",
@@ -2960,7 +3165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             args.overview_scales = [int(value) for value in args.overview_scales]
     if (
-        args.calculate_overviews_atmospheric_correction
+        args.calculate_overviews_file_source
+        or args.calculate_overviews_atmospheric_correction
         or args.calculate_overviews_orthorectification
         or args.calculate_overviews_pansharpen
         or args.calculate_overviews_cloud_mask

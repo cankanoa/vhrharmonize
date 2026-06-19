@@ -45,6 +45,11 @@ shared:
   max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold
 
 workflow:
+  # File source
+  run_file_source: false # Copy source WorldView bundle files before processing
+  save_file_source: $temp/file_source
+  calculate_overviews_file_source: false
+
   # Atmospheric correction
   run_atmospheric_correction: true
   atmospheric_correction_output_suffix: _py6s # Filename suffix for this step

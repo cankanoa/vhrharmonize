@@ -125,20 +125,38 @@ def _iter_existing(paths: Iterable[str | None]) -> Iterable[str]:
 def _worldview_image_required_files(image: WorldViewImage | None) -> List[str]:
     if image is None:
         return []
-    paths = [image.tif_file, image.imd_file, image.til_file]
+    paths = std_glob.glob(os.path.join(os.path.dirname(image.tif_file), f"{image.basename}.*"))
     if image.shp_file:
         stem = os.path.splitext(image.shp_file)[0]
         paths.extend(std_glob.glob(f"{stem}.*"))
     return list(_iter_existing(paths))
 
 
-def collect_worldview_upload_input_files(scenes: Iterable[WorldViewScene]) -> List[str]:
-    """Collect actual WorldView scene files required on the remote host."""
+def collect_worldview_upload_input_files(
+    scenes: Iterable[WorldViewScene],
+    args: argparse.Namespace,
+) -> Tuple[List[str], List[str], List[str]]:
+    """Collect workflow source files and remote discovery TIFF inputs."""
     paths: List[str] = []
+    input_tifs: List[str] = []
+    file_source_files: List[str] = []
     for scene in scenes:
-        paths.extend(_worldview_image_required_files(scene.mul_image))
-        paths.extend(_worldview_image_required_files(scene.pan_image))
-    return sorted(set(paths))
+        state = _make_planning_state(scene, args)
+        source_step = worldview._get_scene_upload_source_step(state, args)
+        if source_step == "file_source":
+            scene_source_files: List[str] = []
+            scene_source_files.extend(_worldview_image_required_files(scene.mul_image))
+            scene_source_files.extend(_worldview_image_required_files(scene.pan_image))
+            paths.extend(scene_source_files)
+            file_source_files.extend(scene_source_files)
+            for image in scene.iter_images():
+                input_tifs.append(image.tif_file)
+            continue
+
+        step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
+        paths.extend(step_files)
+        input_tifs.extend(path for path in step_files if os.path.splitext(path)[1].lower() in {".tif", ".tiff"})
+    return sorted(set(paths)), sorted(set(input_tifs)), sorted(set(file_source_files))
 
 
 def _common_parent(paths: Iterable[str]) -> str:
@@ -149,19 +167,32 @@ def _common_parent(paths: Iterable[str]) -> str:
     return common if os.path.isdir(common) else os.path.dirname(common)
 
 
-def _remote_input_path(local_path: str, *, input_root: str, remote_temp_dir: str) -> str:
+def _remote_file_source_path(local_path: str, *, input_root: str, remote_output_dir: str) -> str:
     rel_path = os.path.relpath(local_path, input_root)
-    return os.path.join(remote_temp_dir, "inputs", rel_path)
+    return os.path.join(remote_output_dir, "file_source", rel_path)
 
 
-def build_input_path_map(input_files: Iterable[str], *, remote_temp_dir: str) -> Dict[str, str]:
-    """Map local input files to remote temp input file paths."""
+def build_input_path_map(
+    input_files: Iterable[str],
+    *,
+    file_source_files: Iterable[str],
+    remote_output_dir: str,
+) -> Dict[str, str]:
+    """Map local workflow input files to remote output-tree paths."""
     local_files = sorted({os.path.abspath(path) for path in input_files})
+    file_source_set = {os.path.abspath(path) for path in file_source_files}
     input_root = _common_parent(local_files)
-    return {
-        local_path: _remote_input_path(local_path, input_root=input_root, remote_temp_dir=remote_temp_dir)
-        for local_path in local_files
-    }
+    output_map: Dict[str, str] = {}
+    for local_path in local_files:
+        if local_path in file_source_set:
+            output_map[local_path] = _remote_file_source_path(
+                local_path,
+                input_root=input_root,
+                remote_output_dir=remote_output_dir,
+            )
+        else:
+            output_map[local_path] = os.path.join(remote_output_dir, os.path.basename(local_path))
+    return output_map
 
 
 def _hash_path(path: str) -> str:
@@ -343,65 +374,52 @@ def _make_planning_state(scene: WorldViewScene, args: argparse.Namespace) -> wor
     )
 
 
-def _remote_planning_args(args: argparse.Namespace, *, remote_output_dir: str, remote_temp_dir: str) -> argparse.Namespace:
-    remote_args = copy.deepcopy(args)
-    remote_args.output_dir = remote_output_dir
-    remote_args.temp_dir = remote_temp_dir
-    for key, value in vars(remote_args).items():
-        if key.startswith("save_"):
-            setattr(
-                remote_args,
-                key,
-                _remote_save_value_for_key(key, value, remote_output_dir=remote_output_dir),
-            )
-    return remote_args
-
-
 def _collect_planned_non_temp_outputs(
     scenes: Iterable[WorldViewScene],
     local_args: argparse.Namespace,
-    remote_args: argparse.Namespace,
+    *,
+    remote_output_dir: str,
 ) -> Dict[str, str]:
+    scene_list = list(scenes)
     output_map: Dict[str, str] = {}
-    for scene in scenes:
+    for scene in scene_list:
         local_state = _make_planning_state(scene, local_args)
-        remote_state = _make_planning_state(scene, remote_args)
-        for local_path, remote_path in zip(
-            worldview._scene_skip_required_outputs(local_state, local_args),
-            worldview._scene_skip_required_outputs(remote_state, remote_args),
-        ):
-            output_map[os.path.abspath(local_path)] = remote_path
+        for local_path in worldview._scene_skip_required_outputs(local_state, local_args):
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
 
     if local_args.run_seamline_metadata and not worldview._is_temp_save_value(local_args.save_seamline_metadata):
-        first_scene = next(iter(scenes), None)
+        first_scene = next(iter(scene_list), None)
         if first_scene is not None:
             local_state = _make_planning_state(first_scene, local_args)
-            remote_state = _make_planning_state(first_scene, remote_args)
-            output_map[os.path.abspath(local_state.step_dirs["seamline_metadata"])] = remote_state.step_dirs["seamline_metadata"]
+            local_path = local_state.step_dirs["seamline_metadata"]
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
 
     if local_args.run_radiometric_normalization and not getattr(local_args, "group_by_basename", None):
-        first_scene = next(iter(scenes), None)
+        first_scene = next(iter(scene_list), None)
         if first_scene is not None and not worldview._is_temp_save_value(local_args.save_radiometric_normalization):
             local_state = _make_planning_state(first_scene, local_args)
-            remote_state = _make_planning_state(first_scene, remote_args)
-            output_map[os.path.abspath(local_state.step_dirs["radiometric_normalization"])] = remote_state.step_dirs["radiometric_normalization"]
+            local_path = local_state.step_dirs["radiometric_normalization"]
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
 
     if local_args.run_radiometric_normalization and getattr(local_args, "group_by_basename", None):
-        first_scene = next(iter(scenes), None)
+        first_scene = next(iter(scene_list), None)
         if first_scene is not None:
             local_state = _make_planning_state(first_scene, local_args)
-            remote_state = _make_planning_state(first_scene, remote_args)
             output_map.update(
                 _collect_group_by_basename_output_downloads(
                     local_args.group_by_basename,
                     local_temp_root=local_state.step_dirs["temp_root"],
                     local_output_root=local_state.step_dirs["output_root"],
-                    remote_temp_root=remote_state.step_dirs["temp_root"],
-                    remote_output_dir=remote_state.step_dirs["output_root"],
+                    remote_output_dir=remote_output_dir,
                 )
             )
 
     return dict(sorted(output_map.items()))
+
+
+def _remote_output_file_path(local_path: str, remote_output_dir: str) -> str:
+    """Return the remote output file path for a planned local output."""
+    return os.path.join(remote_output_dir, os.path.basename(local_path))
 
 
 def _collect_group_by_basename_output_downloads(
@@ -409,7 +427,6 @@ def _collect_group_by_basename_output_downloads(
     *,
     local_temp_root: str,
     local_output_root: str,
-    remote_temp_root: str,
     remote_output_dir: str,
 ) -> Dict[str, str]:
     output_map: Dict[str, str] = {}
@@ -417,19 +434,14 @@ def _collect_group_by_basename_output_downloads(
 
     def _walk(spec: Mapping[str, Any]) -> None:
         for output_key, value in spec.items():
-            output_map[
-                os.path.abspath(
-                    worldview._resolve_radiometric_group_output_path(
-                        output_name=output_key,
-                        temp_root=local_temp_root,
-                        output_root=local_output_root,
-                    )
-                )
-            ] = worldview._resolve_radiometric_group_output_path(
+            local_path = worldview._resolve_radiometric_group_output_path(
                 output_name=output_key,
-                temp_root=remote_temp_root,
-                output_root=remote_output_dir,
+                temp_root=local_temp_root,
+                output_root=local_output_root,
             )
+            output_map[
+                os.path.abspath(local_path)
+            ] = _remote_output_file_path(local_path, remote_output_dir)
             if isinstance(value, dict):
                 _walk(value)
             elif isinstance(value, list):
@@ -474,14 +486,20 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
     upload_keys = [str(key) for key in (slurm_config.get("provider_upload_keys") or [])]
     if "input_dir" in upload_keys and "input_file_glob" not in upload_keys:
         upload_keys.append("input_file_glob")
-    input_uploads = (
-        build_input_path_map(
-            collect_worldview_upload_input_files(scenes),
-            remote_temp_dir=paths["remote_temp_dir"],
+    input_tifs_for_remote: List[str] = []
+    if "input_file_glob" in upload_keys:
+        (
+            upload_input_files,
+            input_tifs_for_remote,
+            file_source_files,
+        ) = collect_worldview_upload_input_files(scenes, local_args)
+        input_uploads = build_input_path_map(
+            upload_input_files,
+            file_source_files=file_source_files,
+            remote_output_dir=paths["remote_output_dir"],
         )
-        if "input_file_glob" in upload_keys
-        else {}
-    )
+    else:
+        input_uploads = {}
 
     reference_files = collect_provider_reference_files(
         provider_config_data,
@@ -491,7 +509,7 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
     reference_uploads = build_reference_path_map(reference_files, remote_reference_dir=paths["remote_reference_dir"])
     path_rewrites = {**input_uploads, **reference_uploads}
     remote_input_tifs = (
-        [path_rewrites[os.path.abspath(path)] for path in input_tifs if os.path.abspath(path) in path_rewrites]
+        [path_rewrites[os.path.abspath(path)] for path in input_tifs_for_remote if os.path.abspath(path) in path_rewrites]
         if input_uploads
         else None
     )
@@ -511,12 +529,11 @@ def prepare_slurm_plan(config_path: str, *, run_id: str | None = None) -> Dict[s
         remote_reference_dir=paths["remote_reference_dir"],
     )
 
-    remote_args = _remote_planning_args(
+    output_downloads = _collect_planned_non_temp_outputs(
+        scenes,
         local_args,
         remote_output_dir=paths["remote_output_dir"],
-        remote_temp_dir=paths["remote_temp_dir"],
     )
-    output_downloads = _collect_planned_non_temp_outputs(scenes, local_args, remote_args)
 
     slurm_start_file = _require_config_value(slurm_config, "slurm_start_file")
     remote_slurm_start_file = _add_reference_upload(
