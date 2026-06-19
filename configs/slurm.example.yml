@@ -2,7 +2,7 @@
 provider: vhr-worldview # Provider runner to stage.
 
 # Set task ID
-run_id: 1 # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime.
+run_id: "1" # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime.
 
 # Editable files
 provider_config: configs/worldview.example.yml # Local provider YAML to rewrite for Slurm.
@@ -10,7 +10,7 @@ slurm_start_file: configs/worldview.example.sbatch # Uploaded then submitted wit
 
 # Generated files
 staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML.
-log_file: configs/slurm.example.{run_id}.log.yml # Generated file-to-file staging log.
+staged_slurm_file: configs/slurm.staged.{run_id}.yml # Generated staged Slurm YAML.
 
 # SSH login
 ssh_host: koa.its.hawaii.edu

@@ -346,7 +346,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         encoding="utf-8",
     )
     slurm_config = tmp_path / "slurm.yml"
-    log_file = tmp_path / "slurm.log.yml"
+    staged_slurm_file = tmp_path / "slurm.staged.yml"
     script_path = tmp_path / "worldview.sbatch"
     script_path.write_text("#!/bin/bash\nvhr-worldview --config-yaml \"$1\"\n", encoding="utf-8")
     slurm_config.write_text(
@@ -355,7 +355,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "run_id": "RUN123",
                 "provider": "vhr-worldview",
                 "provider_config": str(provider_config),
-                "log_file": str(log_file),
+                "staged_slurm_file": str(staged_slurm_file),
                 "ssh_host": "example.edu",
                 "ssh_user": "user",
                 "remote_output_dir": "/remote/runs/{run_id}/output",
@@ -375,10 +375,10 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     )
 
     plan = prepare_slurm_plan(str(slurm_config))
-    written_log = load_yaml_file(str(log_file))
+    written_slurm = load_yaml_file(str(staged_slurm_file))
 
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
-    assert written_log["status"] == "prepared"
+    assert written_slurm["status"] == "prepared"
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
