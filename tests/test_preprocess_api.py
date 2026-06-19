@@ -426,11 +426,11 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
     local_path.write_text("data", encoding="utf-8")
     calls = []
 
-    def fake_run_ssh(slurm_data, remote_command, *, check=True):
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
         calls.append(("ssh", remote_command))
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
-    def fake_run_local_command(command, *, check=True):
+    def fake_run_local_command(command, *, check=True, capture_output=True, stream_output=False):
         calls.append(("local", command))
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 

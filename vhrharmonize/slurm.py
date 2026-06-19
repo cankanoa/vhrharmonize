@@ -764,15 +764,53 @@ def _debug_enabled(slurm_data: Mapping[str, Any]) -> bool:
 
 def _debug(slurm_data: Mapping[str, Any], message: str) -> None:
     if _debug_enabled(slurm_data):
-        print(f"[slurm debug] {message}")
+        print(f"[slurm debug] {message}", flush=True)
 
 
-def _run_local_command(command: List[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=check, text=True, capture_output=True)
+def _run_local_command(
+    command: List[str],
+    *,
+    check: bool = True,
+    capture_output: bool = True,
+    stream_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    if stream_output:
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        output_parts: List[str] = []
+        assert process.stdout is not None
+        while True:
+            chunk = process.stdout.read(1)
+            if not chunk:
+                break
+            print(chunk, end="", flush=True)
+            output_parts.append(chunk)
+        return_code = process.wait()
+        output = "".join(output_parts)
+        if check and return_code:
+            raise subprocess.CalledProcessError(return_code, command, output=output)
+        return subprocess.CompletedProcess(command, return_code, stdout=output, stderr="")
+    return subprocess.run(command, check=check, text=True, capture_output=capture_output)
 
 
-def _run_ssh(slurm_data: Mapping[str, Any], remote_command: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return _run_local_command(["ssh", _ssh_target(slurm_data), remote_command], check=check)
+def _run_ssh(
+    slurm_data: Mapping[str, Any],
+    remote_command: str,
+    *,
+    check: bool = True,
+    capture_output: bool = True,
+    stream_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    return _run_local_command(
+        ["ssh", _ssh_target(slurm_data), remote_command],
+        check=check,
+        capture_output=capture_output,
+        stream_output=stream_output,
+    )
 
 
 def _remote_quote(path: str) -> str:
@@ -790,14 +828,17 @@ def _remote_parent(path: str) -> str:
 def _rsync_upload(slurm_data: Mapping[str, Any], local_path: str, remote_path: str) -> subprocess.CompletedProcess[str]:
     if not os.path.isfile(local_path):
         raise FileNotFoundError(local_path)
-    _run_ssh(slurm_data, f"mkdir -p {_remote_quote(_remote_parent(remote_path))}")
+    debug = _debug_enabled(slurm_data)
+    remote_parent = _remote_parent(remote_path)
+    mkdir_command = f"mkdir -p {_remote_quote(remote_parent)}"
+    _debug(slurm_data, f"creating remote directory: {remote_parent}")
+    _run_ssh(slurm_data, mkdir_command, capture_output=not debug, stream_output=debug)
     command = ["rsync", "-a", "--itemize-changes"]
-    if _debug_enabled(slurm_data):
+    if debug:
         command.append("--info=progress2")
     command.extend([local_path, f"{_ssh_target(slurm_data)}:{remote_path}"])
-    return _run_local_command(
-        command
-    )
+    _debug(slurm_data, "starting rsync")
+    return _run_local_command(command, capture_output=not debug, stream_output=debug)
 
 
 def _scp_download(slurm_data: Mapping[str, Any], remote_path: str, local_path: str) -> None:
@@ -823,18 +864,19 @@ def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, 
         label = f"{section}: {local_path} -> {remote_path}"
         try:
             _debug(slurm_data, f"rsync check: {os.path.basename(local_path)}")
-            print(f"syncing {label}")
+            print(f"syncing {label}", flush=True)
             result = _rsync_upload(slurm_data, local_path, remote_path)
             rsync_output = ((result.stdout or "") + (result.stderr or "")).strip()
-            status = "synced" if rsync_output else "current"
+            status = "rsync_complete" if _debug_enabled(slurm_data) else ("synced" if rsync_output else "current")
             if status == "current":
                 print(f"already current {label}")
             else:
-                print(f"synced {label}")
-                _debug(slurm_data, f"rsync changed {os.path.basename(local_path)}: {rsync_output}")
+                print(f"{status} {label}")
+                if rsync_output:
+                    _debug(slurm_data, f"rsync changed {os.path.basename(local_path)}: {rsync_output}")
             results[local_path] = {"remote_path": remote_path, "status": status}
         except Exception as exc:
-            print(f"sync error {label}")
+            print(f"sync error {label}", flush=True)
             print(exc)
             results[local_path] = {"remote_path": remote_path, "status": "error", "error": str(exc)}
             raise
@@ -886,8 +928,10 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
     slurm_data = load_yaml_file(config_path)
     _debug(slurm_data, f"loaded start file: {config_path}")
     _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
+    _debug(slurm_data, "step: upload files")
     upload_results = upload_required_files(slurm_data)
     slurm_data["upload_results"] = upload_results
+    _debug(slurm_data, "step complete: upload files")
 
     remote_start_file = _require_config_value(slurm_data, "remote_slurm_start_file")
     remote_provider_config = _require_config_value(slurm_data, "remote_provider_config")
@@ -898,9 +942,17 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
         f"sbatch {_remote_quote(remote_start_file)} {_remote_quote(remote_provider_config)}"
     )
     _debug(slurm_data, f"submit command: {remote_command}")
-    result = _run_ssh(slurm_data, remote_command, check=True)
+    _debug(slurm_data, "step: submit job")
+    result = _run_ssh(
+        slurm_data,
+        remote_command,
+        check=True,
+        capture_output=not _debug_enabled(slurm_data),
+        stream_output=_debug_enabled(slurm_data),
+    )
     start_output = (result.stdout or "") + (result.stderr or "")
-    print(start_output)
+    if not _debug_enabled(slurm_data):
+        print(start_output)
     match = re.search(r"Submitted batch job\s+(\d+)", start_output)
     if not match:
         raise RuntimeError(f"Could not parse sbatch job id from output:\n{start_output}")
@@ -909,10 +961,12 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
     _debug(slurm_data, f"submitted job id: {slurm_data['submitted_job_id']}")
     slurm_data["status"] = "submitted"
     slurm_data["raw_start_output"] = start_output
+    _debug(slurm_data, "step: fetch status")
     raw_status_text = fetch_status_text(slurm_data)
     slurm_data["raw_status_text"] = raw_status_text
     slurm_data["status"] = _status_from_text(raw_status_text)
     _debug(slurm_data, f"status after submit: {slurm_data['status']}")
+    _debug(slurm_data, "step: write start file")
     _write_staged_slurm_file(config_path, slurm_data)
     print(raw_status_text)
     return slurm_data
