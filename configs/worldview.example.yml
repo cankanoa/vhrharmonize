@@ -221,11 +221,11 @@ radiometric_normalization:
   # SpectralMatch pipeline kwargs:
   # Pass any SpectralMatch argument (seem here: https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix.
 
-  # Optionally run named SpectralMatch groups. Keys are output paths; values are nested prefixed inputs or lists of images.
-  # Keys accept the output forms: $temp/file.tif | /custom/absolute.tif | relative/to/pwd.tif
-  # Values have two options: "auto:" patterns use wcmatch against finished scene output paths; "file:"" values are literal tif paths.
-  # group_by_basename: {"$temp/name.tif": "auto:**/*.tif"}
-  # group_by_basename: {"$temp/name.tif": ["auto:*893242343*", {"$temp/nested.tif": ["file:/path/to/reference.tif", "auto:*222222222*"]}, "auto:*123456789*"]}
+  # Optionally run named SpectralMatch groups. Keys are output filenames; values are nested prefixed inputs or lists of images.
+  # Keys are output names written by filename under the resolved output folder.
+  # Values have two options: "auto:" patterns use wcmatch against finished scene output filenames; "file:" values are literal tif paths.
+  # group_by_basename: {"name.tif": "auto:**/*.tif"}
+  # group_by_basename: {"name.tif": ["auto:*893242343*", {"nested.tif": ["file:/path/to/reference.tif", "auto:*222222222*"]}, "auto:*123456789*"]}
 
   # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
   # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]

@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import rasterio
+import yaml
 
 import vhrharmonize.preprocess.atmospheric_correction as atmos_mod
 import vhrharmonize.preprocess.fetch_external_data as fetch_mod
@@ -178,20 +179,29 @@ def test_pansharpen_and_radiometric(monkeypatch, tmp_path: Path) -> None:
 
 def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
-    root_output = str(tmp_path / "root.tif")
-    child_output = str(tmp_path / "child.tif")
+    root_output = str(tmp_path / "out" / "root.tif")
+    child_output = str(tmp_path / "out" / "child.tif")
     spec = worldview._normalize_group_by_basename_spec({
-        root_output: [
+        "root.tif": [
             "auto:*893242343*",
-            {child_output: ["file:/external/ref.tif", "auto:*222222222*"]},
+            {"child.tif": ["file:/external/ref.tif", "auto:*222222222*"]},
             "auto:*123456789*",
         ]
     })
-    assert spec[root_output][1][child_output][0] == "file:/external/ref.tif"
+    assert spec["root.tif"][1]["child.tif"][0] == "file:/external/ref.tif"
     assert worldview._resolve_radiometric_group_output_path(
-        output_name="$temp/from_temp.tif",
+        output_name="from_output.tif",
         temp_root=str(tmp_path / "tmp"),
-    ) == str(tmp_path / "tmp" / "from_temp.tif")
+        output_root=str(tmp_path / "out"),
+    ) == str(tmp_path / "out" / "from_output.tif")
+    assert worldview._resolve_radiometric_group_output_path(
+        output_name="nested/from_output.tif",
+        temp_root=str(tmp_path / "tmp"),
+        output_root=str(tmp_path / "out"),
+    ) == str(tmp_path / "out" / "from_output.tif")
+    assert worldview._match_radiometric_input_patterns("*893242343*", ["/scene/auto_893242343.tif"]) == [
+        "/scene/auto_893242343.tif"
+    ]
     for bad_spec in ({"x.tif": "*missing-prefix*"}, {"": "auto:*"}, {"x.tif": []}):
         try:
             worldview._normalize_group_by_basename_spec(bad_spec)
@@ -226,6 +236,7 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
         available_paths=available,
         args=args,
         temp_root=str(tmp_path / "tmp"),
+        output_root=str(tmp_path / "out"),
     )
     assert result == root_output
     assert [call["shared_output_image_path"] for call in calls] == [
@@ -290,3 +301,99 @@ def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path)
         validity_check_grid_size=1,
     ) == (False, "no finite valid pixels found in validity sample")
     assert worldview._gdal_raster_is_valid(str(valid_path), validity_check_grid_size=2) == (True, None)
+
+
+def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle) -> None:
+    from vhrharmonize.slurm import load_yaml_file, prepare_slurm_plan
+
+    bundle = make_worldview_bundle()
+    dem_path = tmp_path / "dem.tif"
+    with rasterio.open(bundle["mul_tif"]) as src:
+        profile = src.profile.copy()
+        data = src.read(1)
+    profile.update(count=1)
+    with rasterio.open(dem_path, "w", **profile) as dst:
+        dst.write(data, 1)
+    unlisted_path = tmp_path / "unlisted_reference.tif"
+    with rasterio.open(unlisted_path, "w", **profile) as dst:
+        dst.write(data, 1)
+
+    provider_config = tmp_path / "worldview.yml"
+    provider_config.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "input_file_glob": [str(bundle["scene_root"] / "**" / "*.TIF")],
+                    "dem_file_path": str(dem_path),
+                    "alignment_fixed_image": str(unlisted_path),
+                    "output_dir": str(tmp_path / "local_output"),
+                    "run_cloud_mask": True,
+                    "save_cloud_mask": str(tmp_path / "local_output"),
+                    "run_radiometric_normalization": True,
+                    "run_from_existing": False,
+                },
+                "cloud_mask": {
+                    "cloud_mask_method": "threshold",
+                },
+                "radiometric_normalization": {
+                    "group_by_basename": {
+                        "grouped.tif": "auto:**/*.tif",
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    slurm_config = tmp_path / "slurm.yml"
+    log_file = tmp_path / "slurm.log.yml"
+    script_path = tmp_path / "worldview.sbatch"
+    script_path.write_text("#!/bin/bash\nvhr-worldview --config-yaml \"$1\"\n", encoding="utf-8")
+    slurm_config.write_text(
+        yaml.safe_dump(
+            {
+                "provider": "vhr-worldview",
+                "provider_config": str(provider_config),
+                "log_file": str(log_file),
+                "ssh_host": "example.edu",
+                "ssh_user": "user",
+                "remote_output_dir": "/remote/runs/{run_id}/output",
+                "remote_log_dir": "/remote/runs/{run_id}/logs",
+                "remote_temp_dir": "/remote/runs/{run_id}/tmp",
+                "remote_reference_dir": "/remote/references",
+                "slurm_start_file": str(script_path),
+                "provider_upload_keys": [
+                    "input_file_glob",
+                    "dem_file_path",
+                    "group_by_basename",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    plan = prepare_slurm_plan(str(slurm_config), run_id="RUN123")
+    written_log = load_yaml_file(str(log_file))
+
+    assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
+    assert written_log["status"] == "prepared"
+    assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
+    assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
+    assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
+    assert str(Path(plan["staged_provider_config"]).resolve()) in plan["uploaded_reference_paths"]
+    assert str(script_path.resolve()) in plan["uploaded_reference_paths"]
+    assert plan["remote_slurm_start_file"] == "/remote/references/worldview.sbatch"
+    assert all(not Path(remote).suffix == "" for remote in plan["uploaded_reference_paths"].values())
+    assert any(remote.startswith("/remote/runs/RUN123/output") for remote in plan["download_output_paths"].values())
+
+    staged = load_yaml_file(plan["staged_provider_config"])
+    assert staged["shared"]["temp_dir"] == "/remote/runs/RUN123/tmp"
+    assert staged["shared"]["output_dir"] == "/remote/runs/RUN123/output"
+    assert staged["shared"]["dem_file_path"] == "/remote/references/dem.tif"
+    assert all(path.startswith("/remote/runs/RUN123/tmp/inputs") for path in staged["shared"]["input_file_glob"])
+    assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
+    assert (
+        plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
+        == "/remote/runs/RUN123/output/grouped.tif"
+    )

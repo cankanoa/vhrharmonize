@@ -1282,7 +1282,7 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
     matches = [
         path
         for path in available_paths
-        if wc_fnmatch.fnmatch(path, pattern, flags=WCMATCH_GROUP_FLAGS)
+        if wc_fnmatch.fnmatch(os.path.basename(path), pattern, flags=WCMATCH_GROUP_FLAGS)
     ]
     if not matches:
         raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
@@ -1320,22 +1320,18 @@ def _resolve_radiometric_group_output_path(
     *,
     output_name: str,
     temp_root: str,
+    output_root: str,
 ) -> str:
     """Resolve a radiometric group output path.
     Args:
-        output_name: Group output save target.
+        output_name: Group output filename.
         temp_root: Temp root directory.
+        output_root: Output root directory.
     Returns:
         Resolved radiometric group output path.
     """
-    group_output_path = _resolve_save_target(
-        output_name,
-        default=output_name,
-        temp_root=temp_root,
-        output_root="",
-        relative_base_folder="",
-        accepted_modes={"temp_child", "absolute", "cwd_relative"},
-    )
+    del temp_root
+    group_output_path = os.path.join(output_root, os.path.basename(output_name))
     os.makedirs(os.path.dirname(group_output_path) or ".", exist_ok=True)
     return group_output_path
 
@@ -1347,6 +1343,7 @@ def _run_named_radiometric_group(
     available_paths: List[str],
     args: argparse.Namespace,
     temp_root: str,
+    output_root: str,
 ) -> str:
     """Run one named radiometric group and return its output path."""
     child_inputs: List[str] = []
@@ -1365,6 +1362,7 @@ def _run_named_radiometric_group(
                             available_paths=available_paths,
                             args=args,
                             temp_root=temp_root,
+                            output_root=output_root,
                         )
                     )
             else:
@@ -1378,6 +1376,7 @@ def _run_named_radiometric_group(
     group_output_path = _resolve_radiometric_group_output_path(
         output_name=output_name,
         temp_root=temp_root,
+        output_root=output_root,
     )
     if args.run_from_existing and _existing_outputs_are_reusable(
         [group_output_path],
@@ -1424,6 +1423,7 @@ def _run_named_radiometric_groups(
     available_paths: List[str],
     args: argparse.Namespace,
     temp_root: str,
+    output_root: str,
 ) -> Optional[str]:
     """Run named radiometric groups in order and return the final output path."""
     final_output: Optional[str] = None
@@ -1434,6 +1434,7 @@ def _run_named_radiometric_groups(
             available_paths=available_paths,
             args=args,
             temp_root=temp_root,
+            output_root=output_root,
         )
     return final_output
 
@@ -1514,6 +1515,7 @@ def _run_radiometric_normalization_workflow(
             available_paths=available_paths,
             args=args,
             temp_root=reference_state.step_dirs["temp_root"],
+            output_root=reference_state.step_dirs["output_root"],
         )
 
     return _run_default_radiometric_normalization(
@@ -3017,9 +3019,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     group_by_basename_spec = _normalize_group_by_basename_spec(args.group_by_basename)
     if group_by_basename_spec is not None and save_radiometric_output_is_explicit:
-        parser.error("Cannot set save_radiometric_normalization when group_by_basename is set; use group keys as output paths.")
+        parser.error("Cannot set save_radiometric_normalization when group_by_basename is set; use group keys as output filenames.")
     if group_by_basename_spec is not None and match_shared_output_is_explicit:
-        parser.error("Cannot set match_shared_output_image_path/shared_output_image_path when group_by_basename is set; use group keys as output paths.")
+        parser.error("Cannot set match_shared_output_image_path/shared_output_image_path when group_by_basename is set; use group keys as output filenames.")
     return _run_workflow(args)
 
 

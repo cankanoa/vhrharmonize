@@ -1,0 +1,30 @@
+run_id: 20260618T220000Z
+provider: vhr-worldview
+provider_config: configs/worldview.example.yml
+staged_provider_config: .vhr-slurm/20260618T220000Z/worldview.example.yml
+remote_provider_config: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.yml
+
+ssh_host: koa.its.hawaii.edu
+ssh_user: milo
+
+remote_output_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/output
+remote_log_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/logs
+remote_temp_dir: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/tmp
+remote_reference_dir: /mnt/lustre/koa/scratch/vhrharmonize/references
+
+slurm_start_file: configs/worldview.example.sbatch
+remote_slurm_start_file: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.sbatch
+submitted_job_id: null
+status: prepared
+
+# All mappings are local file: remote file.
+uploaded_input_paths:
+  /local/path/scene/18JAN02211806-M1BS-200009592532_01_P001.TIF: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/tmp/inputs/18JAN02211806-M1BS-200009592532_01_P001.TIF
+uploaded_reference_paths:
+  .vhr-slurm/20260618T220000Z/worldview.example.yml: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.yml
+  configs/worldview.example.sbatch: /mnt/lustre/koa/scratch/vhrharmonize/references/worldview.example.sbatch
+  /local/path/Hawaii_SRTM_GL1Ellip.tif: /mnt/lustre/koa/scratch/vhrharmonize/references/Hawaii_SRTM_GL1Ellip.tif
+download_output_paths:
+  /local/output/image_cloudmasked.tif: /mnt/lustre/koa/scratch/vhrharmonize/runs/20260618T220000Z/output/image_cloudmasked.tif
+download_log_paths: {}
+raw_status_text: ""

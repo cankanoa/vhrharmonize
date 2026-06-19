@@ -123,6 +123,7 @@ all = [
 
 [project.scripts]
 vhr-worldview = "vhrharmonize.cli.worldview:main"
+vhr-slurm = "vhrharmonize.slurm:main"
 vhr-fetch-modis-water-vapor = "vhrharmonize.cli.modis_water_vapor:main"
 vhr-cloudmask-raster = "vhrharmonize.cli.cloudmask:main"
 vhr-pansharpen-orthos = "vhrharmonize.cli.pansharpen:main"
