@@ -11,7 +11,9 @@
 
 set -eo pipefail
 
-source ~/.bashrc
+module load lang/Anaconda3
+eval "$(conda shell.bash hook)"
 conda activate vhrharmonize
+python -m pip install --upgrade vhrharmonize
 
 vhr-worldview --config-yaml "$1"
