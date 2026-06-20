@@ -924,7 +924,7 @@ def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, 
 def _status_command(job_id: str) -> str:
     quoted_job = shlex.quote(job_id)
     return (
-        f"squeue -j {quoted_job} -o '%i %T %M %D %R' || true; "
+        f"squeue -j {quoted_job} -o '%i %T %M %D %R' 2>/dev/null || true; "
         "echo '---'; "
         f"sacct -j {quoted_job} --format=JobID,State,Elapsed,ExitCode,NodeList%30 -P || true"
     )
@@ -940,13 +940,33 @@ def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
 
 
 def _status_from_text(raw_status_text: str) -> str:
-    text = raw_status_text.upper()
-    if "COMPLETED" in text:
-        return "completed"
-    if any(value in text for value in ("FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY")):
+    states: List[Tuple[str, str]] = []
+    for line in raw_status_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("---") or stripped.startswith("JOBID"):
+            continue
+        if "|" in stripped:
+            fields = stripped.split("|")
+            if len(fields) < 2 or fields[0].upper() == "JOBID":
+                continue
+            job_name = fields[0]
+            state = fields[1].upper().split()[0]
+            if not job_name.endswith(".extern"):
+                states.append((job_name, state))
+            continue
+        fields = stripped.split()
+        if len(fields) >= 2 and fields[0].isdigit():
+            states.append((fields[0], fields[1].upper()))
+
+    primary_states = [state for job_name, state in states if "." not in job_name] or [
+        state for _, state in states
+    ]
+    if any(value in primary_states for value in ("FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY")):
         return "failed"
-    if any(value in text for value in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")):
+    if any(value in primary_states for value in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")):
         return "running"
+    if "COMPLETED" in primary_states:
+        return "completed"
     return "unknown"
 
 

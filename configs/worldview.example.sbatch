@@ -9,7 +9,7 @@
 #SBATCH --output=../logs/slurm-%j.out
 #SBATCH --error=../logs/slurm-%j.err
 
-set -euo pipefail
+set -eo pipefail
 
 source ~/.bashrc
 conda activate vhrharmonize

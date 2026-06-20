@@ -405,7 +405,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
-    from vhrharmonize.slurm import _remote_quote, write_sectioned_yaml_file
+    from vhrharmonize.slurm import _remote_quote, _status_command, _status_from_text, write_sectioned_yaml_file
 
     output_path = tmp_path / "start_slurm.yml"
     long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
@@ -419,6 +419,15 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert "? " not in text
     assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
     assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
+    assert "2>/dev/null" in _status_command("123")
+    assert _status_from_text(
+        """---
+JobID|State|Elapsed|ExitCode|NodeList
+13590014|FAILED|00:00:01|1:0|cn-05-08-08
+13590014.batch|FAILED|00:00:01|1:0|cn-05-08-08
+13590014.extern|COMPLETED|00:00:01|0:0|cn-05-08-08
+"""
+    ) == "failed"
 
 
 def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
