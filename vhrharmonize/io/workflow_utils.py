@@ -26,9 +26,10 @@ def resolve_relative_to_input(path: str, input_folder: str) -> str:
     Returns:
         Resolved absolute or normalized path.
     """
-    if os.path.isabs(path):
-        return path
-    return os.path.normpath(os.path.join(input_folder, path))
+    expanded_path = os.path.expanduser(path)
+    if os.path.isabs(expanded_path):
+        return expanded_path
+    return os.path.normpath(os.path.join(input_folder, expanded_path))
 
 
 def resolve_temp_dir(configured_dir: Optional[str], *, input_folder: str) -> str:
