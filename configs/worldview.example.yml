@@ -24,6 +24,9 @@ shared:
   output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing
+  concurrent_processing_backend: process_pool # process_pool | dask. Dask uses an already running scheduler.
+  # dask_scheduler_file: ~/koa_scratch/vhrharmonize/runs/{run_id}/logs/dask-scheduler_{run_id}.json # Required for dask backend unless dask_scheduler_address is set
+  # dask_scheduler_address: tcp://scheduler-host:8786 # Alternative Dask connection string
   dem_file_path: /path.tif  # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
 
   # dem_online_api_key: your-opentopography-api-key # Or set OPENTOPOGRAPHY_API_KEY in the environment

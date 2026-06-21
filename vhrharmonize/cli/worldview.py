@@ -519,6 +519,90 @@ def _resolve_concurrent_processing(value: object) -> int:
     return resolved
 
 
+def _resolve_concurrent_processing_backend(value: object) -> str:
+    """Resolve the scene concurrency backend setting."""
+    if value is None:
+        return "process_pool"
+    if not isinstance(value, str):
+        raise ValueError("concurrent_processing_backend must be 'process_pool' or 'dask'.")
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {"process_pool", "dask"}:
+        raise ValueError("concurrent_processing_backend must be 'process_pool' or 'dask'.")
+    return normalized
+
+
+def _make_dask_client(args: argparse.Namespace):
+    """Create a Dask client from generic scheduler connection settings."""
+    scheduler_file = getattr(args, "dask_scheduler_file", None)
+    scheduler_address = getattr(args, "dask_scheduler_address", None)
+    if bool(scheduler_file) == bool(scheduler_address):
+        raise ValueError("Dask concurrency requires exactly one of dask_scheduler_file or dask_scheduler_address.")
+    try:
+        from dask.distributed import Client
+    except ImportError as exc:
+        raise ImportError(
+            "Dask concurrency requires dask.distributed. Install dask[distributed] in the runtime environment."
+        ) from exc
+    if scheduler_file:
+        return Client(scheduler_file=scheduler_file)
+    return Client(scheduler_address)
+
+
+def _process_scenes_with_process_pool(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+    worker_count: int,
+) -> List[SceneWorkflowState]:
+    """Run independent scene preprocessing with ProcessPoolExecutor."""
+    ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
+    with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
+        future_to_index = {
+            executor.submit(_process_scene, scene, args): index
+            for index, scene in enumerate(scenes)
+        }
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            ordered_results[index] = future.result()
+    return [state for state in ordered_results if state is not None]
+
+
+def _process_scenes_with_dask(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+) -> List[SceneWorkflowState]:
+    """Run independent scene preprocessing on an existing Dask cluster."""
+    client = _make_dask_client(args)
+    try:
+        futures = client.map(_process_scene, scenes, [args] * len(scenes))
+        return list(client.gather(futures))
+    finally:
+        client.close()
+
+
+def _process_scenes(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+) -> List[SceneWorkflowState]:
+    """Process scenes independently before aggregate workflow steps."""
+    worker_count = _resolve_concurrent_processing(args.concurrent_processing)
+    backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
+    if worker_count <= 1 or len(scenes) <= 1:
+        return [_process_scene(scene, args) for scene in scenes]
+    if backend == "dask":
+        log(
+            f"Running per-scene processing with Dask tasks={len(scenes)}",
+            enabled=args.log_to_console,
+            step="workflow",
+        )
+        return _process_scenes_with_dask(scenes, args)
+    log(
+        f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
+        enabled=args.log_to_console,
+        step="workflow",
+    )
+    return _process_scenes_with_process_pool(scenes, args, worker_count)
+
+
 def _short_path(path: str) -> str:
     """Return a shortened display path.
     Args:
@@ -2847,27 +2931,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
         enabled=args.log_to_console,
         step="workflow",
     )
-    processed_states: List[SceneWorkflowState] = []
-    worker_count = _resolve_concurrent_processing(args.concurrent_processing)
-    if worker_count > 1 and len(scenes) > 1:
-        log(
-            f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
-            enabled=args.log_to_console,
-            step="workflow",
-        )
-        ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
-        with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
-            future_to_index = {
-                executor.submit(_process_scene, scene, args): index
-                for index, scene in enumerate(scenes)
-            }
-            for future in as_completed(future_to_index):
-                index = future_to_index[future]
-                ordered_results[index] = future.result()
-        processed_states = [state for state in ordered_results if state is not None]
-    else:
-        for scene in scenes:
-            processed_states.append(_process_scene(scene, args))
+    processed_states = _process_scenes(scenes, args)
 
     seamline_metadata_output = None
     if processed_states and args.run_seamline_metadata:
@@ -2972,6 +3036,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--concurrent-processing", default=1)
+    parser.add_argument("--concurrent-processing-backend", choices=["process_pool", "dask"], default="process_pool")
+    parser.add_argument("--dask-scheduler-file")
+    parser.add_argument("--dask-scheduler-address")
     parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
@@ -3157,6 +3224,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ):
         parser.error("--max-cloud-cover-to-process must be in [0, 100].")
     args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
+    args.concurrent_processing_backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
+    if args.concurrent_processing_backend == "dask" and bool(args.dask_scheduler_file) == bool(args.dask_scheduler_address):
+        parser.error("--concurrent-processing-backend=dask requires exactly one of --dask-scheduler-file or --dask-scheduler-address.")
+    if args.concurrent_processing_backend != "dask" and (args.dask_scheduler_file or args.dask_scheduler_address):
+        parser.error("--dask-scheduler-file/--dask-scheduler-address require --concurrent-processing-backend=dask.")
     if args.overview_scales is not None:
         if isinstance(args.overview_scales, str):
             args.overview_scales = [int(value.strip()) for value in args.overview_scales.split(",") if value.strip()]

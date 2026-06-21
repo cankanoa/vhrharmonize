@@ -26,6 +26,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "provider_config",
     "staged_provider_file",
     "slurm_start_file",
+    "staged_slurm_start_file",
     "staged_slurm_file",
     "debug_logs",
     "ssh_host",
@@ -133,6 +134,23 @@ def resolve_run_template(value: str, run_id: str) -> str:
     return value.replace(PATH_TEMPLATE_RUN_ID, run_id)
 
 
+def render_run_templates(text: str, variables: Mapping[str, str]) -> str:
+    """Render supported template variables in staged text files."""
+    rendered = text
+    for key, value in variables.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
+
+
+def write_staged_template_file(source_path: str, staged_path: str, variables: Mapping[str, str]) -> None:
+    """Copy a text template to a staged path with supported variables rendered."""
+    with open(source_path, "r", encoding="utf-8") as handle:
+        rendered = render_run_templates(handle.read(), variables)
+    os.makedirs(os.path.dirname(os.path.abspath(staged_path)) or ".", exist_ok=True)
+    with open(staged_path, "w", encoding="utf-8") as handle:
+        handle.write(rendered)
+
+
 def _require_config_value(config: Mapping[str, Any], key: str) -> str:
     value = config.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -184,6 +202,11 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
         not isinstance(staged_slurm_file, str) or not staged_slurm_file.strip()
     ):
         raise ValueError("staged_slurm_file must be a non-empty string when set.")
+    staged_slurm_start_file = config.get("staged_slurm_start_file")
+    if staged_slurm_start_file is not None and (
+        not isinstance(staged_slurm_start_file, str) or not staged_slurm_start_file.strip()
+    ):
+        raise ValueError("staged_slurm_start_file must be a non-empty string when set.")
     configured_run_id = config.get("run_id")
     if configured_run_id is not None and (
         not isinstance(configured_run_id, str) or not configured_run_id.strip()
@@ -247,6 +270,27 @@ def resolve_staged_slurm_file(config: Mapping[str, Any], *, config_path: str, ru
         config_dir = os.path.dirname(config_abs)
         staged_path = os.path.join(config_dir, f"slurm.staged.{run_id}.yml")
     return _resolve_local_template_path(staged_path)
+
+
+def resolve_staged_slurm_start_file(
+    config: Mapping[str, Any],
+    *,
+    slurm_start_file: str,
+    run_id: str,
+) -> str:
+    """Resolve the local staged sbatch path."""
+    configured_path = config.get("staged_slurm_start_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        staged_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        start_abs = os.path.abspath(slurm_start_file)
+        start_dir = os.path.dirname(start_abs)
+        staged_path = os.path.join(start_dir, "staged.sbatch")
+    if not os.path.isabs(staged_path):
+        staged_path = _resolve_local_template_path(staged_path)
+    if os.path.abspath(staged_path) == os.path.abspath(slurm_start_file):
+        raise ValueError("staged_slurm_start_file must not overwrite slurm_start_file.")
+    return staged_path
 
 
 def resolve_slurm_paths(config: Mapping[str, Any], run_id: str) -> Dict[str, str]:
@@ -805,13 +849,23 @@ def prepare_slurm_plan(
     )
 
     slurm_start_file = _require_config_value(slurm_config, "slurm_start_file")
+    staged_slurm_start_file = resolve_staged_slurm_start_file(
+        slurm_config,
+        slurm_start_file=slurm_start_file,
+        run_id=resolved_run_id,
+    )
+    write_staged_template_file(
+        slurm_start_file,
+        staged_slurm_start_file,
+        {"run_id": resolved_run_id},
+    )
     remote_slurm_start_file = _add_reference_upload(
         reference_uploads,
-        slurm_start_file,
+        staged_slurm_start_file,
         remote_reference_dir=paths["remote_reference_dir"],
     )
     remote_slurm_log_templates = _resolve_remote_sbatch_log_templates(
-        _parse_sbatch_log_templates(slurm_start_file),
+        _parse_sbatch_log_templates(staged_slurm_start_file),
         remote_slurm_start_file=remote_slurm_start_file,
     )
 
@@ -821,6 +875,7 @@ def prepare_slurm_plan(
         "provider_config": provider_config,
         "slurm_start_file": slurm_start_file,
         "staged_provider_file": staged_config_abs,
+        "staged_slurm_start_file": staged_slurm_start_file,
         "staged_slurm_file": staged_slurm_file,
         "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
@@ -1279,6 +1334,7 @@ __all__ = [
     "make_run_id",
     "prepare_slurm_plan",
     "resolve_staged_slurm_file",
+    "resolve_staged_slurm_start_file",
     "resolve_run_id",
     "resolve_staged_provider_file",
     "resolve_slurm_paths",
@@ -1288,6 +1344,7 @@ __all__ = [
     "upload_required_files",
     "upload_slurm_files",
     "validate_slurm_config",
+    "write_staged_template_file",
     "write_staged_worldview_config_for_remote",
     "write_yaml_file",
 ]

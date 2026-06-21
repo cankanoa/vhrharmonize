@@ -117,6 +117,10 @@ all = [
     "coregix"
 ]
 
+hpc = [
+    dask
+]
+
 [project.urls]
 "Bug Tracker" = "https://github.com/cankanoa/vhrharmonize/issues"
 "Source" = "https://github.com/cankanoa/vhrharmonize"

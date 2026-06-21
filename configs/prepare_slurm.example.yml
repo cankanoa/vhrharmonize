@@ -6,10 +6,11 @@ run_id: "1" # Unique ID for this run or set to previous ID to use previous files
 
 # Editable files
 provider_config: configs/worldview.example.yml # Local provider YAML to rewrite for Slurm
-slurm_start_file: configs/worldview.example.sbatch # Uploaded then submitted with sbatch
+slurm_start_file: configs/example.sbatch # Local sbatch template to stage
 
 # Generated files
 staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML
+staged_slurm_start_file: configs/staged.sbatch # Generated sbatch with {run_id} replaced
 staged_slurm_file: configs/slurm.staged.{run_id}.yml # Generated staged Slurm YAML
 debug_logs: true # Print debug logs
 

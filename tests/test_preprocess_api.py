@@ -274,6 +274,47 @@ def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None
     assert args.match_weighted_seamline_image_field_name == "image"
 
 
+def test_worldview_dask_scene_backend(monkeypatch) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    calls = {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            calls["client_args"] = args
+            calls["client_kwargs"] = kwargs
+            self.closed = False
+
+        def map(self, fn, scenes, args_list):
+            calls["mapped"] = list(scenes)
+            return [fn(scene, args) for scene, args in zip(scenes, args_list)]
+
+        def gather(self, futures):
+            return futures
+
+        def close(self):
+            calls["closed"] = True
+
+    fake_dask = ModuleType("dask")
+    fake_distributed = ModuleType("dask.distributed")
+    fake_distributed.Client = _Client
+    fake_dask.distributed = fake_distributed
+    monkeypatch.setitem(sys.modules, "dask", fake_dask)
+    monkeypatch.setitem(sys.modules, "dask.distributed", fake_distributed)
+    monkeypatch.setattr(worldview, "_process_scene", lambda scene, args: f"state:{scene}")
+
+    args = SimpleNamespace(
+        concurrent_processing=2,
+        concurrent_processing_backend="dask",
+        dask_scheduler_file="/tmp/dask-scheduler.json",
+        dask_scheduler_address=None,
+        log_to_console=False,
+    )
+    assert worldview._process_scenes(["scene-a", "scene-b"], args) == ["state:scene-a", "state:scene-b"]
+    assert calls["client_kwargs"] == {"scheduler_file": "/tmp/dask-scheduler.json"}
+    assert calls["mapped"] == ["scene-a", "scene-b"]
+    assert calls["closed"] is True
+
+
 def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     nan_path = tmp_path / "all_nan.tif"
@@ -347,11 +388,13 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     )
     slurm_config = tmp_path / "prepare_slurm.yml"
     staged_slurm_file = tmp_path / "slurm.staged.yml"
-    script_path = tmp_path / "worldview.sbatch"
+    staged_slurm_start_file = tmp_path / "staged.sbatch"
+    script_path = tmp_path / "example.sbatch"
     script_path.write_text(
         "#!/bin/bash\n"
         "#SBATCH --output=../logs/slurm-%j.out\n"
         "#SBATCH --error=../logs/slurm-%j.err\n"
+        "scheduler_file=\"${HOME}/dask-scheduler-{run_id}.json\"\n"
         "vhr-worldview --config-yaml \"$1\"\n",
         encoding="utf-8",
     )
@@ -362,6 +405,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "provider": "vhr-worldview",
                 "provider_config": str(provider_config),
                 "staged_slurm_file": str(staged_slurm_file),
+                "staged_slurm_start_file": str(staged_slurm_start_file),
                 "debug_logs": True,
                 "ssh_host": "example.edu",
                 "ssh_user": "user",
@@ -393,8 +437,9 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
     assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
-    assert str(script_path.resolve()) in plan["uploaded_reference_paths"]
-    assert plan["remote_slurm_start_file"] == "/remote/references/worldview.sbatch"
+    assert str(staged_slurm_start_file.resolve()) in plan["uploaded_reference_paths"]
+    assert str(script_path.resolve()) not in plan["uploaded_reference_paths"]
+    assert plan["remote_slurm_start_file"] == "/remote/references/staged.sbatch"
     assert plan["remote_slurm_log_templates"] == {
         "output": "/remote/logs/slurm-%j.out",
         "error": "/remote/logs/slurm-%j.err",
@@ -412,6 +457,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
         == "/remote/runs/RUN123/output/grouped.tif"
     )
+    assert "dask-scheduler-RUN123.json" in staged_slurm_start_file.read_text(encoding="utf-8")
 
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
@@ -422,6 +468,7 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
         _status_command,
         _status_from_text,
         resolve_staged_slurm_file,
+        resolve_staged_slurm_start_file,
         write_sectioned_yaml_file,
     )
 
@@ -439,6 +486,9 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
     assert resolve_staged_slurm_file({}, config_path=str(tmp_path / "prepare_slurm.yml"), run_id="RUN123") == str(
         tmp_path / "slurm.staged.RUN123.yml"
+    )
+    assert resolve_staged_slurm_start_file({}, slurm_start_file=str(tmp_path / "example.sbatch"), run_id="RUN123") == str(
+        tmp_path / "staged.sbatch"
     )
     sbatch_path = tmp_path / "job.sbatch"
     sbatch_path.write_text(
