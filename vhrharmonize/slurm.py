@@ -64,7 +64,6 @@ LOG_HEADER_BY_KEY = {
     "remote_output_dir": "# Remote directories.",
     "remote_provider_config": "# Uploaded remote control files.",
     "submitted_job_id": "# Job status.",
-    "debug_logs": "# Debug settings.",
     "uploaded_input_paths": "# All mappings are local file: remote file.",
     "raw_status_text": "# Raw scheduler status text.",
 }
@@ -104,9 +103,15 @@ def write_sectioned_yaml_file(
 
 
 def _write_staged_slurm_file(path: str, data: Mapping[str, Any]) -> None:
-    """Write the start Slurm YAML with readable section comments."""
+    """Write the staged Slurm YAML with readable section comments."""
     ordered = dict(data)
+    upload_results = ordered.pop("upload_results", None)
+    raw_start_output = ordered.pop("raw_start_output", None)
     raw_status_text = ordered.pop("raw_status_text", None)
+    if upload_results is not None:
+        ordered["upload_results"] = upload_results
+    if raw_start_output is not None:
+        ordered["raw_start_output"] = raw_start_output
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
     write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
@@ -228,16 +233,14 @@ def resolve_staged_provider_file(
 
 
 def resolve_staged_slurm_file(config: Mapping[str, Any], *, config_path: str, run_id: str) -> str:
-    """Resolve the local start Slurm YAML path."""
+    """Resolve the local staged Slurm YAML path."""
     configured_path = config.get("staged_slurm_file")
     if isinstance(configured_path, str) and configured_path.strip():
         staged_path = resolve_run_template(configured_path.strip(), run_id)
     else:
         config_abs = os.path.abspath(config_path)
         config_dir = os.path.dirname(config_abs)
-        config_name = os.path.basename(config_abs)
-        stem, extension = os.path.splitext(config_name)
-        staged_path = os.path.join(config_dir, f"start_slurm.{run_id}{extension or '.yml'}")
+        staged_path = os.path.join(config_dir, f"slurm.staged.{run_id}.yml")
     return _resolve_local_template_path(staged_path)
 
 
@@ -735,12 +738,13 @@ def prepare_slurm_plan(
     )
 
     slurm_data: Dict[str, Any] = {
-        "run_id": resolved_run_id,
         "provider": provider,
+        "run_id": resolved_run_id,
         "provider_config": provider_config,
-        "staged_provider_file": staged_config_abs,
         "slurm_start_file": slurm_start_file,
+        "staged_provider_file": staged_config_abs,
         "staged_slurm_file": staged_slurm_file,
+        "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
         **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
@@ -749,7 +753,6 @@ def prepare_slurm_plan(
         "remote_slurm_start_file": remote_slurm_start_file,
         "submitted_job_id": None,
         "status": "prepared",
-        "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
         "uploaded_input_paths": input_uploads,
         "uploaded_reference_paths": dict(sorted(reference_uploads.items())),
         "download_output_paths": output_downloads,
@@ -894,7 +897,7 @@ def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str,
 
 
 def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
-    """Upload missing or stale files listed in the start Slurm YAML."""
+    """Upload missing or stale files listed in the staged Slurm YAML."""
     results: Dict[str, Dict[str, str]] = {}
     upload_items = list(_iter_upload_maps(slurm_data))
     _debug(slurm_data, f"checking {len(upload_items)} upload files")
@@ -921,6 +924,28 @@ def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, 
     return results
 
 
+def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    """Prepare when needed, upload mapped files, and write upload results."""
+    slurm_data = load_yaml_file(config_path)
+    if "uploaded_input_paths" not in slurm_data and "uploaded_reference_paths" not in slurm_data:
+        slurm_data = prepare_slurm_plan(config_path, overrides=overrides)
+        output_path = _require_config_value(slurm_data, "staged_slurm_file")
+    else:
+        if overrides:
+            slurm_data.update(overrides)
+        output_path = config_path
+
+    _debug(slurm_data, f"loaded upload config: {config_path}")
+    _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
+    _debug(slurm_data, "step: upload files")
+    upload_results = upload_required_files(slurm_data)
+    slurm_data["upload_results"] = upload_results
+    slurm_data["status"] = "uploaded"
+    _debug(slurm_data, "step complete: upload files")
+    _write_staged_slurm_file(output_path, slurm_data)
+    return slurm_data
+
+
 def _status_command(job_id: str) -> str:
     quoted_job = shlex.quote(job_id)
     return (
@@ -934,7 +959,7 @@ def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
     """Fetch raw Slurm status text for the submitted job."""
     job_id = str(slurm_data.get("submitted_job_id") or "").strip()
     if not job_id or job_id == "None":
-        return "No submitted_job_id in start Slurm YAML."
+        return "No submitted_job_id in staged Slurm YAML."
     result = _run_ssh(slurm_data, _status_command(job_id), check=False)
     return (result.stdout or "") + (result.stderr or "")
 
@@ -971,7 +996,7 @@ def _status_from_text(raw_status_text: str) -> str:
 
 
 def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
-    """Update job status fields in a start Slurm YAML."""
+    """Update job status fields in a staged Slurm YAML."""
     slurm_data = load_yaml_file(config_path)
     raw_status_text = fetch_status_text(slurm_data)
     slurm_data["raw_status_text"] = raw_status_text
@@ -982,14 +1007,10 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
 
 
 def start_slurm_job(config_path: str) -> Dict[str, Any]:
-    """Upload staged files, submit the Slurm job, and update the start Slurm YAML."""
+    """Submit the Slurm job and update the staged Slurm YAML."""
     slurm_data = load_yaml_file(config_path)
     _debug(slurm_data, f"loaded start file: {config_path}")
     _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
-    _debug(slurm_data, "step: upload files")
-    upload_results = upload_required_files(slurm_data)
-    slurm_data["upload_results"] = upload_results
-    _debug(slurm_data, "step complete: upload files")
 
     remote_start_file = _require_config_value(slurm_data, "remote_slurm_start_file")
     remote_provider_config = _require_config_value(slurm_data, "remote_provider_config")
@@ -1031,7 +1052,7 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
 
 
 def download_slurm_outputs(config_path: str) -> None:
-    """Download files listed in download sections of the start Slurm YAML."""
+    """Download files listed in download sections of the staged Slurm YAML."""
     slurm_data = load_yaml_file(config_path)
     for section in ("download_output_paths", "download_log_paths"):
         mapping = slurm_data.get(section) or {}
@@ -1052,7 +1073,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vhr-slurm", description="Prepare and manage vhrharmonize Slurm jobs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and start Slurm YAML.")
+    prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and staged Slurm YAML.")
     prepare_parser.add_argument("--config", required=True, help="Path to Slurm config YAML.")
     for key in SLURM_PREPARE_CONFIG_KEYS:
         option = f"--{key.replace('_', '-')}"
@@ -1063,14 +1084,25 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         else:
             prepare_parser.add_argument(option, help=f"Override Slurm config key: {key}.")
 
-    start_parser = subparsers.add_parser("start", help="Upload files and submit the Slurm job.")
-    start_parser.add_argument("--config", required=True, help="Path to start Slurm YAML.")
+    upload_parser = subparsers.add_parser("upload", help="Prepare when needed and upload mapped files.")
+    upload_parser.add_argument("--config", required=True, help="Path to prepare Slurm YAML or staged Slurm YAML.")
+    for key in SLURM_PREPARE_CONFIG_KEYS:
+        option = f"--{key.replace('_', '-')}"
+        if key == "provider_upload_keys":
+            upload_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
+        elif key == "debug_logs":
+            upload_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during upload.")
+        else:
+            upload_parser.add_argument(option, help=f"Override Slurm config key: {key}.")
 
-    status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the start Slurm YAML.")
-    status_parser.add_argument("--config", required=True, help="Path to start Slurm YAML.")
+    start_parser = subparsers.add_parser("start", help="Submit the Slurm job.")
+    start_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
 
-    download_parser = subparsers.add_parser("download", help="Download files listed in the start Slurm YAML.")
-    download_parser.add_argument("--config", required=True, help="Path to start Slurm YAML.")
+    status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the staged Slurm YAML.")
+    status_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
+
+    download_parser = subparsers.add_parser("download", help="Download files listed in the staged Slurm YAML.")
+    download_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
     return parser
 
 
@@ -1091,8 +1123,12 @@ def main(argv: List[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "prepare":
         slurm_data = prepare_slurm_plan(args.config, overrides=_collect_prepare_overrides(args))
-        print(f"Wrote start Slurm file {slurm_data['staged_slurm_file']}")
+        print(f"Wrote staged Slurm file {slurm_data['staged_slurm_file']}")
         print(f"Wrote staged provider file {slurm_data['staged_provider_file']}")
+        return 0
+    if args.command == "upload":
+        slurm_data = upload_slurm_files(args.config, overrides=_collect_prepare_overrides(args))
+        print(f"Uploaded files listed in {slurm_data['staged_slurm_file']}")
         return 0
     if args.command == "start":
         start_slurm_job(args.config)
@@ -1125,6 +1161,7 @@ __all__ = [
     "start_slurm_job",
     "update_status_slurm_file",
     "upload_required_files",
+    "upload_slurm_files",
     "validate_slurm_config",
     "write_staged_worldview_config_for_remote",
     "write_yaml_file",

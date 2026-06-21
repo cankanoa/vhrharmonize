@@ -346,7 +346,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         encoding="utf-8",
     )
     slurm_config = tmp_path / "prepare_slurm.yml"
-    staged_slurm_file = tmp_path / "start_slurm.yml"
+    staged_slurm_file = tmp_path / "slurm.staged.yml"
     script_path = tmp_path / "worldview.sbatch"
     script_path.write_text("#!/bin/bash\nvhr-worldview --config-yaml \"$1\"\n", encoding="utf-8")
     slurm_config.write_text(
@@ -405,9 +405,15 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
-    from vhrharmonize.slurm import _remote_quote, _status_command, _status_from_text, write_sectioned_yaml_file
+    from vhrharmonize.slurm import (
+        _remote_quote,
+        _status_command,
+        _status_from_text,
+        resolve_staged_slurm_file,
+        write_sectioned_yaml_file,
+    )
 
-    output_path = tmp_path / "start_slurm.yml"
+    output_path = tmp_path / "slurm.staged.yml"
     long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
     write_sectioned_yaml_file(
         str(output_path),
@@ -419,6 +425,9 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert "? " not in text
     assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
     assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
+    assert resolve_staged_slurm_file({}, config_path=str(tmp_path / "prepare_slurm.yml"), run_id="RUN123") == str(
+        tmp_path / "slurm.staged.RUN123.yml"
+    )
     assert "2>/dev/null" in _status_command("123")
     assert _status_from_text(
         """---
@@ -508,3 +517,63 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
             "user@host:~/remote/output/input.tif",
         ],
     )
+
+
+def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    local_path = tmp_path / "input.tif"
+    local_path.write_text("data", encoding="utf-8")
+    staged_slurm = tmp_path / "slurm.staged.RUN123.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "RUN123",
+                "provider": "vhr-worldview",
+                "staged_slurm_file": str(staged_slurm),
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "remote_provider_config": "~/remote/provider.yml",
+                "remote_slurm_start_file": "~/remote/worldview.sbatch",
+                "uploaded_input_paths": {str(local_path): "~/remote/input.tif"},
+                "uploaded_reference_paths": {},
+                "download_output_paths": {},
+                "download_log_paths": {},
+                "debug_logs": False,
+                "status": "prepared",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        slurm_mod,
+        "_rsync_upload",
+        lambda slurm_data, source, dest: SimpleNamespace(stdout="<f+++++++++ input.tif\n", stderr="", returncode=0),
+    )
+    uploaded = slurm_mod.upload_slurm_files(str(staged_slurm))
+    assert uploaded["status"] == "uploaded"
+    assert slurm_mod.load_yaml_file(str(staged_slurm))["upload_results"][str(local_path)]["status"] == "synced"
+
+    def fail_upload(_slurm_data):
+        raise AssertionError("start should not upload files")
+
+    ssh_calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        ssh_calls.append(remote_command)
+        if "sbatch" in remote_command:
+            return SimpleNamespace(stdout="Submitted batch job 123\n", stderr="", returncode=0)
+        return SimpleNamespace(
+            stdout="---\nJobID|State|Elapsed|ExitCode|NodeList\n123|PENDING|00:00:00|0:0|None assigned\n",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(slurm_mod, "upload_required_files", fail_upload)
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    started = slurm_mod.start_slurm_job(str(staged_slurm))
+    assert started["submitted_job_id"] == "123"
+    assert started["status"] == "running"
+    assert len(ssh_calls) == 2
