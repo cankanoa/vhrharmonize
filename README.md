@@ -68,14 +68,14 @@ vhr-py6s --help
 
 To use on a super computer (slurm):
 ```
-vhr-slurm prepare --config configs/prepare_slurm.example.yml
 make login
 make cache-open
 make cache-check
-vhr-slurm upload --config configs/start_slurm.1.ym
-vhr-slurm start --config configs/start_slurm.1.ym
-vhr-slurm status --config configs/start_slurm.1.yml
-vhr-slurm download --config configs/start_slurm.1.yml
+vhr-slurm prepare --config configs/prepare_slurm.example.yml
+vhr-slurm upload --config configs/slurm.staged.1.ym
+vhr-slurm start --config configs/slurm.staged.1.ym
+vhr-slurm status --config configs/slurm.staged.1.ym
+vhr-slurm download --config configs/slurm.staged.1.ym
 ```
 
 ## Contributing

@@ -63,8 +63,10 @@ LOG_HEADER_BY_KEY = {
     "ssh_host": "# SSH login",
     "remote_output_dir": "# Remote directories.",
     "remote_provider_config": "# Uploaded remote control files.",
+    "remote_slurm_log_templates": "# Slurm log files.",
     "submitted_job_id": "# Job status.",
     "uploaded_input_paths": "# All mappings are local file: remote file.",
+    "raw_slurm_log_text": "# Raw Slurm log text.",
     "raw_status_text": "# Raw scheduler status text.",
 }
 
@@ -107,11 +109,14 @@ def _write_staged_slurm_file(path: str, data: Mapping[str, Any]) -> None:
     ordered = dict(data)
     upload_results = ordered.pop("upload_results", None)
     raw_start_output = ordered.pop("raw_start_output", None)
+    raw_slurm_log_text = ordered.pop("raw_slurm_log_text", None)
     raw_status_text = ordered.pop("raw_status_text", None)
     if upload_results is not None:
         ordered["upload_results"] = upload_results
     if raw_start_output is not None:
         ordered["raw_start_output"] = raw_start_output
+    if raw_slurm_log_text is not None:
+        ordered["raw_slurm_log_text"] = raw_slurm_log_text
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
     write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
@@ -629,6 +634,77 @@ def _remote_provider_config_path(staged_provider_config: str, *, remote_referenc
     return os.path.join(remote_reference_dir, os.path.basename(staged_provider_config))
 
 
+def _parse_sbatch_log_templates(sbatch_path: str) -> Dict[str, str]:
+    """Return output/error log templates declared by SBATCH flags."""
+    flag_to_key = {
+        "-o": "output",
+        "--output": "output",
+        "-e": "error",
+        "--error": "error",
+    }
+    templates: Dict[str, str] = {}
+    with open(sbatch_path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped.startswith("#SBATCH"):
+                continue
+            try:
+                args = shlex.split(stripped[len("#SBATCH"):].strip())
+            except ValueError:
+                continue
+            index = 0
+            while index < len(args):
+                arg = args[index]
+                key = None
+                value = None
+                if arg.startswith("--output="):
+                    key = "output"
+                    value = arg.split("=", 1)[1]
+                elif arg.startswith("--error="):
+                    key = "error"
+                    value = arg.split("=", 1)[1]
+                elif arg in flag_to_key and index + 1 < len(args):
+                    key = flag_to_key[arg]
+                    value = args[index + 1]
+                    index += 1
+                if key and value:
+                    templates[key] = value
+                index += 1
+    return templates
+
+
+def _resolve_remote_sbatch_log_templates(
+    local_templates: Mapping[str, str],
+    *,
+    remote_slurm_start_file: str,
+) -> Dict[str, str]:
+    """Resolve sbatch log templates relative to the remote sbatch file directory."""
+    remote_start_dir = _remote_parent(remote_slurm_start_file)
+    resolved: Dict[str, str] = {}
+    for key, template in local_templates.items():
+        if template.startswith("/") or template.startswith("~/"):
+            remote_template = template
+        else:
+            remote_template = os.path.normpath(os.path.join(remote_start_dir, template))
+        resolved[key] = remote_template
+    return resolved
+
+
+def _resolve_slurm_log_paths(slurm_data: Mapping[str, Any]) -> Dict[str, str]:
+    """Resolve sbatch log templates to concrete paths once a job id is known."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    templates = slurm_data.get("remote_slurm_log_templates") or slurm_data.get("remote_slurm_log_paths") or {}
+    if not isinstance(templates, dict):
+        return {}
+    resolved: Dict[str, str] = {}
+    for key, value in templates.items():
+        remote_path = str(value)
+        if job_id and job_id != "None":
+            remote_path = remote_path.replace("%j", job_id).replace("%A", job_id)
+        resolved[str(key)] = remote_path
+    return resolved
+
+
 def _add_reference_upload(reference_uploads: Dict[str, str], local_path: str, *, remote_reference_dir: str) -> str:
     local_abs = os.path.abspath(local_path)
     basename = os.path.basename(local_abs)
@@ -673,8 +749,6 @@ def prepare_slurm_plan(
     input_tifs = _discover_worldview_input_files(local_args)
     scenes = load_worldview_scenes_from_tif_files(input_tifs, filter_basenames=local_args.filter_basename)
     upload_keys = [str(key) for key in (slurm_config.get("provider_upload_keys") or [])]
-    if "input_dir" in upload_keys and "input_file_glob" not in upload_keys:
-        upload_keys.append("input_file_glob")
     input_tifs_for_remote: List[str] = []
     if "input_file_glob" in upload_keys:
         (
@@ -736,6 +810,10 @@ def prepare_slurm_plan(
         slurm_start_file,
         remote_reference_dir=paths["remote_reference_dir"],
     )
+    remote_slurm_log_templates = _resolve_remote_sbatch_log_templates(
+        _parse_sbatch_log_templates(slurm_start_file),
+        remote_slurm_start_file=remote_slurm_start_file,
+    )
 
     slurm_data: Dict[str, Any] = {
         "provider": provider,
@@ -751,6 +829,8 @@ def prepare_slurm_plan(
         **paths,
         "remote_provider_config": remote_provider_config,
         "remote_slurm_start_file": remote_slurm_start_file,
+        "remote_slurm_log_templates": remote_slurm_log_templates,
+        "remote_slurm_log_paths": {},
         "submitted_job_id": None,
         "status": "prepared",
         "uploaded_input_paths": input_uploads,
@@ -949,9 +1029,12 @@ def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None 
 def _status_command(job_id: str) -> str:
     quoted_job = shlex.quote(job_id)
     return (
-        f"squeue -j {quoted_job} -o '%i %T %M %D %R' 2>/dev/null || true; "
-        "echo '---'; "
-        f"sacct -j {quoted_job} --format=JobID,State,Elapsed,ExitCode,NodeList%30 -P || true"
+        f"status=$(squeue -j {quoted_job} -o '%i %T %M %D %R' 2>/dev/null || true); "
+        "if [ -n \"$(printf '%s\\n' \"$status\" | sed '1d')\" ]; then "
+        "printf '%s\\n' \"$status\"; "
+        "else "
+        f"sacct -j {quoted_job} --format=JobID,State,Elapsed,ExitCode,NodeList%30 -P || true; "
+        "fi"
     )
 
 
@@ -962,6 +1045,43 @@ def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
         return "No submitted_job_id in staged Slurm YAML."
     result = _run_ssh(slurm_data, _status_command(job_id), check=False)
     return (result.stdout or "") + (result.stderr or "")
+
+
+def _read_remote_slurm_log(slurm_data: Mapping[str, Any], remote_path: str) -> str:
+    """Read a remote Slurm log file, returning the remote error text on failure."""
+    result = _run_ssh(slurm_data, f"cat {_remote_quote(remote_path)}", check=False)
+    text = (result.stdout or "") + (result.stderr or "")
+    if result.returncode:
+        return f"Could not read {remote_path} (exit {result.returncode}).\n{text}".rstrip()
+    return text
+
+
+def fetch_slurm_log_texts(slurm_data: Mapping[str, Any]) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Fetch resolved Slurm output/error logs declared by the sbatch file."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        return {}, {}
+    log_paths = _resolve_slurm_log_paths(slurm_data)
+    log_texts: Dict[str, str] = {}
+    for key in ("error", "output"):
+        remote_path = log_paths.get(key)
+        if not remote_path:
+            continue
+        try:
+            log_texts[key] = _read_remote_slurm_log(slurm_data, remote_path)
+        except Exception as exc:
+            log_texts[key] = f"Could not read {remote_path}: {exc}"
+    return log_paths, log_texts
+
+
+def _print_slurm_log_texts(log_paths: Mapping[str, str], log_texts: Mapping[str, str]) -> None:
+    for key, label in (("error", "Slurm error log"), ("output", "Slurm output log")):
+        remote_path = log_paths.get(key)
+        if not remote_path:
+            continue
+        print(f"\n=== {label}: {remote_path} ===")
+        text = log_texts.get(key, "")
+        print(text if text else "(empty)")
 
 
 def _status_from_text(raw_status_text: str) -> str:
@@ -999,10 +1119,14 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     """Update job status fields in a staged Slurm YAML."""
     slurm_data = load_yaml_file(config_path)
     raw_status_text = fetch_status_text(slurm_data)
+    log_paths, log_texts = fetch_slurm_log_texts(slurm_data)
     slurm_data["raw_status_text"] = raw_status_text
+    slurm_data["remote_slurm_log_paths"] = log_paths
+    slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
     _write_staged_slurm_file(config_path, slurm_data)
     print(raw_status_text)
+    _print_slurm_log_texts(log_paths, log_texts)
     return slurm_data
 
 
@@ -1040,6 +1164,7 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
     _debug(slurm_data, f"submitted job id: {slurm_data['submitted_job_id']}")
     slurm_data["status"] = "submitted"
     slurm_data["raw_start_output"] = start_output
+    slurm_data["remote_slurm_log_paths"] = _resolve_slurm_log_paths(slurm_data)
     _debug(slurm_data, "step: fetch status")
     raw_status_text = fetch_status_text(slurm_data)
     slurm_data["raw_status_text"] = raw_status_text

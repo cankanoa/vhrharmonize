@@ -224,7 +224,7 @@ seamline_metadata:
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
   # SpectralMatch pipeline kwargs:
-  # Pass any SpectralMatch argument (seem here: https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix.
+  # Pass SpectralMatch arguments (see https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix.
 
   # Optionally run named SpectralMatch groups. Keys are output filenames; values are nested prefixed inputs or lists of images.
   # Keys are output names written by filename under the resolved output folder.

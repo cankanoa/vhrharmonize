@@ -348,7 +348,13 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     slurm_config = tmp_path / "prepare_slurm.yml"
     staged_slurm_file = tmp_path / "slurm.staged.yml"
     script_path = tmp_path / "worldview.sbatch"
-    script_path.write_text("#!/bin/bash\nvhr-worldview --config-yaml \"$1\"\n", encoding="utf-8")
+    script_path.write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --output=../logs/slurm-%j.out\n"
+        "#SBATCH --error=../logs/slurm-%j.err\n"
+        "vhr-worldview --config-yaml \"$1\"\n",
+        encoding="utf-8",
+    )
     slurm_config.write_text(
         yaml.safe_dump(
             {
@@ -389,6 +395,10 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
     assert str(script_path.resolve()) in plan["uploaded_reference_paths"]
     assert plan["remote_slurm_start_file"] == "/remote/references/worldview.sbatch"
+    assert plan["remote_slurm_log_templates"] == {
+        "output": "/remote/logs/slurm-%j.out",
+        "error": "/remote/logs/slurm-%j.err",
+    }
     assert all(not Path(remote).suffix == "" for remote in plan["uploaded_reference_paths"].values())
     assert any(remote.startswith("/remote/runs/RUN123/output") for remote in plan["download_output_paths"].values())
 
@@ -406,7 +416,9 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     from vhrharmonize.slurm import (
+        _parse_sbatch_log_templates,
         _remote_quote,
+        _resolve_remote_sbatch_log_templates,
         _status_command,
         _status_from_text,
         resolve_staged_slurm_file,
@@ -428,7 +440,24 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert resolve_staged_slurm_file({}, config_path=str(tmp_path / "prepare_slurm.yml"), run_id="RUN123") == str(
         tmp_path / "slurm.staged.RUN123.yml"
     )
-    assert "2>/dev/null" in _status_command("123")
+    sbatch_path = tmp_path / "job.sbatch"
+    sbatch_path.write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --output ../logs/slurm-%j.out\n"
+        "#SBATCH -e ../logs/slurm-%j.err\n",
+        encoding="utf-8",
+    )
+    assert _resolve_remote_sbatch_log_templates(
+        _parse_sbatch_log_templates(str(sbatch_path)),
+        remote_slurm_start_file="~/remote/references/job.sbatch",
+    ) == {
+        "output": "~/remote/logs/slurm-%j.out",
+        "error": "~/remote/logs/slurm-%j.err",
+    }
+    status_command = _status_command("123")
+    assert "2>/dev/null" in status_command
+    assert "echo '---'" not in status_command
+    assert status_command.count("sacct") == 1
     assert _status_from_text(
         """---
 JobID|State|Elapsed|ExitCode|NodeList
@@ -535,6 +564,11 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
                 "ssh_user": "user",
                 "remote_provider_config": "~/remote/provider.yml",
                 "remote_slurm_start_file": "~/remote/worldview.sbatch",
+                "remote_slurm_log_templates": {
+                    "output": "~/remote/slurm-%j.out",
+                    "error": "~/remote/slurm-%j.err",
+                },
+                "remote_slurm_log_paths": {},
                 "uploaded_input_paths": {str(local_path): "~/remote/input.tif"},
                 "uploaded_reference_paths": {},
                 "download_output_paths": {},
@@ -576,4 +610,55 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
     started = slurm_mod.start_slurm_job(str(staged_slurm))
     assert started["submitted_job_id"] == "123"
     assert started["status"] == "running"
+    assert started["remote_slurm_log_paths"] == {
+        "output": "~/remote/slurm-123.out",
+        "error": "~/remote/slurm-123.err",
+    }
     assert len(ssh_calls) == 2
+
+
+def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    staged_slurm = tmp_path / "slurm.staged.RUN123.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "RUN123",
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "submitted_job_id": "123",
+                "remote_slurm_log_templates": {
+                    "output": "~/remote/slurm-%j.out",
+                    "error": "~/remote/slurm-%j.err",
+                },
+                "status": "submitted",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        if "squeue" in remote_command:
+            return SimpleNamespace(stdout="JOBID STATE TIME NODES NODELIST(REASON)\n123 COMPLETED 0:01 1 node\n", stderr="", returncode=0)
+        if "slurm-123.err" in remote_command:
+            return SimpleNamespace(stdout="stderr text\n", stderr="", returncode=0)
+        if "slurm-123.out" in remote_command:
+            return SimpleNamespace(stdout="stdout text\n", stderr="", returncode=0)
+        raise AssertionError(remote_command)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    updated = slurm_mod.update_status_slurm_file(str(staged_slurm))
+    captured = capsys.readouterr().out
+
+    assert updated["status"] == "completed"
+    assert updated["remote_slurm_log_paths"] == {
+        "output": "~/remote/slurm-123.out",
+        "error": "~/remote/slurm-123.err",
+    }
+    assert updated["raw_slurm_log_text"] == {"error": "stderr text\n", "output": "stdout text\n"}
+    assert "=== Slurm error log: ~/remote/slurm-123.err ===" in captured
+    assert "stderr text" in captured
+    assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
+    assert "stdout text" in captured

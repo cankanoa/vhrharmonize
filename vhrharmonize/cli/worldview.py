@@ -251,7 +251,8 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
         Radiometric normalization keyword arguments.
     """
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    radiometric_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
+    match_kwargs = _collect_prefixed_kwargs(args, "match_")
+    radiometric_kwargs.update(match_kwargs)
     return radiometric_kwargs
 
 
@@ -373,11 +374,9 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
         Normalized config defaults mapping.
     """
     normalized = dict(config_defaults)
-    for list_key in ("input_file_glob", "input_dir", "filter_basename"):
+    for list_key in ("input_file_glob", "filter_basename", "match_steps"):
         if list_key in normalized and isinstance(normalized[list_key], str):
             normalized[list_key] = [normalized[list_key]]
-    if "input_dir" in normalized and "input_file_glob" not in normalized:
-        normalized["input_file_glob"] = normalized.pop("input_dir")
     return normalized
 
 
@@ -2921,7 +2920,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Glob used to find input files, for example '/data/**/*.TIF'.",
     )
-    parser.add_argument("--input-dir", dest="input_file_glob", action="append", help=argparse.SUPPRESS)
     parser.add_argument(
         "--dem-file-path",
         default="online",
@@ -2977,7 +2975,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
     parser.add_argument("--run-file-source", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-file-source", default="$temp/file_source")
     parser.add_argument("--calculate-overviews-file-source", action=argparse.BooleanOptionalAction, default=False)
@@ -3031,6 +3028,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--radiometric-normalization-method", default="spectralmatch")
     parser.add_argument("--radiometric-normalization-kwargs-json")
     parser.add_argument("--group-by-basename")
+    parser.add_argument("--match-steps", nargs="+")
     parser.add_argument("--cloud-mask-command")
     parser.add_argument("--cloud-mask-method", choices=["omnicloudmask"], default="omnicloudmask")
     parser.add_argument("--cloud-mask-red-band-index", type=int, default=5)
@@ -3192,24 +3190,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--alignment-solve-resolution must be > 0.")
     _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
     radiometric_kwargs_json = _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    removed_spectralmatch_keys = {
-        "matching_order": "steps",
-        "match_steps": "steps",
-        "seamline_steps": "steps",
-        "seamline_method": "steps",
-        "global_regression_output_images": "shared_temp_dir/global or shared_output_image_path when it is the final step",
-        "local_block_adjustment_output_images": "shared_temp_dir/local or shared_output_image_path when it is the final step",
-        "align_method": "steps",
-        "align_rasters_output_images": "shared_temp_dir/aligned or shared_output_image_path when it is the final step",
-        "voronoi_center_seamline_output_mask": "shared_output_image_path when it is the final step",
-        "weighted_seamline_output_mask": "shared_output_image_path when it is the final step",
-        "clip_method": "steps",
-        "mask_rasters_output_images": "shared_temp_dir/clip or shared_output_image_path when it is the final step",
-        "merge_method": "steps",
-    }
-    for old_key, replacement in removed_spectralmatch_keys.items():
-        if getattr(args, f"match_{old_key}", None) is not None or old_key in radiometric_kwargs_json:
-            parser.error(f"SpectralMatch no longer accepts {old_key}; use {replacement}.")
     save_radiometric_output_is_explicit = (
         "save_radiometric_normalization" in config_defaults
         or _explicit_cli_arg_present(raw_argv, "save_radiometric_normalization")
