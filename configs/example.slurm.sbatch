@@ -43,7 +43,7 @@ python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 #     git -C "${SOURCE_DIR}" checkout "${SOURCE_BRANCH}"
 #     git -C "${SOURCE_DIR}" pull --ff-only origin "${SOURCE_BRANCH}"
 # fi
-# python -m pip install --upgrade --force-reinstall "${SOURCE_DIR}${SOURCE_EXTRAS}"
+# python -m pip install --upgrade "${SOURCE_DIR}${SOURCE_EXTRAS}"
 
 
 # Run with configs from yml
