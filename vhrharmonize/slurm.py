@@ -1130,7 +1130,7 @@ def fetch_slurm_log_texts(slurm_data: Mapping[str, Any]) -> Tuple[Dict[str, str]
 
 
 def _print_slurm_log_texts(log_paths: Mapping[str, str], log_texts: Mapping[str, str]) -> None:
-    for key, label in (("error", "Slurm error log"), ("output", "Slurm output log")):
+    for key, label in (("output", "Slurm output log"), ("error", "Slurm error log")):
         remote_path = log_paths.get(key)
         if not remote_path:
             continue
@@ -1180,8 +1180,8 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
     _write_staged_slurm_file(config_path, slurm_data)
-    print(raw_status_text)
     _print_slurm_log_texts(log_paths, log_texts)
+    print(raw_status_text)
     return slurm_data
 
 

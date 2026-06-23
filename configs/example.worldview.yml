@@ -12,7 +12,7 @@
 
 # 4. To process images:
   # Navigate to the folder with this yml file (may need to be changed): `cd configs`
-  # Run: `vhr-worldview --config-yaml worldview.example.yml`
+  # Run: `vhr-worldview --config-yaml example.worldview.yml`
 
 shared:
   input_file_glob:

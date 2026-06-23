@@ -5,8 +5,8 @@ provider: vhr-worldview # Provider runner to stage
 run_id: "1" # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime
 
 # Editable files
-provider_config: configs/worldview.example.yml # Local provider YAML to rewrite for Slurm
-slurm_start_file: configs/example.sbatch # Local sbatch template to stage
+provider_config: configs/example.worldview.yml # Local provider YAML to rewrite for Slurm
+slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 
 # Generated files
 staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML

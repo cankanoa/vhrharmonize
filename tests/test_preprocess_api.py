@@ -389,7 +389,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     slurm_config = tmp_path / "prepare_slurm.yml"
     staged_slurm_file = tmp_path / "slurm.staged.yml"
     staged_slurm_start_file = tmp_path / "staged.sbatch"
-    script_path = tmp_path / "example.sbatch"
+    script_path = tmp_path / "example.slurm.sbatch"
     script_path.write_text(
         "#!/bin/bash\n"
         "#SBATCH --output=../logs/slurm-%j.out\n"
@@ -487,7 +487,7 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert resolve_staged_slurm_file({}, config_path=str(tmp_path / "prepare_slurm.yml"), run_id="RUN123") == str(
         tmp_path / "slurm.staged.RUN123.yml"
     )
-    assert resolve_staged_slurm_start_file({}, slurm_start_file=str(tmp_path / "example.sbatch"), run_id="RUN123") == str(
+    assert resolve_staged_slurm_start_file({}, slurm_start_file=str(tmp_path / "example.slurm.sbatch"), run_id="RUN123") == str(
         tmp_path / "staged.sbatch"
     )
     sbatch_path = tmp_path / "job.sbatch"
@@ -712,3 +712,5 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
     assert "stderr text" in captured
     assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
     assert "stdout text" in captured
+    assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
+    assert captured.index("=== Slurm error log") < captured.index("JOBID STATE")

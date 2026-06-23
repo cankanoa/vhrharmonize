@@ -13,7 +13,7 @@ pip install "vhrharmonize[all]"
 ## Usage
 
 ```bash
-cp configs/worldview.example.yml configs/worldview.yml
+cp configs/example.worldview.yml configs/worldview.yml
 
 vhr-worldview --config-yaml configs/worldview.yml
 ```

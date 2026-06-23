@@ -37,10 +37,10 @@ conda activate vhrharmonize
 pip install vhrharmonize[defaults]
 ```
 ## Getting Started
-For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/worldview.example.yml](docs/configs/worldview.example.yml) and running:
+For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/example.worldview.yml](docs/configs/example.worldview.yml) and running:
 
 ```bash
-vhr-worldview --config-yaml worldview.example.yml
+vhr-worldview --config-yaml example.worldview.yml
 ```
 Or pass in arguments directly from the command line:
 
@@ -68,14 +68,11 @@ vhr-py6s --help
 
 To use on a super computer (slurm):
 ```
-make login
-make cache-open
-make cache-check
-vhr-slurm prepare --config configs/prepare_slurm.example.yml
-vhr-slurm upload --config configs/slurm.staged.1.ym
-vhr-slurm start --config configs/slurm.staged.1.ym
-vhr-slurm status --config configs/slurm.staged.1.ym
-vhr-slurm download --config configs/slurm.staged.1.ym
+vhr-slurm prepare --config configs/example.hpc.yml
+vhr-slurm upload --config configs/slurm.staged.1.yml
+vhr-slurm start --config configs/slurm.staged.1.yml
+vhr-slurm status --config configs/slurm.staged.1.yml
+vhr-slurm download --config configs/slurm.staged.1.yml
 ```
 
 ## Contributing

@@ -37,10 +37,10 @@ conda activate vhrharmonize
 pip install vhrharmonize[defaults]
 ```
 ## Getting Started
-For an overview of using the library see [getting-started/quickstart.md](getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [configs/worldview.example.yml](configs/worldview.example.yml) and running:
+For an overview of using the library see [getting-started/quickstart.md](getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [configs/example.worldview.yml](configs/example.worldview.yml) and running:
 
 ```bash
-vhr-worldview --config-yaml worldview.example.yml
+vhr-worldview --config-yaml example.worldview.yml
 ```
 Or pass in arguments directly from the command line:
 

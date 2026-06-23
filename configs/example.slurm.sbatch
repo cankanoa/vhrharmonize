@@ -32,7 +32,7 @@ conda activate "${ENV_NAME}"
 python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 
 # Alternative: install from source
-# SOURCE_REPO_URL="https://github.com/your-org/vhrharmonize.git"
+# SOURCE_REPO_URL="https://github.com/cankanoa/vhrharmonize.git"
 # SOURCE_DIR="${HOME}/vhrharmonize_source"
 # SOURCE_BRANCH="main"
 # SOURCE_EXTRAS="[defaults,dask]"
@@ -51,12 +51,12 @@ vhr-worldview --config-yaml "$1"
 
 
 # Use distributed workers with dask across nodes
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=1
-SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/runs/{run_id}/logs/dask-scheduler_{run_id}.json"
-SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
-srun --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
-sleep 10
-srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
-sleep 10
-vhr-worldview --config-yaml "$1" --dask-scheduler-file "${SCHEDULER_FILE}"
+# #SBATCH --nodes=2
+# #SBATCH --ntasks-per-node=1
+# SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/runs/{run_id}/logs/dask-scheduler_{run_id}.json"
+# SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
+# srun --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
+# sleep 10
+# srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
+# sleep 10
+# vhr-worldview --config-yaml "$1" --dask-scheduler-file "${SCHEDULER_FILE}"
