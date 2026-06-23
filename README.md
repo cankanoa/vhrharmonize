@@ -68,11 +68,11 @@ vhr-py6s --help
 
 To use on a super computer (slurm):
 ```
-vhr-slurm prepare --config configs/example.hpc.yml
-vhr-slurm upload --config configs/slurm.staged.1.yml
-vhr-slurm start --config configs/slurm.staged.1.yml
-vhr-slurm status --config configs/slurm.staged.1.yml
-vhr-slurm download --config configs/slurm.staged.1.yml
+vhr-hpc prepare --config configs/example.hpc.yml
+vhr-hpc upload --config configs/1.staged.hpc.yml
+vhr-hpc start --config configs/1.staged.hpc.yml
+vhr-hpc status --config configs/1.staged.hpc.yml
+vhr-hpc download --config configs/1.staged.hpc.yml
 ```
 
 ## Contributing

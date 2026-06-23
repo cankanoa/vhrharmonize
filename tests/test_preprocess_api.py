@@ -386,9 +386,9 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         ),
         encoding="utf-8",
     )
-    slurm_config = tmp_path / "prepare_slurm.yml"
-    staged_slurm_file = tmp_path / "slurm.staged.yml"
-    staged_slurm_start_file = tmp_path / "staged.sbatch"
+    slurm_config = tmp_path / "example.hpc.yml"
+    staged_hpc_file = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm_start_file = tmp_path / "RUN123.staged.slurm.sbatch"
     script_path = tmp_path / "example.slurm.sbatch"
     script_path.write_text(
         "#!/bin/bash\n"
@@ -404,7 +404,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "run_id": "RUN123",
                 "provider": "vhr-worldview",
                 "provider_config": str(provider_config),
-                "staged_slurm_file": str(staged_slurm_file),
+                "staged_hpc_file": str(staged_hpc_file),
                 "staged_slurm_start_file": str(staged_slurm_start_file),
                 "debug_logs": True,
                 "ssh_host": "example.edu",
@@ -427,7 +427,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     )
 
     plan = prepare_slurm_plan(str(slurm_config))
-    written_slurm = load_yaml_file(str(staged_slurm_file))
+    written_slurm = load_yaml_file(str(staged_hpc_file))
 
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
     assert written_slurm["status"] == "prepared"
@@ -439,7 +439,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
     assert str(staged_slurm_start_file.resolve()) in plan["uploaded_reference_paths"]
     assert str(script_path.resolve()) not in plan["uploaded_reference_paths"]
-    assert plan["remote_slurm_start_file"] == "/remote/references/staged.sbatch"
+    assert plan["remote_slurm_start_file"] == "/remote/references/RUN123.staged.slurm.sbatch"
     assert plan["remote_slurm_log_templates"] == {
         "output": "/remote/logs/slurm-%j.out",
         "error": "/remote/logs/slurm-%j.err",
@@ -467,12 +467,13 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
         _resolve_remote_sbatch_log_templates,
         _status_command,
         _status_from_text,
-        resolve_staged_slurm_file,
+        resolve_staged_hpc_file,
+        resolve_staged_provider_file,
         resolve_staged_slurm_start_file,
         write_sectioned_yaml_file,
     )
 
-    output_path = tmp_path / "slurm.staged.yml"
+    output_path = tmp_path / "RUN123.staged.hpc.yml"
     long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
     write_sectioned_yaml_file(
         str(output_path),
@@ -484,12 +485,20 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert "? " not in text
     assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
     assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
-    assert resolve_staged_slurm_file({}, config_path=str(tmp_path / "prepare_slurm.yml"), run_id="RUN123") == str(
-        tmp_path / "slurm.staged.RUN123.yml"
+    assert resolve_staged_hpc_file({}, config_path=str(tmp_path / "example.hpc.yml"), run_id="RUN123") == str(
+        tmp_path / "RUN123.staged.hpc.yml"
     )
-    assert resolve_staged_slurm_start_file({}, slurm_start_file=str(tmp_path / "example.slurm.sbatch"), run_id="RUN123") == str(
-        tmp_path / "staged.sbatch"
-    )
+    assert resolve_staged_provider_file(
+        {},
+        config_path=str(tmp_path / "example.hpc.yml"),
+        provider_config=str(tmp_path / "example.worldview.yml"),
+        run_id="RUN123",
+    ) == str(tmp_path / "RUN123.staged.worldview.yml")
+    assert resolve_staged_slurm_start_file(
+        {},
+        slurm_start_file=str(tmp_path / "example.slurm.sbatch"),
+        run_id="RUN123",
+    ) == str(tmp_path / "RUN123.staged.slurm.sbatch")
     sbatch_path = tmp_path / "job.sbatch"
     sbatch_path.write_text(
         "#!/bin/bash\n"
@@ -603,13 +612,13 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
 
     local_path = tmp_path / "input.tif"
     local_path.write_text("data", encoding="utf-8")
-    staged_slurm = tmp_path / "slurm.staged.RUN123.yml"
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
     staged_slurm.write_text(
         yaml.safe_dump(
             {
                 "run_id": "RUN123",
                 "provider": "vhr-worldview",
-                "staged_slurm_file": str(staged_slurm),
+                "staged_hpc_file": str(staged_slurm),
                 "ssh_host": "host",
                 "ssh_user": "user",
                 "remote_provider_config": "~/remote/provider.yml",
@@ -670,7 +679,7 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
 def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> None:
     import vhrharmonize.slurm as slurm_mod
 
-    staged_slurm = tmp_path / "slurm.staged.RUN123.yml"
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
     staged_slurm.write_text(
         yaml.safe_dump(
             {

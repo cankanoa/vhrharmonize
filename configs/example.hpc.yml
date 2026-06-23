@@ -9,9 +9,9 @@ provider_config: configs/example.worldview.yml # Local provider YAML to rewrite 
 slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 
 # Generated files
-staged_provider_file: configs/worldview.staged.{run_id}.yml # Generated rewritten provider YAML
-staged_slurm_start_file: configs/staged.sbatch # Generated sbatch with {run_id} replaced
-staged_slurm_file: configs/slurm.staged.{run_id}.yml # Generated staged Slurm YAML
+staged_provider_file: configs/{run_id}.staged.worldview.yml # Generated rewritten provider YAML
+staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch with {run_id} replaced
+staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
 debug_logs: true # Print debug logs
 
 # SSH login

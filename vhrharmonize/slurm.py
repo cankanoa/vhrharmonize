@@ -27,7 +27,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "staged_provider_file",
     "slurm_start_file",
     "staged_slurm_start_file",
-    "staged_slurm_file",
+    "staged_hpc_file",
     "debug_logs",
     "ssh_host",
     "ssh_user",
@@ -105,8 +105,8 @@ def write_sectioned_yaml_file(
         handle.write("\n".join(lines).rstrip() + "\n")
 
 
-def _write_staged_slurm_file(path: str, data: Mapping[str, Any]) -> None:
-    """Write the staged Slurm YAML with readable section comments."""
+def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
+    """Write the staged HPC YAML with readable section comments."""
     ordered = dict(data)
     upload_results = ordered.pop("upload_results", None)
     raw_start_output = ordered.pop("raw_start_output", None)
@@ -197,11 +197,11 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
         not isinstance(staged_provider_file, str) or not staged_provider_file.strip()
     ):
         raise ValueError("staged_provider_file must be a non-empty string when set.")
-    staged_slurm_file = config.get("staged_slurm_file")
-    if staged_slurm_file is not None and (
-        not isinstance(staged_slurm_file, str) or not staged_slurm_file.strip()
+    staged_hpc_file = config.get("staged_hpc_file")
+    if staged_hpc_file is not None and (
+        not isinstance(staged_hpc_file, str) or not staged_hpc_file.strip()
     ):
-        raise ValueError("staged_slurm_file must be a non-empty string when set.")
+        raise ValueError("staged_hpc_file must be a non-empty string when set.")
     staged_slurm_start_file = config.get("staged_slurm_start_file")
     if staged_slurm_start_file is not None and (
         not isinstance(staged_slurm_start_file, str) or not staged_slurm_start_file.strip()
@@ -252,7 +252,8 @@ def resolve_staged_provider_file(
         provider_dir = os.path.dirname(provider_abs)
         provider_name = os.path.basename(provider_abs)
         stem, extension = os.path.splitext(provider_name)
-        staged_path = os.path.join(provider_dir, f"{stem}.staged.{run_id}{extension or '.yml'}")
+        provider_label = stem.rsplit(".", 1)[-1]
+        staged_path = os.path.join(provider_dir, f"{run_id}.staged.{provider_label}{extension or '.yml'}")
     if not os.path.isabs(staged_path):
         staged_path = _resolve_local_template_path(staged_path)
     if os.path.abspath(staged_path) == os.path.abspath(provider_config):
@@ -260,15 +261,15 @@ def resolve_staged_provider_file(
     return staged_path
 
 
-def resolve_staged_slurm_file(config: Mapping[str, Any], *, config_path: str, run_id: str) -> str:
-    """Resolve the local staged Slurm YAML path."""
-    configured_path = config.get("staged_slurm_file")
+def resolve_staged_hpc_file(config: Mapping[str, Any], *, config_path: str, run_id: str) -> str:
+    """Resolve the local staged HPC YAML path."""
+    configured_path = config.get("staged_hpc_file")
     if isinstance(configured_path, str) and configured_path.strip():
         staged_path = resolve_run_template(configured_path.strip(), run_id)
     else:
         config_abs = os.path.abspath(config_path)
         config_dir = os.path.dirname(config_abs)
-        staged_path = os.path.join(config_dir, f"slurm.staged.{run_id}.yml")
+        staged_path = os.path.join(config_dir, f"{run_id}.staged.hpc.yml")
     return _resolve_local_template_path(staged_path)
 
 
@@ -285,7 +286,7 @@ def resolve_staged_slurm_start_file(
     else:
         start_abs = os.path.abspath(slurm_start_file)
         start_dir = os.path.dirname(start_abs)
-        staged_path = os.path.join(start_dir, "staged.sbatch")
+        staged_path = os.path.join(start_dir, f"{run_id}.staged.slurm.sbatch")
     if not os.path.isabs(staged_path):
         staged_path = _resolve_local_template_path(staged_path)
     if os.path.abspath(staged_path) == os.path.abspath(slurm_start_file):
@@ -764,7 +765,7 @@ def _slurm_config_with_overrides(
     config_path: str,
     overrides: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Load a Slurm YAML config and apply explicit caller/CLI overrides."""
+    """Load a HPC YAML config and apply explicit caller/CLI overrides."""
     config = load_yaml_file(config_path)
     for key, value in (overrides or {}).items():
         if value is not None:
@@ -786,7 +787,7 @@ def prepare_slurm_plan(
 
     resolved_run_id = resolve_run_id(slurm_config)
     paths = resolve_slurm_paths(slurm_config, resolved_run_id)
-    staged_slurm_file = resolve_staged_slurm_file(slurm_config, config_path=config_path, run_id=resolved_run_id)
+    staged_hpc_file = resolve_staged_hpc_file(slurm_config, config_path=config_path, run_id=resolved_run_id)
     provider_config = _require_config_value(slurm_config, "provider_config")
     provider_config_data = load_yaml_file(provider_config)
     local_args = _load_worldview_args(provider_config)
@@ -876,7 +877,7 @@ def prepare_slurm_plan(
         "slurm_start_file": slurm_start_file,
         "staged_provider_file": staged_config_abs,
         "staged_slurm_start_file": staged_slurm_start_file,
-        "staged_slurm_file": staged_slurm_file,
+        "staged_hpc_file": staged_hpc_file,
         "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
@@ -894,7 +895,7 @@ def prepare_slurm_plan(
         "download_log_paths": {},
         "raw_status_text": "",
     }
-    _write_staged_slurm_file(staged_slurm_file, slurm_data)
+    _write_staged_hpc_file(staged_hpc_file, slurm_data)
     return slurm_data
 
 
@@ -1032,7 +1033,7 @@ def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str,
 
 
 def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
-    """Upload missing or stale files listed in the staged Slurm YAML."""
+    """Upload missing or stale files listed in the staged HPC YAML."""
     results: Dict[str, Dict[str, str]] = {}
     upload_items = list(_iter_upload_maps(slurm_data))
     _debug(slurm_data, f"checking {len(upload_items)} upload files")
@@ -1064,7 +1065,7 @@ def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None 
     slurm_data = load_yaml_file(config_path)
     if "uploaded_input_paths" not in slurm_data and "uploaded_reference_paths" not in slurm_data:
         slurm_data = prepare_slurm_plan(config_path, overrides=overrides)
-        output_path = _require_config_value(slurm_data, "staged_slurm_file")
+        output_path = _require_config_value(slurm_data, "staged_hpc_file")
     else:
         if overrides:
             slurm_data.update(overrides)
@@ -1077,7 +1078,7 @@ def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None 
     slurm_data["upload_results"] = upload_results
     slurm_data["status"] = "uploaded"
     _debug(slurm_data, "step complete: upload files")
-    _write_staged_slurm_file(output_path, slurm_data)
+    _write_staged_hpc_file(output_path, slurm_data)
     return slurm_data
 
 
@@ -1097,7 +1098,7 @@ def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
     """Fetch raw Slurm status text for the submitted job."""
     job_id = str(slurm_data.get("submitted_job_id") or "").strip()
     if not job_id or job_id == "None":
-        return "No submitted_job_id in staged Slurm YAML."
+        return "No submitted_job_id in staged HPC YAML."
     result = _run_ssh(slurm_data, _status_command(job_id), check=False)
     return (result.stdout or "") + (result.stderr or "")
 
@@ -1171,7 +1172,7 @@ def _status_from_text(raw_status_text: str) -> str:
 
 
 def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
-    """Update job status fields in a staged Slurm YAML."""
+    """Update job status fields in a staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
     raw_status_text = fetch_status_text(slurm_data)
     log_paths, log_texts = fetch_slurm_log_texts(slurm_data)
@@ -1179,14 +1180,14 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     slurm_data["remote_slurm_log_paths"] = log_paths
     slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
-    _write_staged_slurm_file(config_path, slurm_data)
+    _write_staged_hpc_file(config_path, slurm_data)
     _print_slurm_log_texts(log_paths, log_texts)
     print(raw_status_text)
     return slurm_data
 
 
 def start_slurm_job(config_path: str) -> Dict[str, Any]:
-    """Submit the Slurm job and update the staged Slurm YAML."""
+    """Submit the Slurm job and update the staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
     _debug(slurm_data, f"loaded start file: {config_path}")
     _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
@@ -1226,13 +1227,13 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
     slurm_data["status"] = _status_from_text(raw_status_text)
     _debug(slurm_data, f"status after submit: {slurm_data['status']}")
     _debug(slurm_data, "step: write start file")
-    _write_staged_slurm_file(config_path, slurm_data)
+    _write_staged_hpc_file(config_path, slurm_data)
     print(raw_status_text)
     return slurm_data
 
 
 def download_slurm_outputs(config_path: str) -> None:
-    """Download files listed in download sections of the staged Slurm YAML."""
+    """Download files listed in download sections of the staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
     for section in ("download_output_paths", "download_log_paths"):
         mapping = slurm_data.get(section) or {}
@@ -1250,11 +1251,11 @@ def download_slurm_outputs(config_path: str) -> None:
 
 
 def _build_cli_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vhr-slurm", description="Prepare and manage vhrharmonize Slurm jobs.")
+    parser = argparse.ArgumentParser(prog="vhr-hpc", description="Prepare and manage vhrharmonize Slurm jobs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and staged Slurm YAML.")
-    prepare_parser.add_argument("--config", required=True, help="Path to Slurm config YAML.")
+    prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and staged HPC YAML.")
+    prepare_parser.add_argument("--config", required=True, help="Path to HPC config YAML.")
     for key in SLURM_PREPARE_CONFIG_KEYS:
         option = f"--{key.replace('_', '-')}"
         if key == "provider_upload_keys":
@@ -1262,10 +1263,10 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         elif key == "debug_logs":
             prepare_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during start.")
         else:
-            prepare_parser.add_argument(option, help=f"Override Slurm config key: {key}.")
+            prepare_parser.add_argument(option, help=f"Override HPC config key: {key}.")
 
     upload_parser = subparsers.add_parser("upload", help="Prepare when needed and upload mapped files.")
-    upload_parser.add_argument("--config", required=True, help="Path to prepare Slurm YAML or staged Slurm YAML.")
+    upload_parser.add_argument("--config", required=True, help="Path to prepare HPC YAML or staged HPC YAML.")
     for key in SLURM_PREPARE_CONFIG_KEYS:
         option = f"--{key.replace('_', '-')}"
         if key == "provider_upload_keys":
@@ -1273,21 +1274,21 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         elif key == "debug_logs":
             upload_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during upload.")
         else:
-            upload_parser.add_argument(option, help=f"Override Slurm config key: {key}.")
+            upload_parser.add_argument(option, help=f"Override HPC config key: {key}.")
 
     start_parser = subparsers.add_parser("start", help="Submit the Slurm job.")
-    start_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
+    start_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
 
-    status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the staged Slurm YAML.")
-    status_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
+    status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the staged HPC YAML.")
+    status_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
 
-    download_parser = subparsers.add_parser("download", help="Download files listed in the staged Slurm YAML.")
-    download_parser.add_argument("--config", required=True, help="Path to staged Slurm YAML.")
+    download_parser = subparsers.add_parser("download", help="Download files listed in the staged HPC YAML.")
+    download_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
     return parser
 
 
 def _collect_prepare_overrides(args: argparse.Namespace) -> Dict[str, Any]:
-    """Collect CLI values that should override Slurm YAML config defaults."""
+    """Collect CLI values that should override HPC YAML config defaults."""
     overrides: Dict[str, Any] = {}
     for key in SLURM_PREPARE_CONFIG_KEYS:
         value = getattr(args, key, None)
@@ -1303,12 +1304,12 @@ def main(argv: List[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "prepare":
         slurm_data = prepare_slurm_plan(args.config, overrides=_collect_prepare_overrides(args))
-        print(f"Wrote staged Slurm file {slurm_data['staged_slurm_file']}")
+        print(f"Wrote staged HPC file {slurm_data['staged_hpc_file']}")
         print(f"Wrote staged provider file {slurm_data['staged_provider_file']}")
         return 0
     if args.command == "upload":
         slurm_data = upload_slurm_files(args.config, overrides=_collect_prepare_overrides(args))
-        print(f"Uploaded files listed in {slurm_data['staged_slurm_file']}")
+        print(f"Uploaded files listed in {slurm_data['staged_hpc_file']}")
         return 0
     if args.command == "start":
         start_slurm_job(args.config)
@@ -1333,7 +1334,7 @@ __all__ = [
     "load_yaml_file",
     "make_run_id",
     "prepare_slurm_plan",
-    "resolve_staged_slurm_file",
+    "resolve_staged_hpc_file",
     "resolve_staged_slurm_start_file",
     "resolve_run_id",
     "resolve_staged_provider_file",

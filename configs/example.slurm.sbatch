@@ -1,5 +1,5 @@
 #!/bin/bash
-# Edit SBATCH lines for the cluster; vhr-slurm passes the remote provider config as $1
+# Edit SBATCH lines for the cluster; vhr-hpc passes the remote provider config as $1
 
 
 # Node settings
