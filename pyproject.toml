@@ -118,7 +118,7 @@ all = [
 ]
 
 hpc = [
-    dask
+    "dask"
 ]
 
 [project.urls]
