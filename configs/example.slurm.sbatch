@@ -22,7 +22,7 @@ eval "$(conda shell.bash hook)"
 # Setup conda environment
 ENV_NAME="vhrharmonize"
 if [ ! -d "$(conda info --base)/envs/${ENV_NAME}" ]; then
-    conda create -y -n "${ENV_NAME}" -c conda-forge py6s sixs gdal python=3.11
+    conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge py6s sixs gdal pytorch torchvision cpuonly imageio python=3.11
 fi
 conda activate "${ENV_NAME}"
 
