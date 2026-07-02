@@ -71,6 +71,8 @@ WCMATCH_INPUT_FLAGS = (
     | glob.GLOBSTARLONG
     | glob.NEGATE
 )
+
+INPUT_FILE_STAGES = set(RASTER_STEP_ORDER)
 WCMATCH_GROUP_FLAGS = (
     getattr(wc_fnmatch, "BRACE", 0)
     | getattr(wc_fnmatch, "EXTMATCH", 0)
@@ -85,7 +87,7 @@ class SceneWorkflowState:
 
     scene: WorldViewScene
     step_dirs: Dict[str, str]
-    scene_bbox_wgs84: tuple[float, float, float, float]
+    scene_bbox_wgs84: Optional[tuple[float, float, float, float]]
     current_files: List[str]
     current_step: str = "file_source"
     pan_ortho_path: Optional[str] = None
@@ -123,7 +125,7 @@ def _get_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: 
     """
     image = _require_scene_image(scene, role)
     if step_name in {"file_source", "raw"}:
-        return image.tif_file
+        return image.step_file_paths.get("file_source", image.tif_file)
     step_path = image.step_file_paths.get(step_name)
     if not step_path:
         raise ValueError(
@@ -180,6 +182,39 @@ def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, floa
     gdf = gdf.to_crs(epsg=4326)
     minx, miny, maxx, maxy = gdf.total_bounds
     return float(minx), float(miny), float(maxx), float(maxy)
+
+
+def _normalize_input_file_stage_key(stage_key: str) -> str:
+    """Normalize an input_file_glob stage key to an internal raster step."""
+    if not isinstance(stage_key, str) or not stage_key.strip():
+        raise ValueError("input_file_glob stage keys must be non-empty strings.")
+    normalized = stage_key.strip().replace("-", "_")
+    if normalized not in INPUT_FILE_STAGES:
+        allowed = ", ".join(RASTER_STEP_ORDER)
+        raise ValueError(f"Unsupported input_file_glob stage '{stage_key}'. Allowed stages: {allowed}")
+    return normalized
+
+
+def input_file_stage_config_key(stage_name: str) -> str:
+    """Return the external input_file_glob key for an internal stage name."""
+    return _normalize_input_file_stage_key(stage_name)
+
+
+def _normalize_input_file_glob_entries(input_file_globs: object) -> List[Dict[str, str]]:
+    """Normalize input_file_glob to one-key dictionaries with string paths."""
+    raw_entries = input_file_globs if isinstance(input_file_globs, list) else [input_file_globs]
+    normalized_entries: List[Dict[str, str]] = []
+    for entry in raw_entries:
+        if isinstance(entry, str):
+            normalized_entries.append({"file_source": entry})
+            continue
+        if not isinstance(entry, dict) or len(entry) != 1:
+            raise ValueError("Each input_file_glob entry must be a one-key dictionary of stage: path.")
+        stage_key, pattern = next(iter(entry.items()))
+        if not isinstance(stage_key, str) or not isinstance(pattern, str):
+            raise ValueError("Each input_file_glob entry must have string stage and path values.")
+        normalized_entries.append({input_file_stage_config_key(stage_key): pattern})
+    return normalized_entries
 
 
 def _parse_int_csv(raw_values: str) -> List[int]:
@@ -374,7 +409,9 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
         Normalized config defaults mapping.
     """
     normalized = dict(config_defaults)
-    for list_key in ("input_file_glob", "filter_basename", "match_steps"):
+    if "input_file_glob" in normalized:
+        normalized["input_file_glob"] = _normalize_input_file_glob_entries(normalized["input_file_glob"])
+    for list_key in ("filter_basename", "match_steps"):
         if list_key in normalized and isinstance(normalized[list_key], str):
             normalized[list_key] = [normalized[list_key]]
     return normalized
@@ -432,6 +469,8 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
             scene_basename=state.scene.primary_basename,
         )
     else:
+        if state.scene_bbox_wgs84 is None:
+            raise ValueError(f"Scene footprint is required to download an online DEM: {state.scene.primary_basename}")
         download_opentopography_dem_for_bbox(
             min_lon=state.scene_bbox_wgs84[0],
             min_lat=state.scene_bbox_wgs84[1],
@@ -482,18 +521,50 @@ def _read_json(path: str) -> Dict:
     return loaded
 
 
-def _collect_input_files(input_file_globs: List[str]) -> List[str]:
-    """Collect input files from glob patterns.
-    Args:
-        input_file_globs: Glob patterns to scan.
-    Returns:
-        Unique absolute file paths.
-    """
-    matched_files: List[str] = []
-    for pattern in input_file_globs:
+def _collect_input_files_by_stage(input_file_globs: object) -> Dict[str, List[str]]:
+    """Collect input files from stage-keyed glob patterns."""
+    matched_by_stage: Dict[str, List[str]] = {}
+    for entry in _normalize_input_file_glob_entries(input_file_globs):
+        stage_key, pattern = next(iter(entry.items()))
+        stage_name = _normalize_input_file_stage_key(stage_key)
         matches = glob.glob(pattern, flags=WCMATCH_INPUT_FLAGS)
-        matched_files.extend(path for path in matches if os.path.isfile(path))
-    return sorted({os.path.abspath(path) for path in matched_files})
+        matched_by_stage.setdefault(stage_name, []).extend(path for path in matches if os.path.isfile(path))
+    return {stage: sorted({os.path.abspath(path) for path in paths}) for stage, paths in matched_by_stage.items()}
+
+
+def _collect_input_files(input_file_globs: object) -> List[str]:
+    """Collect unique input files from all stage-keyed glob patterns."""
+    matched_by_stage = _collect_input_files_by_stage(input_file_globs)
+    return sorted({path for paths in matched_by_stage.values() for path in paths})
+
+
+def _load_worldview_scenes_from_stage_paths(
+    input_files_by_stage: Mapping[str, List[str]],
+    *,
+    filter_basenames: Optional[List[str]],
+) -> List[WorldViewScene]:
+    """Load scenes while recording which workflow stage each input satisfies."""
+    scenes_by_key: Dict[tuple[str, str], WorldViewScene] = {}
+    for stage_name in RASTER_STEP_ORDER:
+        stage_files = input_files_by_stage.get(stage_name) or []
+        if not stage_files:
+            continue
+        for stage_scene in load_worldview_scenes_from_tif_files(stage_files, filter_basenames=filter_basenames):
+            key = (stage_scene.scene_id, stage_scene.catalog_id)
+            existing = scenes_by_key.get(key)
+            if existing is None:
+                scenes_by_key[key] = stage_scene
+                existing = stage_scene
+            for image in stage_scene.iter_images():
+                target_image = existing.get_image(image.image_role or "")
+                if target_image is None:
+                    existing.set_image(image)
+                    target_image = image
+                target_image.step_file_paths[stage_name] = image.tif_file
+                existing.step_outputs.setdefault(stage_name, [])
+                if image.tif_file not in existing.step_outputs[stage_name]:
+                    existing.step_outputs[stage_name].append(image.tif_file)
+    return [scenes_by_key[key] for key in sorted(scenes_by_key)]
 
 
 def _resolve_concurrent_processing(value: object) -> int:
@@ -1156,11 +1227,12 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
         Mapping of step names to expected output paths.
     """
     mul_image = _require_scene_image(state.scene, "mul")
-    pan_image = _require_scene_image(state.scene, "pan")
+    pan_image = state.scene.get_image("pan")
     if args.run_file_source:
         file_source_map: Dict[str, str] = {}
         file_source_map.update(_image_source_file_map(mul_image, state.step_dirs["file_source"]))
-        file_source_map.update(_image_source_file_map(pan_image, state.step_dirs["file_source"]))
+        if pan_image is not None:
+            file_source_map.update(_image_source_file_map(pan_image, state.step_dirs["file_source"]))
         file_source_outputs = list(file_source_map.values())
         current_mul_outputs = [file_source_map.get(os.path.abspath(mul_image.tif_file), mul_image.tif_file)]
     else:
@@ -1299,6 +1371,57 @@ def _get_scene_upload_source_files(
     return _scene_step_expected_outputs(expected_outputs, source_step)
 
 
+def _step_will_run_from(start_step: str, step_name: str, args: argparse.Namespace) -> bool:
+    """Return whether a raster step remains after the supplied input stage."""
+    return (
+        RASTER_STEP_ORDER.index(start_step) < RASTER_STEP_ORDER.index(step_name)
+        and bool(getattr(args, f"run_{step_name}", False))
+    )
+
+
+def _remaining_scene_input_requirements(start_step: str, args: argparse.Namespace) -> set[str]:
+    """Return source-side files required by remaining enabled raster steps."""
+    required: set[str] = set()
+    if _step_will_run_from(start_step, "atmospheric_correction", args):
+        required.update({"mul_metadata", "mul_shp"})
+    if _step_will_run_from(start_step, "orthorectification", args):
+        required.add("mul_metadata")
+        if str(args.dem_file_path).strip().lower() == "online":
+            required.add("mul_shp")
+        if args.run_pansharpen:
+            required.update({"pan_image", "pan_metadata"})
+    elif _step_will_run_from(start_step, "pansharpen", args):
+        required.add("pan_ortho")
+    return required
+
+
+def _validate_remaining_scene_inputs(
+    scene: WorldViewScene,
+    *,
+    start_step: str,
+    args: argparse.Namespace,
+) -> None:
+    """Validate files required by remaining enabled steps."""
+    required = _remaining_scene_input_requirements(start_step, args)
+    mul_image = _require_scene_image(scene, "mul")
+    pan_image = scene.get_image("pan")
+    if "mul_metadata" in required and mul_image.standardized_metadata is None:
+        raise ValueError(f"WorldView scene is missing multispectral metadata: {scene.scene_id}_{scene.catalog_id}")
+    if "mul_shp" in required and mul_image.shp_file is None:
+        raise ValueError(f"WorldView scene is missing multispectral shapefile: {scene.primary_basename}")
+    if "pan_image" in required and pan_image is None:
+        raise ValueError(
+            "WorldView scene needs a panchromatic image before pansharpening: "
+            f"{scene.scene_id}_{scene.catalog_id}"
+        )
+    if "pan_metadata" in required and pan_image is not None and pan_image.standardized_metadata is None:
+        raise ValueError(f"WorldView scene is missing panchromatic metadata: {scene.scene_id}_{scene.catalog_id}")
+    if "pan_ortho" in required:
+        raise ValueError(
+            "Input stage is before pansharpen but no prior orthorectification step will create a panchromatic ortho image."
+        )
+
+
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
     """Initialize workflow state for a scene.
     Args:
@@ -1307,22 +1430,27 @@ def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> 
     Returns:
         Initialized scene workflow state.
     """
+    start_step = _get_scene_input_start_step(scene)
     mul_image = _require_scene_image(scene, "mul")
-    pan_image = _require_scene_image(scene, "pan")
-    if mul_image.standardized_metadata is None:
-        raise ValueError(f"WorldView scene is missing multispectral metadata: {scene.scene_id}_{scene.catalog_id}")
-    if pan_image.standardized_metadata is None:
-        raise ValueError(f"WorldView scene is missing panchromatic metadata: {scene.scene_id}_{scene.catalog_id}")
-    if mul_image.shp_file is None:
-        raise ValueError(f"WorldView scene is missing multispectral shapefile: {scene.primary_basename}")
+    _validate_remaining_scene_inputs(scene, start_step=start_step, args=args)
+    start_path = _get_worldview_scene_step_path(scene, "mul", start_step)
 
     state = SceneWorkflowState(
         scene=scene,
         step_dirs=_resolve_scene_step_dirs(args, scene),
-        scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file),
-        current_files=[_get_worldview_scene_step_path(scene, "mul", "file_source")],
+        scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file) if mul_image.shp_file else None,
+        current_files=[start_path],
+        current_step=start_step,
     )
     return state
+
+
+def _get_scene_input_start_step(scene: WorldViewScene) -> str:
+    """Return the latest raster step supplied by input_file_glob for a scene."""
+    for step_name in reversed(RASTER_STEP_ORDER):
+        if scene.step_outputs.get(step_name):
+            return step_name
+    return "file_source"
 
 
 def _register_step_outputs(
@@ -1841,7 +1969,7 @@ def _copy_file_source_bundle(path_map: Mapping[str, str]) -> None:
 
 def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the file_source staging step."""
-    if not args.run_file_source:
+    if not args.run_file_source or state.current_step != "file_source":
         return state.current_files
     output_dir = state.step_dirs["file_source"]
     path_map: Dict[str, str] = {}
@@ -1919,6 +2047,8 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
     mul_image = state.scene.mul_image
     if mul_image is None or mul_image.standardized_metadata is None:
         return
+    if state.scene_bbox_wgs84 is None:
+        raise ValueError(f"Scene footprint is required to fetch atmosphere data: {state.scene.primary_basename}")
     plan = plan_step_outputs(
         [mul_image.tif_file],
         output_dir=state.step_dirs["fetch_atmosphere"],
@@ -2734,9 +2864,11 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
     """
     mul_image = state.scene.mul_image
     pan_image = state.scene.pan_image
-    if mul_image is None or pan_image is None:
-        raise ValueError("WorldView scene is missing required images for metadata reporting.")
-    resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
+    if mul_image is None:
+        raise ValueError("WorldView scene is missing required multispectral image for metadata reporting.")
+    resolved_dem_file_path = state.dem_file_path
+    if resolved_dem_file_path is None and args.dem_file_path not in (None, "", "online"):
+        resolved_dem_file_path = str(args.dem_file_path)
     final_scene_path, scene_metadata_path = _final_output_paths(state, args)
     saved_output_paths = _scene_saved_output_paths(state, args)
     payload = {
@@ -2745,7 +2877,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "catalog_id": state.scene.catalog_id,
             "scene_root": state.scene.root_folder_path,
             "mul_photo_basename": mul_image.basename,
-            "pan_photo_basename": pan_image.basename,
+            "pan_photo_basename": pan_image.basename if pan_image else None,
             "started_utc": scene_started_utc,
             "completed_utc": datetime.utcnow().isoformat() + "Z",
         },
@@ -2753,15 +2885,15 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "mul_imd_file": mul_image.imd_file,
             "mul_tif_file": mul_image.tif_file,
             "mul_shp_file": mul_image.shp_file,
-            "pan_imd_file": pan_image.imd_file,
-            "pan_tif_file": pan_image.tif_file,
-            "pan_shp_file": pan_image.shp_file,
+            "pan_imd_file": pan_image.imd_file if pan_image else None,
+            "pan_tif_file": pan_image.tif_file if pan_image else None,
+            "pan_shp_file": pan_image.shp_file if pan_image else None,
             "dem_file_path": resolved_dem_file_path,
             "dem_file_path_requested": args.dem_file_path,
         },
         "standardized_metadata": {
             "mul": mul_image.standardized_metadata.to_dict() if mul_image.standardized_metadata else None,
-            "pan": pan_image.standardized_metadata.to_dict() if pan_image.standardized_metadata else None,
+            "pan": pan_image.standardized_metadata.to_dict() if pan_image and pan_image.standardized_metadata else None,
         },
         "workflow": {
             "run_from_existing": args.run_from_existing,
@@ -2877,7 +3009,8 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
 
     scene_started_utc = datetime.utcnow().isoformat() + "Z"
     _run_file_source_step(state, args)
-    _run_fetch_atmosphere_step(state, args)
+    if args.run_atmospheric_correction and RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
+        _run_fetch_atmosphere_step(state, args)
 
     if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
         _run_atmospheric_correction_step(state, args)
@@ -2921,11 +3054,12 @@ def _run_workflow(args: argparse.Namespace) -> int:
         Process exit code.
     """
     filter_basenames = _parse_filter_basenames(args.filter_basename)
-    input_files = _collect_input_files(args.input_file_glob)
+    input_files_by_stage = _collect_input_files_by_stage(args.input_file_glob)
+    input_files = sorted({path for paths in input_files_by_stage.values() for path in paths})
     if not input_files:
         raise ValueError("No files matched --input-file-glob.")
 
-    scenes = load_worldview_scenes_from_tif_files(input_files, filter_basenames=filter_basenames)
+    scenes = _load_worldview_scenes_from_stage_paths(input_files_by_stage, filter_basenames=filter_basenames)
     log(
         f"Discovered {len(input_files)} input files across {len(scenes)} scenes",
         enabled=args.log_to_console,
@@ -2982,7 +3116,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--input-file-glob",
         action="append",
-        help="Glob used to find input files, for example '/data/**/*.TIF'.",
+        help="Glob used to find raw source files. YAML configs should use one-key stage dictionaries.",
     )
     parser.add_argument(
         "--dem-file-path",

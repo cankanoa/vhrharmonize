@@ -16,11 +16,12 @@
 
 shared:
   input_file_glob:
-    - /path/to/worldview_bundle_root/**/*.TIF # Should match both mul and pan images (which will be grouped together)
-  # input_file_glob: "/path/to/multiline/worldivew/image/search/**/@(\
+    - file_source: /path/to/worldview_bundle_root/**/*.TIF # Raw source inputs; should match both MUL and PAN images.
+  # input_file_glob:
+  #   - cloud_mask: "/path/to/multiline/worldivew/image/search/**/@(\
   # 17DEC08211835-[MP]1BS-016445318010_01_P011*|\
   # 19SEP09211403-[MP]1BS-200011908666_01_P001*\
-  # ).TIF"
+  # )_cloudmasked.TIF" # Already completed cloud-mask inputs.
   output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing

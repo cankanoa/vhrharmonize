@@ -364,7 +364,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         yaml.safe_dump(
             {
                 "shared": {
-                    "input_file_glob": [str(bundle["scene_root"] / "**" / "*.TIF")],
+                    "input_file_glob": [{"file_source": str(bundle["scene_root"] / "**" / "*.TIF")}],
                     "dem_file_path": str(dem_path),
                     "alignment_fixed_image": str(unlisted_path),
                     "output_dir": str(tmp_path / "local_output"),
@@ -451,7 +451,13 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert staged["shared"]["temp_dir"] == "/remote/runs/RUN123/tmp"
     assert staged["shared"]["output_dir"] == "/remote/runs/RUN123/output"
     assert staged["shared"]["dem_file_path"] == "/remote/references/dem.tif"
-    assert all(path.startswith("/remote/runs/RUN123/tmp/inputs") for path in staged["shared"]["input_file_glob"])
+    staged_inputs = staged["shared"]["input_file_glob"]
+    assert all(isinstance(item, dict) and len(item) == 1 for item in staged_inputs)
+    assert all(next(iter(item)) == "file_source" for item in staged_inputs)
+    assert all(
+        next(iter(item.values())).startswith("/remote/runs/RUN123/output/file_source")
+        for item in staged_inputs
+    )
     assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
     assert (
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]

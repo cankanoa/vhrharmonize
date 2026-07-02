@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 import yaml
 
 from vhrharmonize.cli import worldview
-from vhrharmonize.providers.worldview import WorldViewImage, WorldViewScene, load_worldview_scenes_from_tif_files
+from vhrharmonize.providers.worldview import WorldViewImage, WorldViewScene
 
 
 PATH_TEMPLATE_RUN_ID = "{run_id}"
@@ -316,6 +316,10 @@ def _discover_worldview_input_files(args: argparse.Namespace) -> List[str]:
     return worldview._collect_input_files(args.input_file_glob)
 
 
+def _discover_worldview_input_files_by_stage(args: argparse.Namespace) -> Dict[str, List[str]]:
+    return worldview._collect_input_files_by_stage(args.input_file_glob)
+
+
 def _iter_existing(paths: Iterable[str | None]) -> Iterable[str]:
     for path in paths:
         if path and os.path.isfile(path):
@@ -339,31 +343,79 @@ def _first_path(paths: Iterable[str]) -> List[str]:
     return []
 
 
+def _worldview_file_source_upload_inputs(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files for the file_source step."""
+    del args, state
+    upload_files: List[str] = []
+    upload_files.extend(_worldview_image_required_files(scene.mul_image))
+    upload_files.extend(_worldview_image_required_files(scene.pan_image))
+    input_entries = [(source_step, image.tif_file) for image in scene.iter_images()]
+    return upload_files, input_entries, upload_files
+
+
+def _worldview_raster_step_upload_inputs(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files for processed raster steps."""
+    if source_step in scene.step_outputs:
+        step_files = list(_iter_existing(scene.step_outputs.get(source_step, [])))
+    elif state is not None:
+        step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
+    else:
+        step_files = []
+    return step_files, [(source_step, path) for path in _first_path(step_files)], []
+
+
+WORLDVIEW_UPLOAD_INPUT_COLLECTORS = {
+    "file_source": _worldview_file_source_upload_inputs,
+}
+
+
+def _worldview_scene_upload_inputs_for_step(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files and remote discovery inputs for one selected source step."""
+    collector = WORLDVIEW_UPLOAD_INPUT_COLLECTORS.get(source_step, _worldview_raster_step_upload_inputs)
+    return collector(scene, args, source_step=source_step, state=state)
+
+
 def collect_worldview_upload_input_files(
     scenes: Iterable[WorldViewScene],
     args: argparse.Namespace,
-) -> Tuple[List[str], List[str], List[str]]:
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
     """Collect workflow source files and remote discovery TIFF inputs."""
     paths: List[str] = []
-    input_tifs: List[str] = []
+    input_entries: List[Tuple[str, str]] = []
     file_source_files: List[str] = []
     for scene in scenes:
-        state = _make_planning_state(scene, args)
-        source_step = worldview._get_scene_upload_source_step(state, args)
-        if source_step == "file_source":
-            scene_source_files: List[str] = []
-            scene_source_files.extend(_worldview_image_required_files(scene.mul_image))
-            scene_source_files.extend(_worldview_image_required_files(scene.pan_image))
-            paths.extend(scene_source_files)
-            file_source_files.extend(scene_source_files)
-            for image in scene.iter_images():
-                input_tifs.append(image.tif_file)
-            continue
-
-        step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
-        paths.extend(step_files)
-        input_tifs.extend(_first_path(step_files))
-    return sorted(set(paths)), sorted(set(input_tifs)), sorted(set(file_source_files))
+        explicit_source_step = worldview._get_scene_input_start_step(scene)
+        state = None if explicit_source_step != "file_source" else _make_planning_state(scene, args)
+        source_step = explicit_source_step if state is None else worldview._get_scene_upload_source_step(state, args)
+        step_uploads, step_input_entries, step_file_source_files = _worldview_scene_upload_inputs_for_step(
+            scene,
+            args,
+            source_step=source_step,
+            state=state,
+        )
+        paths.extend(step_uploads)
+        input_entries.extend(step_input_entries)
+        file_source_files.extend(step_file_source_files)
+    unique_entries = sorted(set((stage, os.path.abspath(path)) for stage, path in input_entries))
+    return sorted(set(paths)), unique_entries, sorted(set(file_source_files))
 
 
 def _common_parent(paths: Iterable[str]) -> str:
@@ -525,15 +577,15 @@ def _set_nested_key(config: MutableMapping[str, Any], section: str, key: str, va
 def rewrite_worldview_config_for_remote(
     provider_config_data: Mapping[str, Any],
     *,
-    input_tif_paths: Iterable[str] | None,
+    input_file_entries: Iterable[Mapping[str, str]] | None,
     path_rewrites: Mapping[str, str],
     remote_output_dir: str,
     remote_temp_dir: str,
 ) -> Dict[str, Any]:
     """Rewrite a WorldView provider config for remote execution."""
     rewritten = copy.deepcopy(dict(provider_config_data))
-    if input_tif_paths is not None:
-        _set_nested_key(rewritten, "shared", "input_file_glob", list(input_tif_paths))
+    if input_file_entries is not None:
+        _set_nested_key(rewritten, "shared", "input_file_glob", list(input_file_entries))
     _set_nested_key(rewritten, "shared", "output_dir", remote_output_dir)
     _set_nested_key(rewritten, "shared", "temp_dir", remote_temp_dir)
 
@@ -556,7 +608,7 @@ def write_staged_worldview_config_for_remote(
     staged_config_path: str,
     provider_config_data: Mapping[str, Any],
     *,
-    input_tif_paths: Iterable[str] | None,
+    input_file_entries: Iterable[Mapping[str, str]] | None,
     path_rewrites: Mapping[str, str],
     remote_output_dir: str,
     remote_temp_dir: str,
@@ -565,7 +617,7 @@ def write_staged_worldview_config_for_remote(
     del source_config_path
     staged_config_data = rewrite_worldview_config_for_remote(
         provider_config_data,
-        input_tif_paths=input_tif_paths,
+        input_file_entries=input_file_entries,
         path_rewrites=path_rewrites,
         remote_output_dir=remote_output_dir,
         remote_temp_dir=remote_temp_dir,
@@ -798,14 +850,17 @@ def prepare_slurm_plan(
     provider_config = _require_config_value(slurm_config, "provider_config")
     provider_config_data = load_yaml_file(provider_config)
     local_args = _load_worldview_args(provider_config)
-    input_tifs = _discover_worldview_input_files(local_args)
-    scenes = load_worldview_scenes_from_tif_files(input_tifs, filter_basenames=local_args.filter_basename)
+    input_files_by_stage = _discover_worldview_input_files_by_stage(local_args)
+    scenes = worldview._load_worldview_scenes_from_stage_paths(
+        input_files_by_stage,
+        filter_basenames=local_args.filter_basename,
+    )
     upload_keys = [str(key) for key in (slurm_config.get("provider_upload_keys") or [])]
-    input_tifs_for_remote: List[str] = []
+    input_entries_for_remote: List[Tuple[str, str]] = []
     if "input_file_glob" in upload_keys:
         (
             upload_input_files,
-            input_tifs_for_remote,
+            input_entries_for_remote,
             file_source_files,
         ) = collect_worldview_upload_input_files(scenes, local_args)
         input_uploads = build_input_path_map(
@@ -823,8 +878,12 @@ def prepare_slurm_plan(
     )
     reference_uploads = build_reference_path_map(reference_files, remote_reference_dir=paths["remote_reference_dir"])
     path_rewrites = {**input_uploads, **reference_uploads}
-    remote_input_tifs = (
-        [path_rewrites[os.path.abspath(path)] for path in input_tifs_for_remote if os.path.abspath(path) in path_rewrites]
+    remote_input_entries = (
+        [
+            {worldview.input_file_stage_config_key(stage): path_rewrites[os.path.abspath(path)]}
+            for stage, path in input_entries_for_remote
+            if os.path.abspath(path) in path_rewrites
+        ]
         if input_uploads
         else None
     )
@@ -838,7 +897,7 @@ def prepare_slurm_plan(
         provider_config,
         staged_config,
         provider_config_data,
-        input_tif_paths=remote_input_tifs,
+        input_file_entries=remote_input_entries,
         path_rewrites=path_rewrites,
         remote_output_dir=paths["remote_output_dir"],
         remote_temp_dir=paths["remote_temp_dir"],
