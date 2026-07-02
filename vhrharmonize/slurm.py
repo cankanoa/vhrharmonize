@@ -989,6 +989,10 @@ def _ssh_command(slurm_data: Mapping[str, Any], *, open_master: bool = False) ->
     return ["ssh", *_ssh_option_args(slurm_data, open_master=open_master), _ssh_target(slurm_data)]
 
 
+def _ssh_close_command(slurm_data: Mapping[str, Any]) -> List[str]:
+    return ["ssh", *_ssh_option_args(slurm_data), "-O", "exit", _ssh_target(slurm_data)]
+
+
 def _ssh_command_string(slurm_data: Mapping[str, Any]) -> str:
     return " ".join(shlex.quote(part) for part in ["ssh", *_ssh_option_args(slurm_data)])
 
@@ -1298,6 +1302,34 @@ def start_slurm_job(config_path: str) -> Dict[str, Any]:
     return slurm_data
 
 
+def _require_submitted_job_id(slurm_data: Mapping[str, Any]) -> str:
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        raise ValueError("staged HPC YAML has no submitted_job_id.")
+    return job_id
+
+
+def stop_slurm_job(config_path: str) -> subprocess.CompletedProcess[str]:
+    """Cancel the submitted Slurm job listed in the staged HPC YAML."""
+    slurm_data = load_yaml_file(config_path)
+    job_id = _require_submitted_job_id(slurm_data)
+    result = _run_ssh(slurm_data, f"scancel {shlex.quote(job_id)}", check=True)
+    output = (result.stdout or "") + (result.stderr or "")
+    if output:
+        print(output)
+    return result
+
+
+def close_hpc_connection(config_path: str) -> subprocess.CompletedProcess[str]:
+    """Close the SSH multiplex master for the staged HPC YAML target."""
+    slurm_data = load_yaml_file(config_path)
+    result = _run_local_command(_ssh_close_command(slurm_data), check=False)
+    output = (result.stdout or "") + (result.stderr or "")
+    if output:
+        print(output)
+    return result
+
+
 def download_slurm_outputs(config_path: str) -> None:
     """Download files listed in download sections of the staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
@@ -1348,6 +1380,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the staged HPC YAML.")
     status_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
 
+    stop_parser = subparsers.add_parser("stop", help="Cancel the submitted Slurm job.")
+    stop_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
+    close_parser = subparsers.add_parser("close", help="Close the SSH multiplex connection.")
+    close_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
     download_parser = subparsers.add_parser("download", help="Download files listed in the staged HPC YAML.")
     download_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
     return parser
@@ -1383,6 +1421,12 @@ def main(argv: List[str] | None = None) -> int:
     if args.command == "status":
         update_status_slurm_file(args.config)
         return 0
+    if args.command == "stop":
+        stop_slurm_job(args.config)
+        return 0
+    if args.command == "close":
+        close_hpc_connection(args.config)
+        return 0
     if args.command == "download":
         download_slurm_outputs(args.config)
         return 0
@@ -1393,6 +1437,7 @@ def main(argv: List[str] | None = None) -> int:
 __all__ = [
     "build_input_path_map",
     "build_reference_path_map",
+    "close_hpc_connection",
     "collect_provider_reference_files",
     "collect_worldview_upload_input_files",
     "download_slurm_outputs",
@@ -1407,6 +1452,7 @@ __all__ = [
     "resolve_slurm_paths",
     "rewrite_worldview_config_for_remote",
     "start_slurm_job",
+    "stop_slurm_job",
     "update_status_slurm_file",
     "upload_required_files",
     "upload_slurm_files",

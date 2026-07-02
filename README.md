@@ -68,11 +68,16 @@ vhr-py6s --help
 
 To use on a super computer (slurm):
 ```
-vhr-hpc prepare --config configs/example.hpc.yml
-vhr-hpc upload --config configs/1.staged.hpc.yml
-vhr-hpc start --config configs/1.staged.hpc.yml
-vhr-hpc status --config configs/1.staged.hpc.yml
-vhr-hpc download --config configs/1.staged.hpc.yml
+vhr-hpc prepare --config configs/example.hpc.yml # Create staged HPC/provider/slurm files
+vhr-hpc upload --config configs/1.staged.hpc.yml # Upload required files
+vhr-hpc start --config configs/1.staged.hpc.yml # Submit the job
+vhr-hpc status --config configs/1.staged.hpc.yml # Print logs and job status
+vhr-hpc download --config configs/1.staged.hpc.yml # Download declared outputs
+
+# Other commands:
+vhr-hpc stop --config configs/1.staged.hpc.yml # Cancel the submitted job
+vhr-hpc close --config configs/1.staged.hpc.yml # Close the SSH multiplex connection
+
 ```
 
 ## Contributing

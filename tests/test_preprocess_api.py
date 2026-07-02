@@ -736,3 +736,49 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
     assert "stdout text" in captured
     assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
     assert captured.index("=== Slurm error log") < captured.index("JOBID STATE")
+
+
+def test_slurm_stop_and_close_are_narrow(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+
+    import vhrharmonize.slurm as slurm_mod
+
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "submitted_job_id": "123",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    ssh_calls = []
+    local_calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        ssh_calls.append(remote_command)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def fake_run_local(command, *, check=True, capture_output=True, stream_output=False):
+        local_calls.append(command)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    monkeypatch.setattr(slurm_mod, "_run_local_command", fake_run_local)
+
+    slurm_mod.stop_slurm_job(str(staged_slurm))
+    slurm_mod.close_hpc_connection(str(staged_slurm))
+
+    assert ssh_calls == ["scancel 123"]
+    assert local_calls == [["ssh", "-O", "exit", "user@host"]]
+
+    staged_slurm.write_text(
+        yaml.safe_dump({"ssh_host": "host", "ssh_user": "user", "submitted_job_id": None}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="submitted_job_id"):
+        slurm_mod.stop_slurm_job(str(staged_slurm))
