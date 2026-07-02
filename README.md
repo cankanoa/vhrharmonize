@@ -78,6 +78,9 @@ vhr-hpc download --config configs/1.staged.hpc.yml # Download declared outputs
 vhr-hpc stop --config configs/1.staged.hpc.yml # Cancel the submitted job
 vhr-hpc close --config configs/1.staged.hpc.yml # Close the SSH multiplex connection
 
+# Or all together:
+vhr-hpc prepare --config configs/example.hpc.yml && vhr-hpc upload --config configs/1.staged.hpc.yml && vhr-hpc start --config configs/1.staged.hpc.yml && vhr-hpc status --config configs/1.staged.hpc.yml && vhr-hpc download --config configs/1.staged.hpc.yml
+
 ```
 
 ## Contributing
