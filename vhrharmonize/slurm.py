@@ -332,6 +332,13 @@ def _worldview_image_required_files(image: WorldViewImage | None) -> List[str]:
     return list(_iter_existing(paths))
 
 
+def _first_path(paths: Iterable[str]) -> List[str]:
+    """Return the first path from an ordered list of candidate step outputs."""
+    for path in paths:
+        return [path]
+    return []
+
+
 def collect_worldview_upload_input_files(
     scenes: Iterable[WorldViewScene],
     args: argparse.Namespace,
@@ -355,7 +362,7 @@ def collect_worldview_upload_input_files(
 
         step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
         paths.extend(step_files)
-        input_tifs.extend(path for path in step_files if os.path.splitext(path)[1].lower() in {".tif", ".tiff"})
+        input_tifs.extend(_first_path(step_files))
     return sorted(set(paths)), sorted(set(input_tifs)), sorted(set(file_source_files))
 
 

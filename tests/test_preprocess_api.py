@@ -462,6 +462,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     from vhrharmonize.slurm import (
+        _first_path,
         _parse_sbatch_log_templates,
         _remote_quote,
         _resolve_remote_sbatch_log_templates,
@@ -499,6 +500,12 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
         slurm_start_file=str(tmp_path / "example.slurm.sbatch"),
         run_id="RUN123",
     ) == str(tmp_path / "RUN123.staged.slurm.sbatch")
+    assert _first_path(
+        [
+            "/remote/scene_py6s_ortho_pansharpen_cloudmasked.tif",
+            "/remote/scene_py6s_ortho_pansharpen_cloudmask.tif",
+        ]
+    ) == ["/remote/scene_py6s_ortho_pansharpen_cloudmasked.tif"]
     sbatch_path = tmp_path / "job.sbatch"
     sbatch_path.write_text(
         "#!/bin/bash\n"
