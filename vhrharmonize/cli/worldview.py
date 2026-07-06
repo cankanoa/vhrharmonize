@@ -1700,7 +1700,6 @@ def _run_named_radiometric_group(
     radiometric_kwargs.setdefault("shared_input_images", child_inputs)
     radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
     radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
-    radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
     radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
     radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
     _log_step_plan(
@@ -1771,7 +1770,6 @@ def _run_default_radiometric_normalization(
     radiometric_kwargs.setdefault("shared_input_images", available_paths)
     radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
     radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
-    radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
     radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
     radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
     _log_step_plan(
