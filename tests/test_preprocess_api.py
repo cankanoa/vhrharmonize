@@ -730,12 +730,14 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
         "error": "~/remote/slurm-123.err",
     }
     assert updated["raw_slurm_log_text"] == {"error": "stderr text\n", "output": "stdout text\n"}
+    assert updated["raw_sbatch_queue_text"] == "JOBID STATE TIME NODES NODELIST(REASON)\n123 COMPLETED 0:01 1 node\n"
     assert "=== Slurm error log: ~/remote/slurm-123.err ===" in captured
     assert "stderr text" in captured
     assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
     assert "stdout text" in captured
     assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
     assert captured.index("=== Slurm error log") < captured.index("JOBID STATE")
+    assert captured.rfind("JOBID STATE") > captured.index("JOBID STATE")
 
 
 def test_slurm_stop_and_close_are_narrow(tmp_path: Path, monkeypatch) -> None:

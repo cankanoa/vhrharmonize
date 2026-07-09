@@ -69,6 +69,7 @@ LOG_HEADER_BY_KEY = {
     "uploaded_input_paths": "# All mappings are local file: remote file.",
     "raw_slurm_log_text": "# Raw Slurm log text.",
     "raw_status_text": "# Raw scheduler status text.",
+    "raw_sbatch_queue_text": "# Raw sbatch queue text.",
 }
 
 WORLDVIEW_HEADER_BY_KEY = {
@@ -112,6 +113,7 @@ def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
     raw_start_output = ordered.pop("raw_start_output", None)
     raw_slurm_log_text = ordered.pop("raw_slurm_log_text", None)
     raw_status_text = ordered.pop("raw_status_text", None)
+    raw_sbatch_queue_text = ordered.pop("raw_sbatch_queue_text", None)
     if upload_results is not None:
         ordered["upload_results"] = upload_results
     if raw_start_output is not None:
@@ -120,6 +122,8 @@ def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
         ordered["raw_slurm_log_text"] = raw_slurm_log_text
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
+    if raw_sbatch_queue_text is not None:
+        ordered["raw_sbatch_queue_text"] = raw_sbatch_queue_text
     write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
 
 
@@ -149,6 +153,119 @@ def write_staged_template_file(source_path: str, staged_path: str, variables: Ma
     os.makedirs(os.path.dirname(os.path.abspath(staged_path)) or ".", exist_ok=True)
     with open(staged_path, "w", encoding="utf-8") as handle:
         handle.write(rendered)
+
+
+def _yaml_scalar(value: Any) -> str:
+    rendered = yaml.safe_dump(value, default_flow_style=True, sort_keys=False, width=4096).strip()
+    lines = [line for line in rendered.splitlines() if line != "..."]
+    return lines[0] if lines else "null"
+
+
+def _render_yaml_key_block(key: str, value: Any, *, indent: int) -> List[str]:
+    prefix = " " * indent
+    if not isinstance(value, (dict, list)):
+        return [f"{prefix}{key}: {_yaml_scalar(value)}"]
+    rendered = yaml.safe_dump(value, sort_keys=False, width=4096).rstrip()
+    return [f"{prefix}{key}:"] + [f"{prefix}  {line}" for line in rendered.splitlines()]
+
+
+def _line_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _find_top_level_section(lines: List[str], section: str) -> tuple[int, int] | None:
+    pattern = re.compile(rf"^{re.escape(section)}\s*:\s*(?:#.*)?$")
+    for index, line in enumerate(lines):
+        if not pattern.match(line):
+            continue
+        end = index + 1
+        while end < len(lines):
+            candidate = lines[end]
+            if candidate.strip() and _line_indent(candidate) == 0 and not candidate.lstrip().startswith("#"):
+                break
+            end += 1
+        return index, end
+    return None
+
+
+def _replace_yaml_key_block(
+    lines: List[str],
+    *,
+    key: str,
+    value: Any,
+    start: int,
+    end: int,
+    indent: int | None = None,
+    insert_indent: int = 2,
+) -> None:
+    if indent is None:
+        pattern = re.compile(rf"^(\s*){re.escape(key)}\s*:")
+    else:
+        pattern = re.compile(rf"^{' ' * indent}{re.escape(key)}\s*:")
+    index = start
+    while index < end:
+        if lines[index].lstrip().startswith("#"):
+            index += 1
+            continue
+        match = pattern.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        current_indent = indent if indent is not None else len(match.group(1))
+        block_end = index + 1
+        while block_end < end:
+            candidate = lines[block_end]
+            if candidate.strip() and _line_indent(candidate) <= current_indent:
+                break
+            block_end += 1
+        rendered = _render_yaml_key_block(key, value, indent=current_indent)
+        lines[index:block_end] = rendered
+        return
+    lines[end:end] = _render_yaml_key_block(key, value, indent=insert_indent)
+
+
+def _iter_leaf_changes(
+    original: Any,
+    rewritten: Any,
+    path: tuple[str, ...] = (),
+) -> Iterable[tuple[tuple[str, ...], Any]]:
+    if isinstance(rewritten, dict) and isinstance(original, Mapping):
+        for key, rewritten_value in rewritten.items():
+            yield from _iter_leaf_changes(original.get(key), rewritten_value, (*path, str(key)))
+        return
+    if original != rewritten and path:
+        yield path, rewritten
+
+
+def _write_staged_yaml_from_source(
+    source_path: str,
+    staged_path: str,
+    original_data: Mapping[str, Any],
+    staged_data: Mapping[str, Any],
+) -> None:
+    """Copy YAML text and replace only values changed by staging."""
+    with open(source_path, "r", encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    for path, value in _iter_leaf_changes(original_data, staged_data):
+        key = path[-1]
+        if len(path) >= 2:
+            section_range = _find_top_level_section(lines, path[0])
+            if section_range is not None:
+                _replace_yaml_key_block(
+                    lines,
+                    key=key,
+                    value=value,
+                    start=section_range[0] + 1,
+                    end=section_range[1],
+                    insert_indent=2,
+                )
+                continue
+        _replace_yaml_key_block(lines, key=key, value=value, start=0, end=len(lines), insert_indent=0)
+
+    os.makedirs(os.path.dirname(os.path.abspath(staged_path)) or ".", exist_ok=True)
+    with open(staged_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines).rstrip() + "\n")
 
 
 def _require_config_value(config: Mapping[str, Any], key: str) -> str:
@@ -613,8 +730,7 @@ def write_staged_worldview_config_for_remote(
     remote_output_dir: str,
     remote_temp_dir: str,
 ) -> None:
-    """Write a staged provider YAML containing parsed params rewritten for remote execution."""
-    del source_config_path
+    """Copy a provider YAML and replace staged remote execution values."""
     staged_config_data = rewrite_worldview_config_for_remote(
         provider_config_data,
         input_file_entries=input_file_entries,
@@ -622,7 +738,12 @@ def write_staged_worldview_config_for_remote(
         remote_output_dir=remote_output_dir,
         remote_temp_dir=remote_temp_dir,
     )
-    write_sectioned_yaml_file(staged_config_path, staged_config_data, header_by_key=WORLDVIEW_HEADER_BY_KEY)
+    _write_staged_yaml_from_source(
+        source_config_path,
+        staged_config_path,
+        provider_config_data,
+        staged_config_data,
+    )
 
 
 def _rewrite_string_path(value: str, path_rewrites: Mapping[str, str]) -> str:
@@ -1164,12 +1285,25 @@ def _status_command(job_id: str) -> str:
     )
 
 
+def _sbatch_queue_command(job_id: str) -> str:
+    return f"squeue -j {shlex.quote(job_id)} || true"
+
+
 def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
     """Fetch raw Slurm status text for the submitted job."""
     job_id = str(slurm_data.get("submitted_job_id") or "").strip()
     if not job_id or job_id == "None":
         return "No submitted_job_id in staged HPC YAML."
     result = _run_ssh(slurm_data, _status_command(job_id), check=False)
+    return (result.stdout or "") + (result.stderr or "")
+
+
+def fetch_sbatch_queue_text(slurm_data: Mapping[str, Any]) -> str:
+    """Fetch raw squeue output for the submitted job."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        return "No submitted_job_id in staged HPC YAML."
+    result = _run_ssh(slurm_data, _sbatch_queue_command(job_id), check=False)
     return (result.stdout or "") + (result.stderr or "")
 
 
@@ -1246,13 +1380,20 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     slurm_data = load_yaml_file(config_path)
     raw_status_text = fetch_status_text(slurm_data)
     log_paths, log_texts = fetch_slurm_log_texts(slurm_data)
+    try:
+        raw_sbatch_queue_text = fetch_sbatch_queue_text(slurm_data)
+    except Exception as exc:
+        raw_sbatch_queue_text = f"Could not fetch sbatch queue: {exc}"
     slurm_data["raw_status_text"] = raw_status_text
+    slurm_data["raw_sbatch_queue_text"] = raw_sbatch_queue_text
     slurm_data["remote_slurm_log_paths"] = log_paths
     slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
     _write_staged_hpc_file(config_path, slurm_data)
     _print_slurm_log_texts(log_paths, log_texts)
     print(raw_status_text)
+    if raw_sbatch_queue_text.strip():
+        print(raw_sbatch_queue_text)
     return slurm_data
 
 
@@ -1410,6 +1551,7 @@ def main(argv: List[str] | None = None) -> int:
         slurm_data = prepare_slurm_plan(args.config, overrides=_collect_prepare_overrides(args))
         print(f"Wrote staged HPC file {slurm_data['staged_hpc_file']}")
         print(f"Wrote staged provider file {slurm_data['staged_provider_file']}")
+        print(f"Wrote staged Slurm start file {slurm_data['staged_slurm_start_file']}")
         return 0
     if args.command == "upload":
         slurm_data = upload_slurm_files(args.config, overrides=_collect_prepare_overrides(args))
@@ -1441,6 +1583,7 @@ __all__ = [
     "collect_provider_reference_files",
     "collect_worldview_upload_input_files",
     "download_slurm_outputs",
+    "fetch_sbatch_queue_text",
     "fetch_status_text",
     "load_yaml_file",
     "make_run_id",
