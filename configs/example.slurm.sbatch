@@ -5,9 +5,9 @@
 # Node settings
 #SBATCH --account=uh
 #SBATCH --partition=shared
-#SBATCH --time=04:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=200G
 #SBATCH --job-name=vhr-worldview
 #SBATCH --output=../logs/slurm-%j.out
 #SBATCH --error=../logs/slurm-%j.err
@@ -47,6 +47,7 @@ python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 
 
 # Run with configs from yml
+export PYTHONUNBUFFERED=1
 vhr-worldview --config-yaml "$1"
 
 
