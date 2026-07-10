@@ -1327,7 +1327,7 @@ def _status_command(job_id: str) -> str:
 
 
 def _sbatch_queue_command(job_id: str) -> str:
-    return f"squeue -j {shlex.quote(job_id)} || true"
+    return f"squeue --start -j {shlex.quote(job_id)} || true"
 
 
 def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
@@ -1385,6 +1385,13 @@ def _print_slurm_log_texts(log_paths: Mapping[str, str], log_texts: Mapping[str,
         print(text if text else "(empty)")
 
 
+def _print_slurm_status_text(raw_status_text: str, raw_sbatch_queue_text: str) -> None:
+    print("\n=== Slurm status ===")
+    print(raw_status_text)
+    if raw_sbatch_queue_text.strip():
+        print(raw_sbatch_queue_text)
+
+
 def _status_from_text(raw_status_text: str) -> str:
     states: List[Tuple[str, str]] = []
     for line in raw_status_text.splitlines():
@@ -1432,9 +1439,7 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     slurm_data["status"] = _status_from_text(raw_status_text)
     _write_staged_hpc_file(config_path, slurm_data)
     _print_slurm_log_texts(log_paths, log_texts)
-    print(raw_status_text)
-    if raw_sbatch_queue_text.strip():
-        print(raw_sbatch_queue_text)
+    _print_slurm_status_text(raw_status_text, raw_sbatch_queue_text)
     return slurm_data
 
 

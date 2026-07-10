@@ -712,6 +712,8 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
     )
 
     def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        if "squeue --start" in remote_command:
+            return SimpleNamespace(stdout="JOBID PARTITION NAME USER ST START_TIME NODES SCHEDNODES NODELIST(REASON)\n123 shared job user PD 2026-07-09T12:00:00 1 node (Priority)\n", stderr="", returncode=0)
         if "squeue" in remote_command:
             return SimpleNamespace(stdout="JOBID STATE TIME NODES NODELIST(REASON)\n123 COMPLETED 0:01 1 node\n", stderr="", returncode=0)
         if "slurm-123.err" in remote_command:
@@ -730,14 +732,16 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
         "error": "~/remote/slurm-123.err",
     }
     assert updated["raw_slurm_log_text"] == {"error": "stderr text\n", "output": "stdout text\n"}
-    assert updated["raw_sbatch_queue_text"] == "JOBID STATE TIME NODES NODELIST(REASON)\n123 COMPLETED 0:01 1 node\n"
+    assert "START_TIME" in updated["raw_sbatch_queue_text"]
     assert "=== Slurm error log: ~/remote/slurm-123.err ===" in captured
     assert "stderr text" in captured
     assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
     assert "stdout text" in captured
+    assert "=== Slurm status ===" in captured
+    assert "2026-07-09T12:00:00" in captured
     assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
-    assert captured.index("=== Slurm error log") < captured.index("JOBID STATE")
-    assert captured.rfind("JOBID STATE") > captured.index("JOBID STATE")
+    assert captured.index("=== Slurm error log") < captured.index("=== Slurm status ===")
+    assert captured.index("JOBID STATE") > captured.index("=== Slurm status ===")
 
 
 def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> None:
