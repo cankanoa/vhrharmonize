@@ -527,17 +527,9 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
         "error": "~/remote/logs/slurm-%j.err",
     }
     status_command = _status_command("123")
-    assert "2>/dev/null" in status_command
-    assert "echo '---'" not in status_command
-    assert status_command.count("sacct") == 1
-    assert _status_from_text(
-        """---
-JobID|State|Elapsed|ExitCode|NodeList
-13590014|FAILED|00:00:01|1:0|cn-05-08-08
-13590014.batch|FAILED|00:00:01|1:0|cn-05-08-08
-13590014.extern|COMPLETED|00:00:01|0:0|cn-05-08-08
-"""
-    ) == "failed"
+    assert status_command == "scontrol show job 123 -dd"
+    assert _status_from_text("JobId=13590014 JobName=vhr-worldview\n   JobState=FAILED Reason=None") == "failed"
+    assert _status_from_text("JobId=123 JobName=vhr-worldview\n   JobState=RUNNING Reason=None") == "running"
 
 
 def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
@@ -672,7 +664,7 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
         if "sbatch" in remote_command:
             return SimpleNamespace(stdout="Submitted batch job 123\n", stderr="", returncode=0)
         return SimpleNamespace(
-            stdout="---\nJobID|State|Elapsed|ExitCode|NodeList\n123|PENDING|00:00:00|0:0|None assigned\n",
+            stdout="JobId=123 JobName=vhr-worldview\n   JobState=PENDING Reason=Priority\n",
             stderr="",
             returncode=0,
         )
@@ -712,10 +704,8 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
     )
 
     def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
-        if "squeue --start" in remote_command:
-            return SimpleNamespace(stdout="JOBID PARTITION NAME USER ST START_TIME NODES SCHEDNODES NODELIST(REASON)\n123 shared job user PD 2026-07-09T12:00:00 1 node (Priority)\n", stderr="", returncode=0)
-        if "squeue" in remote_command:
-            return SimpleNamespace(stdout="JOBID STATE TIME NODES NODELIST(REASON)\n123 COMPLETED 0:01 1 node\n", stderr="", returncode=0)
+        if "scontrol show job" in remote_command:
+            return SimpleNamespace(stdout="JobId=123 JobName=vhr-worldview\n   JobState=COMPLETED Reason=None\n", stderr="", returncode=0)
         if "slurm-123.err" in remote_command:
             return SimpleNamespace(stdout="stderr text\n", stderr="", returncode=0)
         if "slurm-123.out" in remote_command:
@@ -732,16 +722,15 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
         "error": "~/remote/slurm-123.err",
     }
     assert updated["raw_slurm_log_text"] == {"error": "stderr text\n", "output": "stdout text\n"}
-    assert "START_TIME" in updated["raw_sbatch_queue_text"]
+    assert "JobState=COMPLETED" in updated["raw_status_text"]
     assert "=== Slurm error log: ~/remote/slurm-123.err ===" in captured
     assert "stderr text" in captured
     assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
     assert "stdout text" in captured
     assert "=== Slurm status ===" in captured
-    assert "2026-07-09T12:00:00" in captured
+    assert "JobState=COMPLETED" in captured
     assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
     assert captured.index("=== Slurm error log") < captured.index("=== Slurm status ===")
-    assert captured.index("JOBID STATE") > captured.index("=== Slurm status ===")
 
 
 def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> None:

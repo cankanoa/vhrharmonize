@@ -69,7 +69,6 @@ LOG_HEADER_BY_KEY = {
     "uploaded_input_paths": "# All mappings are local file: remote file.",
     "raw_slurm_log_text": "# Raw Slurm log text.",
     "raw_status_text": "# Raw scheduler status text.",
-    "raw_sbatch_queue_text": "# Raw sbatch queue text.",
 }
 
 WORLDVIEW_HEADER_BY_KEY = {
@@ -113,7 +112,6 @@ def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
     raw_start_output = ordered.pop("raw_start_output", None)
     raw_slurm_log_text = ordered.pop("raw_slurm_log_text", None)
     raw_status_text = ordered.pop("raw_status_text", None)
-    raw_sbatch_queue_text = ordered.pop("raw_sbatch_queue_text", None)
     if upload_results is not None:
         ordered["upload_results"] = upload_results
     if raw_start_output is not None:
@@ -122,8 +120,6 @@ def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
         ordered["raw_slurm_log_text"] = raw_slurm_log_text
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
-    if raw_sbatch_queue_text is not None:
-        ordered["raw_sbatch_queue_text"] = raw_sbatch_queue_text
     write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
 
 
@@ -1315,19 +1311,7 @@ def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None 
 
 
 def _status_command(job_id: str) -> str:
-    quoted_job = shlex.quote(job_id)
-    return (
-        f"status=$(squeue -j {quoted_job} -o '%i %T %M %D %R' 2>/dev/null || true); "
-        "if [ -n \"$(printf '%s\\n' \"$status\" | sed '1d')\" ]; then "
-        "printf '%s\\n' \"$status\"; "
-        "else "
-        f"sacct -j {quoted_job} --format=JobID,State,Elapsed,ExitCode,NodeList%30 -P || true; "
-        "fi"
-    )
-
-
-def _sbatch_queue_command(job_id: str) -> str:
-    return f"squeue --start -j {shlex.quote(job_id)} || true"
+    return f"scontrol show job {shlex.quote(job_id)} -dd"
 
 
 def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
@@ -1336,15 +1320,6 @@ def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
     if not job_id or job_id == "None":
         return "No submitted_job_id in staged HPC YAML."
     result = _run_ssh(slurm_data, _status_command(job_id), check=False)
-    return (result.stdout or "") + (result.stderr or "")
-
-
-def fetch_sbatch_queue_text(slurm_data: Mapping[str, Any]) -> str:
-    """Fetch raw squeue output for the submitted job."""
-    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
-    if not job_id or job_id == "None":
-        return "No submitted_job_id in staged HPC YAML."
-    result = _run_ssh(slurm_data, _sbatch_queue_command(job_id), check=False)
     return (result.stdout or "") + (result.stderr or "")
 
 
@@ -1385,40 +1360,21 @@ def _print_slurm_log_texts(log_paths: Mapping[str, str], log_texts: Mapping[str,
         print(text if text else "(empty)")
 
 
-def _print_slurm_status_text(raw_status_text: str, raw_sbatch_queue_text: str) -> None:
+def _print_slurm_status_text(raw_status_text: str) -> None:
     print("\n=== Slurm status ===")
     print(raw_status_text)
-    if raw_sbatch_queue_text.strip():
-        print(raw_sbatch_queue_text)
 
 
 def _status_from_text(raw_status_text: str) -> str:
-    states: List[Tuple[str, str]] = []
-    for line in raw_status_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("---") or stripped.startswith("JOBID"):
-            continue
-        if "|" in stripped:
-            fields = stripped.split("|")
-            if len(fields) < 2 or fields[0].upper() == "JOBID":
-                continue
-            job_name = fields[0]
-            state = fields[1].upper().split()[0]
-            if not job_name.endswith(".extern"):
-                states.append((job_name, state))
-            continue
-        fields = stripped.split()
-        if len(fields) >= 2 and fields[0].isdigit():
-            states.append((fields[0], fields[1].upper()))
-
-    primary_states = [state for job_name, state in states if "." not in job_name] or [
-        state for _, state in states
-    ]
-    if any(value in primary_states for value in ("FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY")):
+    match = re.search(r"\bJobState=([A-Za-z_]+)", raw_status_text)
+    if not match:
+        return "unknown"
+    state = match.group(1).upper()
+    if state in {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"}:
         return "failed"
-    if any(value in primary_states for value in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")):
+    if state in {"RUNNING", "PENDING", "CONFIGURING", "COMPLETING"}:
         return "running"
-    if "COMPLETED" in primary_states:
+    if state == "COMPLETED":
         return "completed"
     return "unknown"
 
@@ -1428,18 +1384,13 @@ def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
     slurm_data = load_yaml_file(config_path)
     raw_status_text = fetch_status_text(slurm_data)
     log_paths, log_texts = fetch_slurm_log_texts(slurm_data)
-    try:
-        raw_sbatch_queue_text = fetch_sbatch_queue_text(slurm_data)
-    except Exception as exc:
-        raw_sbatch_queue_text = f"Could not fetch sbatch queue: {exc}"
     slurm_data["raw_status_text"] = raw_status_text
-    slurm_data["raw_sbatch_queue_text"] = raw_sbatch_queue_text
     slurm_data["remote_slurm_log_paths"] = log_paths
     slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
     _write_staged_hpc_file(config_path, slurm_data)
     _print_slurm_log_texts(log_paths, log_texts)
-    _print_slurm_status_text(raw_status_text, raw_sbatch_queue_text)
+    _print_slurm_status_text(raw_status_text)
     return slurm_data
 
 
@@ -1629,7 +1580,6 @@ __all__ = [
     "collect_provider_reference_files",
     "collect_worldview_upload_input_files",
     "download_slurm_outputs",
-    "fetch_sbatch_queue_text",
     "fetch_status_text",
     "load_yaml_file",
     "make_run_id",
