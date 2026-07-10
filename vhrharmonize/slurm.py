@@ -237,6 +237,31 @@ def _iter_leaf_changes(
         yield path, rewritten
 
 
+def _collect_yaml_key_ranges(source_text: str) -> Dict[tuple[str, ...], tuple[int, int, int]]:
+    """Collect source line ranges for YAML key blocks using parser marks."""
+    root = yaml.compose(source_text)
+    ranges: Dict[tuple[str, ...], tuple[int, int, int]] = {}
+
+    def _walk_mapping(node: Any, path: tuple[str, ...] = ()) -> None:
+        if getattr(node, "id", None) != "mapping":
+            return
+        entries = list(getattr(node, "value", []))
+        for index, (key_node, value_node) in enumerate(entries):
+            key = str(getattr(key_node, "value", ""))
+            current_path = (*path, key)
+            start_line = key_node.start_mark.line
+            if index + 1 < len(entries):
+                end_line = entries[index + 1][0].start_mark.line
+            else:
+                end_line = value_node.end_mark.line + 1
+            ranges[current_path] = (start_line, end_line, key_node.start_mark.column)
+            _walk_mapping(value_node, current_path)
+
+    if root is not None:
+        _walk_mapping(root)
+    return ranges
+
+
 def _write_staged_yaml_from_source(
     source_path: str,
     staged_path: str,
@@ -245,9 +270,25 @@ def _write_staged_yaml_from_source(
 ) -> None:
     """Copy YAML text and replace only values changed by staging."""
     with open(source_path, "r", encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
+        source_text = handle.read()
+    lines = source_text.splitlines()
 
-    for path, value in _iter_leaf_changes(original_data, staged_data):
+    changes = list(_iter_leaf_changes(original_data, staged_data))
+    ranges = _collect_yaml_key_ranges(source_text)
+    fallback_changes: List[tuple[tuple[str, ...], Any]] = []
+
+    ranged_changes = []
+    for path, value in changes:
+        key_range = ranges.get(path)
+        if key_range is None:
+            fallback_changes.append((path, value))
+            continue
+        ranged_changes.append((key_range, path[-1], value))
+
+    for (start, end, indent), key, value in sorted(ranged_changes, key=lambda item: item[0][0], reverse=True):
+        lines[start:end] = _render_yaml_key_block(key, value, indent=indent)
+
+    for path, value in fallback_changes:
         key = path[-1]
         if len(path) >= 2:
             section_range = _find_top_level_section(lines, path[0])

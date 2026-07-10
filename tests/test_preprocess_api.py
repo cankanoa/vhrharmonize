@@ -740,6 +740,42 @@ def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> 
     assert captured.rfind("JOBID STATE") > captured.index("JOBID STATE")
 
 
+def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    source = tmp_path / "example.worldview.yml"
+    staged = tmp_path / "staged.worldview.yml"
+    source.write_text(
+        "shared:\n"
+        "  input_file_glob:\n"
+        "    - cloud_mask: \"/data/**/@(\\\n"
+        "  A*|\\\n"
+        "  B*\\\n"
+        "  ).TIF\"\n"
+        "  output_dir: local_output\n"
+        "  temp_dir: local_temp\n",
+        encoding="utf-8",
+    )
+    original = slurm_mod.load_yaml_file(str(source))
+
+    slurm_mod.write_staged_worldview_config_for_remote(
+        str(source),
+        str(staged),
+        original,
+        input_file_entries=[{"cloud_mask": "/remote/image.tif"}],
+        path_rewrites={},
+        remote_output_dir="/remote/output",
+        remote_temp_dir="/remote/temp",
+    )
+
+    staged_text = staged.read_text(encoding="utf-8")
+    staged_data = slurm_mod.load_yaml_file(str(staged))
+    assert staged_data["shared"]["input_file_glob"] == [{"cloud_mask": "/remote/image.tif"}]
+    assert staged_data["shared"]["output_dir"] == "/remote/output"
+    assert "A*|" not in staged_text
+    assert ").TIF" not in staged_text
+
+
 def test_slurm_stop_and_close_are_narrow(tmp_path: Path, monkeypatch) -> None:
     import pytest
 
