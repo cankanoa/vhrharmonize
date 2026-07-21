@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 
 import yaml
@@ -1222,24 +1223,6 @@ def _remote_parent(path: str) -> str:
     return os.path.dirname(path.rstrip("/")) or "."
 
 
-def _rsync_upload(slurm_data: Mapping[str, Any], local_path: str, remote_path: str) -> subprocess.CompletedProcess[str]:
-    if not os.path.isfile(local_path):
-        raise FileNotFoundError(local_path)
-    debug = _debug_enabled(slurm_data)
-    remote_parent = _remote_parent(remote_path)
-    mkdir_command = f"mkdir -p {_remote_quote(remote_parent)}"
-    _debug(slurm_data, f"creating remote directory: {remote_parent}")
-    _run_ssh(slurm_data, mkdir_command, capture_output=not debug, stream_output=debug)
-    command = ["rsync", "-a", "--itemize-changes"]
-    if debug:
-        command.append("--info=progress2")
-    if _ssh_option_args(slurm_data):
-        command.extend(["-e", _ssh_command_string(slurm_data)])
-    command.extend([local_path, f"{_ssh_target(slurm_data)}:{remote_path}"])
-    _debug(slurm_data, "starting rsync")
-    return _run_local_command(command, capture_output=not debug, stream_output=debug)
-
-
 def _scp_download(slurm_data: Mapping[str, Any], remote_path: str, local_path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(local_path)) or ".", exist_ok=True)
     command = ["scp", "-p"]
@@ -1260,30 +1243,105 @@ def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str,
             yield section, str(local_path), str(remote_path)
 
 
+def _upload_root_for_section(slurm_data: Mapping[str, Any], section: str) -> str:
+    if section == "uploaded_input_paths":
+        return _require_config_value(slurm_data, "remote_output_dir")
+    if section == "uploaded_reference_paths":
+        return _require_config_value(slurm_data, "remote_reference_dir")
+    raise ValueError(f"Unsupported upload section: {section}")
+
+
+def _remote_relative_to_root(remote_path: str, remote_root: str) -> str | None:
+    root = remote_root.rstrip("/")
+    if remote_path == root:
+        return os.path.basename(remote_path)
+    prefix = f"{root}/"
+    if remote_path.startswith(prefix):
+        return remote_path[len(prefix):]
+    return None
+
+
+def _safe_remote_relative_path(path: str) -> str:
+    normalized = os.path.normpath(path).lstrip("/")
+    if normalized in {"", "."} or normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+        raise ValueError(f"Unsafe remote relative path: {path}")
+    return normalized
+
+
+def _stage_upload_tree(upload_items: Iterable[Tuple[str, str, str, str]], stage_root: str) -> None:
+    seen: Dict[str, str] = {}
+    for _section, local_path, remote_path, remote_relative_path in upload_items:
+        if not os.path.isfile(local_path):
+            raise FileNotFoundError(local_path)
+        safe_relative_path = _safe_remote_relative_path(remote_relative_path)
+        previous_source = seen.get(safe_relative_path)
+        if previous_source is not None and os.path.abspath(previous_source) != os.path.abspath(local_path):
+            raise ValueError(f"Multiple local files map to one remote path: {remote_path}")
+        seen[safe_relative_path] = local_path
+        staged_path = os.path.join(stage_root, safe_relative_path)
+        os.makedirs(os.path.dirname(staged_path), exist_ok=True)
+        if os.path.lexists(staged_path):
+            os.unlink(staged_path)
+        os.symlink(os.path.abspath(local_path), staged_path)
+
+
+def _rsync_upload_tree(
+    slurm_data: Mapping[str, Any],
+    *,
+    stage_root: str,
+    remote_root: str,
+) -> subprocess.CompletedProcess[str]:
+    debug = _debug_enabled(slurm_data)
+    command = ["rsync", "-aL", "--itemize-changes"]
+    if debug:
+        command.append("--info=progress2")
+    command.extend(["--rsync-path", f"mkdir -p {_remote_quote(remote_root)} && rsync"])
+    if _ssh_option_args(slurm_data):
+        command.extend(["-e", _ssh_command_string(slurm_data)])
+    command.extend([f"{stage_root.rstrip('/')}/", f"{_ssh_target(slurm_data)}:{remote_root.rstrip('/')}/"])
+    _debug(slurm_data, f"starting batched rsync to {remote_root}")
+    return _run_local_command(command, capture_output=not debug, stream_output=debug)
+
+
+def _group_upload_items_by_remote_root(
+    slurm_data: Mapping[str, Any],
+    upload_items: Iterable[Tuple[str, str, str]],
+) -> Dict[str, List[Tuple[str, str, str, str]]]:
+    grouped: Dict[str, List[Tuple[str, str, str, str]]] = {}
+    for section, local_path, remote_path in upload_items:
+        remote_root = _upload_root_for_section(slurm_data, section)
+        remote_relative_path = _remote_relative_to_root(remote_path, remote_root)
+        if remote_relative_path is None:
+            remote_root = _remote_parent(remote_path)
+            remote_relative_path = os.path.basename(remote_path)
+        grouped.setdefault(remote_root, []).append((section, local_path, remote_path, remote_relative_path))
+    return grouped
+
+
 def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
     """Upload missing or stale files listed in the staged HPC YAML."""
     results: Dict[str, Dict[str, str]] = {}
     upload_items = list(_iter_upload_maps(slurm_data))
     _debug(slurm_data, f"checking {len(upload_items)} upload files")
-    for section, local_path, remote_path in upload_items:
-        label = f"{section}: {local_path} -> {remote_path}"
+    grouped_uploads = _group_upload_items_by_remote_root(slurm_data, upload_items)
+    for remote_root, grouped_items in grouped_uploads.items():
+        print(f"syncing {len(grouped_items)} files -> {remote_root}", flush=True)
         try:
-            _debug(slurm_data, f"rsync check: {os.path.basename(local_path)}")
-            print(f"syncing {label}", flush=True)
-            result = _rsync_upload(slurm_data, local_path, remote_path)
+            with tempfile.TemporaryDirectory(prefix="vhr-hpc-upload-") as stage_root:
+                _stage_upload_tree(grouped_items, stage_root)
+                result = _rsync_upload_tree(slurm_data, stage_root=stage_root, remote_root=remote_root)
             rsync_output = ((result.stdout or "") + (result.stderr or "")).strip()
             status = "rsync_complete" if _debug_enabled(slurm_data) else ("synced" if rsync_output else "current")
-            if status == "current":
-                print(f"already current {label}")
-            else:
-                print(f"{status} {label}")
-                if rsync_output:
-                    _debug(slurm_data, f"rsync changed {os.path.basename(local_path)}: {rsync_output}")
-            results[local_path] = {"remote_path": remote_path, "status": status}
+            print(f"{status} {len(grouped_items)} files -> {remote_root}", flush=True)
+            if rsync_output:
+                _debug(slurm_data, f"rsync output for {remote_root}: {rsync_output}")
+            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
+                results[local_path] = {"remote_path": remote_path, "status": status}
         except Exception as exc:
-            print(f"sync error {label}", flush=True)
+            print(f"sync error {len(grouped_items)} files -> {remote_root}", flush=True)
             print(exc)
-            results[local_path] = {"remote_path": remote_path, "status": "error", "error": str(exc)}
+            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
+                results[local_path] = {"remote_path": remote_path, "status": "error", "error": str(exc)}
             raise
     return results
 
