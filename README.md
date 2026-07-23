@@ -1,6 +1,5 @@
 # vhrharmonize: VHR Satellite Imagery Preprocessing Library
-
-![PyPI Version](https://img.shields.io/pypi/v/vhrharmonize)
+[![PyPI version](https://img.shields.io/pypi/v/vhrharmonize.svg)](https://pypi.org/project/vhrharmonize/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/vhrharmonize?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=GREEN&left_text=PyPI+Downloads)](https://pepy.tech/projects/vhrharmonize)
 [![Your-License-Badge](https://img.shields.io/badge/License-MIT-green)](#)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15311571.svg)](https://doi.org/10.5281/zenodo.15311571)
