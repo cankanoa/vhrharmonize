@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
       
 
@@ -1445,7 +1445,7 @@
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;vhrharmonize[all]&quot;</span>
 </code></pre></div>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>configs/worldview.example.yml<span class="w"> </span>configs/worldview.yml
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>configs/example.worldview.yml<span class="w"> </span>configs/worldview.yml
 
 vhr-worldview<span class="w"> </span>--config-yaml<span class="w"> </span>configs/worldview.yml
 </code></pre></div>
@@ -1462,16 +1462,18 @@ vhr-worldview<span class="w"> </span>--config-yaml<span class="w"> </span>config
 <li>DEM and projection: <code>--dem-file-path</code>, <code>--dem-online-api-key</code>, <code>--dem-online-source</code>, <code>--dem-online-api-endpoint</code>, <code>--dem-online-timeout-s</code>, <code>--epsg</code>, <code>--footprint-epsg</code></li>
 <li>Shared output/runtime: <code>--output-dir</code>, <code>--temp-dir</code>, <code>--keep-temp-dir</code>, <code>--nodata-value</code>, <code>--dtype</code>, <code>--log-to-console</code>, <code>--concurrent-processing</code>, <code>--overview-scales</code></li>
 <li>Scene reuse and filtering: <code>--skip-existing/--no-skip-existing</code>, <code>--run-from-existing/--no-run-from-existing</code>, <code>--max-cloud-cover-to-process</code></li>
-<li>Per-step enable/save/overview flags: <code>--run-fetch-atmosphere</code>, <code>--save-fetch-atmosphere</code>, <code>--run-atmospheric-correction</code>, <code>--save-atmospheric-correction</code>, <code>--calculate-overviews-atmospheric-correction</code>, <code>--run-orthorectification</code>, <code>--save-orthorectification</code>, <code>--calculate-overviews-orthorectification</code>, <code>--run-pansharpen</code>, <code>--save-pansharpen</code>, <code>--calculate-overviews-pansharpen</code>, <code>--run-cloud-mask</code>, <code>--save-cloud-mask</code>, <code>--calculate-overviews-cloud-mask</code>, <code>--run-alignment</code>, <code>--save-alignment</code>, <code>--calculate-overviews-alignment</code>, <code>--run-radiometric-normalization</code>, <code>--save-radiometric-normalization</code>, <code>--calculate-overviews-radiometric-normalization</code></li>
-<li>Step save paths support: <code>$temp</code>, <code>$temp/...</code>, <code>$output</code>, <code>$output/...</code>, <code>./relative/to/mul</code>, <code>/absolute/path</code>, <code>relative/to/current/working/directory</code></li>
-<li>Output suffixes: <code>--fetch-atmosphere-output-suffix</code>, <code>--atmospheric-correction-output-suffix</code>, <code>--orthorectification-output-suffix</code>, <code>--orthorectification-pan-output-suffix</code>, <code>--pansharpen-output-suffix</code>, <code>--cloud-mask-output-suffix</code>, <code>--cloud-mask-mask-suffix</code>, <code>--alignment-output-suffix</code>, <code>--radiometric-normalization-output</code></li>
+<li>Per-step enable/save/overview flags: <code>--run-fetch-atmosphere</code>, <code>--save-fetch-atmosphere</code>, <code>--run-atmospheric-correction</code>, <code>--save-atmospheric-correction</code>, <code>--calculate-overviews-atmospheric-correction</code>, <code>--run-orthorectification</code>, <code>--save-orthorectification</code>, <code>--calculate-overviews-orthorectification</code>, <code>--run-pansharpen</code>, <code>--save-pansharpen</code>, <code>--calculate-overviews-pansharpen</code>, <code>--run-cloud-mask</code>, <code>--save-cloud-mask</code>, <code>--calculate-overviews-cloud-mask</code>, <code>--run-alignment</code>, <code>--save-alignment</code>, <code>--calculate-overviews-alignment</code>, <code>--run-seamline-metadata</code>, <code>--save-seamline-metadata</code>, <code>--run-radiometric-normalization</code>, <code>--save-radiometric-normalization</code>, <code>--calculate-overviews-radiometric-normalization</code></li>
+<li>Per-scene step save paths support: <code>$temp</code>, <code>$temp/...</code>, <code>$output</code>, <code>$output/...</code>, <code>./relative/to/mul</code>, <code>/absolute/path</code>, <code>relative/to/current/working/directory</code></li>
+<li>Aggregate single-output save paths support: <code>$temp/file</code>, <code>/absolute/file</code>, <code>relative/to/current/working/directory/file</code></li>
+<li>Output suffixes: <code>--fetch-atmosphere-output-suffix</code>, <code>--atmospheric-correction-output-suffix</code>, <code>--orthorectification-output-suffix</code>, <code>--orthorectification-pan-output-suffix</code>, <code>--pansharpen-output-suffix</code>, <code>--cloud-mask-output-suffix</code>, <code>--cloud-mask-mask-suffix</code>, <code>--alignment-output-suffix</code></li>
 <li>Atmospheric method and FLAASH controls: <code>--atmospheric-method</code>, <code>--envi-engine-path</code>, <code>--flaash-dem-ground-percentile</code>, <code>--flaash-modtran-atm</code>, <code>--flaash-modtran-aer</code>, <code>--flaash-use-aerosol</code>, <code>--flaash-default-visibility</code>, <code>--skip-flaash</code>, <code>--existing-flaash-input</code>, plus any <code>--flaash-param-*</code> passthrough argument</li>
 <li>Py6S controls: <code>--py6s-atmosphere-profile</code>, <code>--py6s-aerosol-profile</code>, <code>--py6s-aot550</code>, <code>--py6s-visibility</code>, <code>--py6s-water-vapor</code>, <code>--py6s-ozone</code>, <code>--py6s-output-scale-factor</code>, <code>--py6s-output-dtype</code>, <code>--py6s-executable</code>, <code>--py6s-use-imd-radiance-calibration/--no-py6s-use-imd-radiance-calibration</code>, <code>--py6s-use-worldview-gain-offset-adjustment/--no-py6s-use-worldview-gain-offset-adjustment</code>, <code>--py6s-auto-atmos-source</code>, <code>--py6s-auto-atmos-grid-size</code>, <code>--py6s-auto-atmos-search-days</code>, <code>--py6s-auto-atmos-timeout-s</code>, <code>--py6s-auto-atmos-power-endpoint</code></li>
 <li>Fetch atmosphere controls: <code>--fetch-atmosphere-source</code>, <code>--fetch-atmosphere-grid-size</code>, <code>--fetch-atmosphere-search-days</code>, <code>--fetch-atmosphere-timeout-s</code>, <code>--fetch-atmosphere-power-endpoint</code>, <code>--fetch-atmosphere-ee-project</code>, <code>--fetch-atmosphere-authenticate/--no-fetch-atmosphere-authenticate</code>, <code>--fetch-atmosphere-env-file</code>, <code>--fetch-atmosphere-hours-window</code></li>
 <li>Orthorectification controls: <code>--existing-mul-ortho-input</code>, <code>--existing-pan-ortho-input</code>, <code>--orthorectification-rpc-refinement-geojson</code></li>
 <li>Cloud mask controls: <code>--cloud-mask-command</code>, <code>--cloud-mask-method</code>, <code>--cloud-mask-red-band-index</code>, <code>--cloud-mask-green-band-index</code>, <code>--cloud-mask-nir-band-index</code>, <code>--cloud-mask-classes</code>, <code>--cloud-buffer-pixels</code>, <code>--cloud-mask-inference-resolution-m</code>, <code>--cloud-mask-omnicloud-kwargs-json</code></li>
 <li>Alignment controls: <code>--alignment-fixed-image</code>, <code>--alignment-band-index</code>, <code>--alignment-moving-band-index</code>, <code>--alignment-fixed-band-index</code>, <code>--alignment-moving-nodata</code>, <code>--alignment-fixed-nodata</code>, <code>--alignment-output-nodata</code>, <code>--alignment-min-valid-fraction</code>, <code>--alignment-split-factor</code>, <code>--alignment-clip-fixed-to-moving/--no-alignment-clip-fixed-to-moving</code>, <code>--alignment-output-on-moving-grid/--no-alignment-output-on-moving-grid</code>, <code>--alignment-trim-edge-invalid/--no-alignment-trim-edge-invalid</code>, <code>--alignment-edge-trim-depth</code>, <code>--alignment-edge-trim-detection-band-index</code>, <code>--alignment-edge-trim-invalid-below</code>, <code>--alignment-edge-trim-invalid-above</code>, <code>--alignment-enforce-mutual-valid-mask/--no-alignment-enforce-mutual-valid-mask</code>, <code>--alignment-use-edge-proxies/--no-alignment-use-edge-proxies</code>, <code>--alignment-solve-resolution</code></li>
-<li>Radiometric normalization controls: <code>--radiometric-normalization-method</code>, <code>--radiometric-normalization-kwargs-json</code>, <code>--group-by-basename</code>, plus any <code>--match-*</code> passthrough argument</li>
+<li>Seamline metadata controls: <code>--seamline-metadata-layer</code>, <code>--seamline-metadata-image-field-name</code>, <code>--seamline-metadata-footprint-source</code>, <code>--seamline-metadata-calculate-bounds-eight-connected/--no-seamline-metadata-calculate-bounds-eight-connected</code></li>
+<li>Radiometric normalization controls: <code>--radiometric-normalization-method</code>, <code>--radiometric-normalization-kwargs-json</code>, <code>--group-by-basename</code>, plus current <code>--match-*</code> SpectralMatch passthrough arguments such as <code>--match-steps</code></li>
 </ul>
 
 
@@ -1531,7 +1533,7 @@ vhr-worldview<span class="w"> </span>--config-yaml<span class="w"> </span>config
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
