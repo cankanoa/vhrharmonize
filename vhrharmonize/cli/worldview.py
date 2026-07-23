@@ -5,17 +5,21 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import fnmatch
 import json
+import math
 import os
+import re
+import shutil
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import geopandas as gpd
 from osgeo import gdal
+from wcmatch import fnmatch as wc_fnmatch
 from wcmatch import glob
 
 from vhrharmonize.cli.cli_helpers import load_yaml_config
@@ -43,6 +47,7 @@ from vhrharmonize.preprocess.orthorectification import (
 )
 from vhrharmonize.preprocess.pansharpening import pansharpen_image
 from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
+from vhrharmonize.preprocess.seamline_metadata import write_seamline_metadata_gpkg
 from vhrharmonize.providers.worldview import (
     WorldViewImage,
     WorldViewScene,
@@ -50,7 +55,7 @@ from vhrharmonize.providers.worldview import (
 )
 
 RASTER_STEP_ORDER = [
-    "raw",
+    "file_source",
     "atmospheric_correction",
     "orthorectification",
     "pansharpen",
@@ -58,15 +63,33 @@ RASTER_STEP_ORDER = [
     "alignment",
 ]
 
+WCMATCH_INPUT_FLAGS = (
+    glob.GLOBSTAR
+    | glob.BRACE
+    | glob.EXTGLOB
+    | glob.GLOBTILDE
+    | glob.GLOBSTARLONG
+    | glob.NEGATE
+)
+
+INPUT_FILE_STAGES = set(RASTER_STEP_ORDER)
+WCMATCH_GROUP_FLAGS = (
+    getattr(wc_fnmatch, "BRACE", 0)
+    | getattr(wc_fnmatch, "EXTMATCH", 0)
+    | getattr(wc_fnmatch, "EXTGLOB", 0)
+    | getattr(wc_fnmatch, "NEGATE", 0)
+    | getattr(wc_fnmatch, "GLOBSTAR", 0)
+)
+
 @dataclass
 class SceneWorkflowState:
     """Workflow state for a single discovered WorldView scene."""
 
     scene: WorldViewScene
     step_dirs: Dict[str, str]
-    scene_bbox_wgs84: tuple[float, float, float, float]
+    scene_bbox_wgs84: Optional[tuple[float, float, float, float]]
     current_files: List[str]
-    current_step: str = "raw"
+    current_step: str = "file_source"
     pan_ortho_path: Optional[str] = None
     dem_file_path: Optional[str] = None
     fetch_atmosphere_result: Optional[Dict] = None
@@ -101,8 +124,8 @@ def _get_worldview_scene_step_path(scene: WorldViewScene, role: str, step_name: 
         Stored step output path.
     """
     image = _require_scene_image(scene, role)
-    if step_name == "raw":
-        return image.tif_file
+    if step_name in {"file_source", "raw"}:
+        return image.step_file_paths.get("file_source", image.tif_file)
     step_path = image.step_file_paths.get(step_name)
     if not step_path:
         raise ValueError(
@@ -159,6 +182,39 @@ def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, floa
     gdf = gdf.to_crs(epsg=4326)
     minx, miny, maxx, maxy = gdf.total_bounds
     return float(minx), float(miny), float(maxx), float(maxy)
+
+
+def _normalize_input_file_stage_key(stage_key: str) -> str:
+    """Normalize an input_file_glob stage key to an internal raster step."""
+    if not isinstance(stage_key, str) or not stage_key.strip():
+        raise ValueError("input_file_glob stage keys must be non-empty strings.")
+    normalized = stage_key.strip().replace("-", "_")
+    if normalized not in INPUT_FILE_STAGES:
+        allowed = ", ".join(RASTER_STEP_ORDER)
+        raise ValueError(f"Unsupported input_file_glob stage '{stage_key}'. Allowed stages: {allowed}")
+    return normalized
+
+
+def input_file_stage_config_key(stage_name: str) -> str:
+    """Return the external input_file_glob key for an internal stage name."""
+    return _normalize_input_file_stage_key(stage_name)
+
+
+def _normalize_input_file_glob_entries(input_file_globs: object) -> List[Dict[str, str]]:
+    """Normalize input_file_glob to one-key dictionaries with string paths."""
+    raw_entries = input_file_globs if isinstance(input_file_globs, list) else [input_file_globs]
+    normalized_entries: List[Dict[str, str]] = []
+    for entry in raw_entries:
+        if isinstance(entry, str):
+            normalized_entries.append({"file_source": entry})
+            continue
+        if not isinstance(entry, dict) or len(entry) != 1:
+            raise ValueError("Each input_file_glob entry must be a one-key dictionary of stage: path.")
+        stage_key, pattern = next(iter(entry.items()))
+        if not isinstance(stage_key, str) or not isinstance(pattern, str):
+            raise ValueError("Each input_file_glob entry must have string stage and path values.")
+        normalized_entries.append({input_file_stage_config_key(stage_key): pattern})
+    return normalized_entries
 
 
 def _parse_int_csv(raw_values: str) -> List[int]:
@@ -230,8 +286,30 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
         Radiometric normalization keyword arguments.
     """
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    radiometric_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
+    match_kwargs = _collect_prefixed_kwargs(args, "match_")
+    radiometric_kwargs.update(match_kwargs)
     return radiometric_kwargs
+
+
+def _radiometric_steps_include(args: argparse.Namespace, step_name: str) -> bool:
+    """Return whether the SpectralMatch steps list includes a step."""
+    steps = getattr(args, "match_steps", None)
+    if steps is None:
+        radiometric_kwargs = _parse_json_dict(getattr(args, "radiometric_normalization_kwargs_json", None))
+        steps = radiometric_kwargs.get("steps")
+    if steps is None:
+        return False
+    if isinstance(steps, str):
+        return steps == step_name
+    if isinstance(steps, (list, tuple)):
+        return step_name in steps
+    return False
+
+
+def _explicit_cli_arg_present(argv: List[str], arg_name: str) -> bool:
+    """Return whether a long CLI option was explicitly provided."""
+    option = f"--{arg_name.replace('_', '-')}"
+    return any(token == option or token.startswith(f"{option}=") for token in argv)
 
 
 def _coerce_unknown_arg_value(raw_value: str) -> object:
@@ -331,11 +409,11 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
         Normalized config defaults mapping.
     """
     normalized = dict(config_defaults)
-    for list_key in ("input_file_glob", "input_dir", "filter_basename"):
+    if "input_file_glob" in normalized:
+        normalized["input_file_glob"] = _normalize_input_file_glob_entries(normalized["input_file_glob"])
+    for list_key in ("filter_basename", "match_steps"):
         if list_key in normalized and isinstance(normalized[list_key], str):
             normalized[list_key] = [normalized[list_key]]
-    if "input_dir" in normalized and "input_file_glob" not in normalized:
-        normalized["input_file_glob"] = normalized.pop("input_dir")
     return normalized
 
 
@@ -391,6 +469,8 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
             scene_basename=state.scene.primary_basename,
         )
     else:
+        if state.scene_bbox_wgs84 is None:
+            raise ValueError(f"Scene footprint is required to download an online DEM: {state.scene.primary_basename}")
         download_opentopography_dem_for_bbox(
             min_lon=state.scene_bbox_wgs84[0],
             min_lat=state.scene_bbox_wgs84[1],
@@ -441,18 +521,50 @@ def _read_json(path: str) -> Dict:
     return loaded
 
 
-def _collect_input_files(input_file_globs: List[str]) -> List[str]:
-    """Collect input files from glob patterns.
-    Args:
-        input_file_globs: Glob patterns to scan.
-    Returns:
-        Unique absolute file paths.
-    """
-    matched_files: List[str] = []
-    for pattern in input_file_globs:
-        matches = glob.glob(pattern, flags=glob.GLOBSTAR | glob.BRACE | glob.EXTGLOB | glob.GLOBTILDE | glob.GLOBSTARLONG | glob.NEGATE)
-        matched_files.extend(path for path in matches if os.path.isfile(path))
-    return sorted({os.path.abspath(path) for path in matched_files})
+def _collect_input_files_by_stage(input_file_globs: object) -> Dict[str, List[str]]:
+    """Collect input files from stage-keyed glob patterns."""
+    matched_by_stage: Dict[str, List[str]] = {}
+    for entry in _normalize_input_file_glob_entries(input_file_globs):
+        stage_key, pattern = next(iter(entry.items()))
+        stage_name = _normalize_input_file_stage_key(stage_key)
+        matches = glob.glob(pattern, flags=WCMATCH_INPUT_FLAGS)
+        matched_by_stage.setdefault(stage_name, []).extend(path for path in matches if os.path.isfile(path))
+    return {stage: sorted({os.path.abspath(path) for path in paths}) for stage, paths in matched_by_stage.items()}
+
+
+def _collect_input_files(input_file_globs: object) -> List[str]:
+    """Collect unique input files from all stage-keyed glob patterns."""
+    matched_by_stage = _collect_input_files_by_stage(input_file_globs)
+    return sorted({path for paths in matched_by_stage.values() for path in paths})
+
+
+def _load_worldview_scenes_from_stage_paths(
+    input_files_by_stage: Mapping[str, List[str]],
+    *,
+    filter_basenames: Optional[List[str]],
+) -> List[WorldViewScene]:
+    """Load scenes while recording which workflow stage each input satisfies."""
+    scenes_by_key: Dict[tuple[str, str], WorldViewScene] = {}
+    for stage_name in RASTER_STEP_ORDER:
+        stage_files = input_files_by_stage.get(stage_name) or []
+        if not stage_files:
+            continue
+        for stage_scene in load_worldview_scenes_from_tif_files(stage_files, filter_basenames=filter_basenames):
+            key = (stage_scene.scene_id, stage_scene.catalog_id)
+            existing = scenes_by_key.get(key)
+            if existing is None:
+                scenes_by_key[key] = stage_scene
+                existing = stage_scene
+            for image in stage_scene.iter_images():
+                target_image = existing.get_image(image.image_role or "")
+                if target_image is None:
+                    existing.set_image(image)
+                    target_image = image
+                target_image.step_file_paths[stage_name] = image.tif_file
+                existing.step_outputs.setdefault(stage_name, [])
+                if image.tif_file not in existing.step_outputs[stage_name]:
+                    existing.step_outputs[stage_name].append(image.tif_file)
+    return [scenes_by_key[key] for key in sorted(scenes_by_key)]
 
 
 def _resolve_concurrent_processing(value: object) -> int:
@@ -466,18 +578,100 @@ def _resolve_concurrent_processing(value: object) -> int:
         normalized = value.strip().lower()
         if normalized == "num_cpu":
             return max(1, os.cpu_count() or 1)
-        try:
-            resolved = int(normalized)
-        except ValueError as exc:
-            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+        if not re.fullmatch(r"[-+]?\d+", normalized):
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.")
+        resolved = int(normalized)
     else:
-        try:
-            resolved = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.") from exc
+        if not isinstance(value, int):
+            raise ValueError("concurrent_processing must be an integer or 'num_cpu'.")
+        resolved = int(value)
     if resolved < 1:
         raise ValueError("concurrent_processing must be >= 1.")
     return resolved
+
+
+def _resolve_concurrent_processing_backend(value: object) -> str:
+    """Resolve the scene concurrency backend setting."""
+    if value is None:
+        return "process_pool"
+    if not isinstance(value, str):
+        raise ValueError("concurrent_processing_backend must be 'process_pool' or 'dask'.")
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {"process_pool", "dask"}:
+        raise ValueError("concurrent_processing_backend must be 'process_pool' or 'dask'.")
+    return normalized
+
+
+def _make_dask_client(args: argparse.Namespace):
+    """Create a Dask client from generic scheduler connection settings."""
+    scheduler_file = getattr(args, "dask_scheduler_file", None)
+    scheduler_address = getattr(args, "dask_scheduler_address", None)
+    if bool(scheduler_file) == bool(scheduler_address):
+        raise ValueError("Dask concurrency requires exactly one of dask_scheduler_file or dask_scheduler_address.")
+    try:
+        from dask.distributed import Client
+    except ImportError as exc:
+        raise ImportError(
+            "Dask concurrency requires dask.distributed. Install dask[distributed] in the runtime environment."
+        ) from exc
+    if scheduler_file:
+        return Client(scheduler_file=scheduler_file)
+    return Client(scheduler_address)
+
+
+def _process_scenes_with_process_pool(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+    worker_count: int,
+) -> List[SceneWorkflowState]:
+    """Run independent scene preprocessing with ProcessPoolExecutor."""
+    ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
+    with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
+        future_to_index = {
+            executor.submit(_process_scene, scene, args): index
+            for index, scene in enumerate(scenes)
+        }
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            ordered_results[index] = future.result()
+    return [state for state in ordered_results if state is not None]
+
+
+def _process_scenes_with_dask(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+) -> List[SceneWorkflowState]:
+    """Run independent scene preprocessing on an existing Dask cluster."""
+    client = _make_dask_client(args)
+    try:
+        futures = client.map(_process_scene, scenes, [args] * len(scenes))
+        return list(client.gather(futures))
+    finally:
+        client.close()
+
+
+def _process_scenes(
+    scenes: List[WorldViewScene],
+    args: argparse.Namespace,
+) -> List[SceneWorkflowState]:
+    """Process scenes independently before aggregate workflow steps."""
+    worker_count = _resolve_concurrent_processing(args.concurrent_processing)
+    backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
+    if worker_count <= 1 or len(scenes) <= 1:
+        return [_process_scene(scene, args) for scene in scenes]
+    if backend == "dask":
+        log(
+            f"Running per-scene processing with Dask tasks={len(scenes)}",
+            enabled=args.log_to_console,
+            step="workflow",
+        )
+        return _process_scenes_with_dask(scenes, args)
+    log(
+        f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
+        enabled=args.log_to_console,
+        step="workflow",
+    )
+    return _process_scenes_with_process_pool(scenes, args, worker_count)
 
 
 def _short_path(path: str) -> str:
@@ -530,12 +724,75 @@ def _log_step_plan(
     log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
+def _classify_save_target(save_value: Optional[str], *, default: str) -> tuple[str, str]:
+    """Return a normalized save target and target kind."""
+    normalized = (save_value if save_value not in (None, "") else default).strip()
+    if normalized == "$temp":
+        return normalized, "temp_root"
+    if normalized.startswith("$temp/"):
+        return normalized, "temp_child"
+    if normalized == "$output":
+        return normalized, "output_root"
+    if normalized.startswith("$output/"):
+        return normalized, "output_child"
+    if normalized.startswith("./"):
+        return normalized, "input_relative"
+    if os.path.isabs(normalized):
+        return normalized, "absolute"
+    return normalized, "cwd_relative"
+
+
+def _format_allowed_save_targets(allowed_modes: set[str]) -> str:
+    """Return a human-readable list of accepted save target forms."""
+    labels = [
+        ("temp_root", "$temp"),
+        ("temp_child", "$temp/..."),
+        ("output_root", "$output"),
+        ("output_child", "$output/..."),
+        ("input_relative", "./relative/to/input"),
+        ("absolute", "/custom/absolute"),
+        ("cwd_relative", "relative/to/pwd"),
+    ]
+    return " | ".join(label for mode, label in labels if mode in allowed_modes)
+
+
+def _resolve_save_target(
+    save_value: Optional[str],
+    *,
+    default: str,
+    temp_root: str,
+    output_root: str,
+    relative_base_folder: str,
+    accepted_modes: set[str],
+) -> str:
+    """Resolve a save target after checking that its target kind is accepted."""
+    save_mode, save_kind = _classify_save_target(save_value, default=default)
+    if save_kind not in accepted_modes:
+        raise ValueError(
+            f"Unsupported save target '{save_mode}'. Accepted forms: {_format_allowed_save_targets(accepted_modes)}"
+        )
+    if save_kind == "temp_root":
+        return temp_root
+    if save_kind == "temp_child":
+        return os.path.join(temp_root, save_mode[len("$temp/"):])
+    if save_kind == "output_root":
+        return output_root
+    if save_kind == "output_child":
+        return os.path.join(output_root, save_mode[len("$output/"):])
+    if save_kind == "input_relative":
+        return resolve_relative_to_input(save_mode, relative_base_folder)
+    if save_kind == "absolute":
+        return save_mode
+    return os.path.abspath(save_mode)
+
+
 def _resolve_step_save_dir(
     save_value: Optional[str],
     *,
     temp_root: str,
     output_root: str,
     relative_base_folder: str,
+    accepted_modes: set[str] | None = None,
 ) -> str:
     """Resolve a configured step save directory.
     Args:
@@ -546,23 +803,55 @@ def _resolve_step_save_dir(
     Returns:
         Resolved step save directory.
     """
-    save_mode = (save_value or "$temp").strip()
-    if save_mode == "$temp":
-        resolved_dir = temp_root
-    elif save_mode.startswith("$temp/"):
-        resolved_dir = os.path.join(temp_root, save_mode[len("$temp/"):])
-    elif save_mode == "$output":
-        resolved_dir = output_root
-    elif save_mode.startswith("$output/"):
-        resolved_dir = os.path.join(output_root, save_mode[len("$output/"):])
-    elif save_mode.startswith("./"):
-        resolved_dir = resolve_relative_to_input(save_mode, relative_base_folder)
-    elif os.path.isabs(save_mode):
-        resolved_dir = save_mode
-    else:
-        resolved_dir = os.path.abspath(save_mode)
+    resolved_dir = _resolve_save_target(
+        save_value,
+        default="$temp",
+        temp_root=temp_root,
+        output_root=output_root,
+        relative_base_folder=relative_base_folder,
+        accepted_modes=accepted_modes
+        or {"temp_root", "temp_child", "output_root", "output_child", "input_relative", "absolute", "cwd_relative"},
+    )
     os.makedirs(resolved_dir, exist_ok=True)
     return resolved_dir
+
+
+def _resolve_single_output_save_path(
+    save_value: Optional[str],
+    *,
+    default: str,
+    temp_root: str,
+    output_root: str,
+    relative_base_folder: str,
+    accepted_modes: set[str] | None = None,
+) -> str:
+    """Resolve a configured single-output save path."""
+    resolved_path = _resolve_save_target(
+        save_value,
+        default=default,
+        temp_root=temp_root,
+        output_root=output_root,
+        relative_base_folder=relative_base_folder,
+        accepted_modes=accepted_modes or {"temp_child", "absolute", "cwd_relative"},
+    )
+    os.makedirs(os.path.dirname(resolved_path) or ".", exist_ok=True)
+    return resolved_path
+
+
+def _validate_save_target_value(
+    save_value: Optional[str],
+    *,
+    arg_name: str,
+    default: str,
+    accepted_modes: set[str],
+) -> None:
+    """Validate a save target before workflow execution."""
+    normalized, save_kind = _classify_save_target(save_value, default=default)
+    if save_kind not in accepted_modes:
+        raise ValueError(
+            f"--{arg_name.replace('_', '-')} does not support '{normalized}'. "
+            f"Accepted forms: {_format_allowed_save_targets(accepted_modes)}"
+        )
 
 
 def _is_temp_save_value(save_value: Optional[str]) -> bool:
@@ -593,7 +882,25 @@ def _get_last_enabled_raster_step(args: argparse.Namespace) -> str:
         return "orthorectification"
     if args.run_atmospheric_correction:
         return "atmospheric_correction"
-    return "raw"
+    return "file_source"
+
+
+def _enabled_raster_steps(args: argparse.Namespace) -> List[str]:
+    """Return enabled raster processing steps in workflow order."""
+    enabled_steps: List[str] = []
+    if args.run_file_source:
+        enabled_steps.append("file_source")
+    if args.run_atmospheric_correction:
+        enabled_steps.append("atmospheric_correction")
+    if args.run_orthorectification:
+        enabled_steps.append("orthorectification")
+    if args.run_pansharpen:
+        enabled_steps.append("pansharpen")
+    if args.run_cloud_mask:
+        enabled_steps.append("cloud_mask")
+    if args.run_alignment:
+        enabled_steps.append("alignment")
+    return enabled_steps
 
 
 def _step_outputs_exist(output_paths: List[str]) -> bool:
@@ -612,10 +919,11 @@ def _is_gdal_raster_path(path: str) -> bool:
     return extension in {".tif", ".tiff", ".dat", ".img", ".vrt"}
 
 
-def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
+def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tuple[bool, str | None]:
     """Check that a raster can be opened and read by GDAL.
     Args:
         path: Raster path to validate.
+        validity_check_grid_size: Pixel sampling grid size. 0 disables pixel validity sampling.
     Returns:
         Tuple of validity and optional reason.
     """
@@ -645,6 +953,13 @@ def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
                 data = band.ReadRaster(xoff, yoff, read_w, read_h)
                 if data is None:
                     return False, f"GDAL ReadRaster failed for band {band_index}"
+        if validity_check_grid_size > 0 and not _gdal_raster_has_valid_sample(
+            dataset,
+            width,
+            height,
+            validity_check_grid_size,
+        ):
+            return False, "no finite valid pixels found in validity sample"
     except Exception as exc:
         return False, str(exc)
     finally:
@@ -652,10 +967,114 @@ def _gdal_raster_is_valid(path: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def _gdal_raster_has_valid_sample(dataset: gdal.Dataset, width: int, height: int, grid_size: int) -> bool:
+    """Return whether any sampled raster pixel is finite and non-nodata."""
+    if grid_size < 1:
+        return True
+    block_size = 512 if grid_size == 1 else grid_size
+    for band_index in range(1, dataset.RasterCount + 1):
+        band = dataset.GetRasterBand(band_index)
+        if band is None:
+            continue
+        for yoff in range(0, height, block_size):
+            read_h = min(block_size, height - yoff)
+            sample_y = 0 if grid_size == 1 else min(grid_size // 2, read_h - 1)
+            for xoff in range(0, width, block_size):
+                read_w = min(block_size, width - xoff)
+                sample_x = 0 if grid_size == 1 else min(grid_size // 2, read_w - 1)
+                window_xoff = xoff if grid_size == 1 else xoff + sample_x
+                window_yoff = yoff if grid_size == 1 else yoff + sample_y
+                window_w = read_w if grid_size == 1 else 1
+                window_h = read_h if grid_size == 1 else 1
+                if _gdal_band_window_has_valid_pixel(
+                    band,
+                    window_xoff,
+                    window_yoff,
+                    window_w,
+                    window_h,
+                ):
+                    return True
+    return False
+
+
+def _gdal_band_window_has_valid_pixel(
+    band: gdal.Band,
+    xoff: int,
+    yoff: int,
+    read_w: int,
+    read_h: int,
+) -> bool:
+    """Return whether a sampled band window has a finite non-nodata pixel."""
+    struct_format = _gdal_data_type_struct_format(band.DataType)
+    if struct_format is None:
+        return True
+    data = band.ReadRaster(xoff, yoff, read_w, read_h)
+    if data is None:
+        return False
+    mask = None
+    mask_band = band.GetMaskBand()
+    if mask_band is not None:
+        mask = mask_band.ReadRaster(xoff, yoff, read_w, read_h, buf_type=gdal.GDT_Byte)
+
+    nodata = band.GetNoDataValue()
+    item_size = struct.calcsize(struct_format)
+    if read_w == 1 and read_h == 1:
+        return _sample_pixel_is_valid(
+            struct.unpack_from(struct_format, data, 0)[0],
+            nodata,
+            mask[0] if mask else 255,
+        )
+
+    for pixel_index in range(0, read_w * read_h):
+        mask_value = mask[pixel_index] if mask else 255
+        value = struct.unpack_from(struct_format, data, pixel_index * item_size)[0]
+        if _sample_pixel_is_valid(value, nodata, mask_value):
+            return True
+    return False
+
+
+def _gdal_data_type_struct_format(data_type: int) -> str | None:
+    """Return a struct format for scalar GDAL data types."""
+    formats = {
+        gdal.GDT_Byte: "=B",
+        gdal.GDT_UInt16: "=H",
+        gdal.GDT_Int16: "=h",
+        gdal.GDT_UInt32: "=I",
+        gdal.GDT_Int32: "=i",
+        gdal.GDT_Float32: "=f",
+        gdal.GDT_Float64: "=d",
+    }
+    if hasattr(gdal, "GDT_Int8"):
+        formats[getattr(gdal, "GDT_Int8")] = "=b"
+    if hasattr(gdal, "GDT_UInt64"):
+        formats[getattr(gdal, "GDT_UInt64")] = "=Q"
+    if hasattr(gdal, "GDT_Int64"):
+        formats[getattr(gdal, "GDT_Int64")] = "=q"
+    return formats.get(data_type)
+
+
+def _sample_pixel_is_valid(value: object, nodata: float | int | None, mask_value: int = 255) -> bool:
+    """Return whether a scalar sample is finite and not nodata."""
+    if mask_value == 0:
+        return False
+    try:
+        sample = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(sample):
+        return False
+    if nodata is None:
+        return True
+    if isinstance(nodata, float) and math.isnan(nodata):
+        return True
+    return sample != nodata
+
+
 def _existing_outputs_are_reusable(
     output_paths: List[str],
     *,
     check_validity: bool,
+    validity_check_grid_size: int,
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -677,7 +1096,10 @@ def _existing_outputs_are_reusable(
     for output_path in output_paths:
         if not _is_gdal_raster_path(output_path):
             continue
-        is_valid, reason = _gdal_raster_is_valid(output_path)
+        is_valid, reason = _gdal_raster_is_valid(
+            output_path,
+            validity_check_grid_size=validity_check_grid_size,
+        )
         if not is_valid:
             _log_step_plan(
                 step,
@@ -718,6 +1140,13 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
         ),
     }
 
+    if args.run_file_source:
+        step_dirs["file_source"] = _resolve_step_save_dir(
+            args.save_file_source,
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
     if args.run_fetch_atmosphere:
         step_dirs["fetch_atmosphere"] = _resolve_step_save_dir(
             args.save_fetch_atmosphere,
@@ -760,9 +1189,18 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
         )
+    if args.run_seamline_metadata:
+        step_dirs["seamline_metadata"] = _resolve_single_output_save_path(
+            args.save_seamline_metadata,
+            default="$temp/seamline_metadata.gpkg",
+            temp_root=resolved_temp_root,
+            output_root=resolved_output_root,
+            relative_base_folder=relative_output_base,
+        )
     if args.run_radiometric_normalization:
-        step_dirs["radiometric_normalization"] = _resolve_step_save_dir(
+        step_dirs["radiometric_normalization"] = _resolve_single_output_save_path(
             args.save_radiometric_normalization,
+            default="$temp/radiometric_root.tif",
             temp_root=resolved_temp_root,
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
@@ -789,10 +1227,22 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
         Mapping of step names to expected output paths.
     """
     mul_image = _require_scene_image(state.scene, "mul")
+    pan_image = state.scene.get_image("pan")
+    if args.run_file_source:
+        file_source_map: Dict[str, str] = {}
+        file_source_map.update(_image_source_file_map(mul_image, state.step_dirs["file_source"]))
+        if pan_image is not None:
+            file_source_map.update(_image_source_file_map(pan_image, state.step_dirs["file_source"]))
+        file_source_outputs = list(file_source_map.values())
+        current_mul_outputs = [file_source_map.get(os.path.abspath(mul_image.tif_file), mul_image.tif_file)]
+    else:
+        file_source_outputs = [mul_image.tif_file]
+        current_mul_outputs = [mul_image.tif_file]
+
     expected_outputs: Dict[str, List[str]] = {
+        "file_source": file_source_outputs,
         "raw": [mul_image.tif_file],
     }
-    current_mul_outputs = [mul_image.tif_file]
 
     if args.run_fetch_atmosphere:
         expected_outputs["fetch_atmosphere"] = plan_step_outputs(
@@ -867,6 +1317,111 @@ def _get_expected_scene_step_outputs(state: SceneWorkflowState, args: argparse.N
     return expected_outputs
 
 
+def _scene_step_output_keys(step_name: str) -> List[str]:
+    """Return expected-output keys that belong to one workflow step."""
+    if step_name == "file_source":
+        return ["file_source"]
+    if step_name == "orthorectification":
+        return ["orthorectification", "orthorectification_pan"]
+    if step_name == "cloud_mask":
+        return ["cloud_mask", "cloud_mask_mask"]
+    return [step_name]
+
+
+def _scene_step_expected_outputs(
+    expected_outputs: Dict[str, List[str]],
+    step_name: str,
+) -> List[str]:
+    """Return expected output paths for a workflow step."""
+    outputs: List[str] = []
+    for key in _scene_step_output_keys(step_name):
+        outputs.extend(expected_outputs.get(key, []))
+    return outputs
+
+
+def _get_scene_upload_source_step(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+) -> str:
+    """Return the latest enabled processed raster step, or file_source."""
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+    for step_name in reversed(_enabled_raster_steps(args)):
+        if step_name == "file_source":
+            continue
+        step_outputs = _scene_step_expected_outputs(expected_outputs, step_name)
+        if _existing_outputs_are_reusable(
+            step_outputs,
+            check_validity=args.run_from_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
+            log_to_console=False,
+            step=step_name,
+            scene_basename=state.scene.primary_basename,
+        ):
+            return step_name
+    return "file_source"
+
+
+def _get_scene_upload_source_files(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+) -> List[str]:
+    """Return files from the latest enabled processed raster step, or file_source."""
+    source_step = _get_scene_upload_source_step(state, args)
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+    return _scene_step_expected_outputs(expected_outputs, source_step)
+
+
+def _step_will_run_from(start_step: str, step_name: str, args: argparse.Namespace) -> bool:
+    """Return whether a raster step remains after the supplied input stage."""
+    return (
+        RASTER_STEP_ORDER.index(start_step) < RASTER_STEP_ORDER.index(step_name)
+        and bool(getattr(args, f"run_{step_name}", False))
+    )
+
+
+def _remaining_scene_input_requirements(start_step: str, args: argparse.Namespace) -> set[str]:
+    """Return source-side files required by remaining enabled raster steps."""
+    required: set[str] = set()
+    if _step_will_run_from(start_step, "atmospheric_correction", args):
+        required.update({"mul_metadata", "mul_shp"})
+    if _step_will_run_from(start_step, "orthorectification", args):
+        required.add("mul_metadata")
+        if str(args.dem_file_path).strip().lower() == "online":
+            required.add("mul_shp")
+        if args.run_pansharpen:
+            required.update({"pan_image", "pan_metadata"})
+    elif _step_will_run_from(start_step, "pansharpen", args):
+        required.add("pan_ortho")
+    return required
+
+
+def _validate_remaining_scene_inputs(
+    scene: WorldViewScene,
+    *,
+    start_step: str,
+    args: argparse.Namespace,
+) -> None:
+    """Validate files required by remaining enabled steps."""
+    required = _remaining_scene_input_requirements(start_step, args)
+    mul_image = _require_scene_image(scene, "mul")
+    pan_image = scene.get_image("pan")
+    if "mul_metadata" in required and mul_image.standardized_metadata is None:
+        raise ValueError(f"WorldView scene is missing multispectral metadata: {scene.scene_id}_{scene.catalog_id}")
+    if "mul_shp" in required and mul_image.shp_file is None:
+        raise ValueError(f"WorldView scene is missing multispectral shapefile: {scene.primary_basename}")
+    if "pan_image" in required and pan_image is None:
+        raise ValueError(
+            "WorldView scene needs a panchromatic image before pansharpening: "
+            f"{scene.scene_id}_{scene.catalog_id}"
+        )
+    if "pan_metadata" in required and pan_image is not None and pan_image.standardized_metadata is None:
+        raise ValueError(f"WorldView scene is missing panchromatic metadata: {scene.scene_id}_{scene.catalog_id}")
+    if "pan_ortho" in required:
+        raise ValueError(
+            "Input stage is before pansharpen but no prior orthorectification step will create a panchromatic ortho image."
+        )
+
+
 def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
     """Initialize workflow state for a scene.
     Args:
@@ -875,22 +1430,27 @@ def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> 
     Returns:
         Initialized scene workflow state.
     """
+    start_step = _get_scene_input_start_step(scene)
     mul_image = _require_scene_image(scene, "mul")
-    pan_image = _require_scene_image(scene, "pan")
-    if mul_image.standardized_metadata is None:
-        raise ValueError(f"WorldView scene is missing multispectral metadata: {scene.scene_id}_{scene.catalog_id}")
-    if pan_image.standardized_metadata is None:
-        raise ValueError(f"WorldView scene is missing panchromatic metadata: {scene.scene_id}_{scene.catalog_id}")
-    if mul_image.shp_file is None:
-        raise ValueError(f"WorldView scene is missing multispectral shapefile: {scene.primary_basename}")
+    _validate_remaining_scene_inputs(scene, start_step=start_step, args=args)
+    start_path = _get_worldview_scene_step_path(scene, "mul", start_step)
 
     state = SceneWorkflowState(
         scene=scene,
         step_dirs=_resolve_scene_step_dirs(args, scene),
-        scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file),
-        current_files=[_get_worldview_scene_step_path(scene, "mul", "raw")],
+        scene_bbox_wgs84=_scene_bbox_wgs84_from_shp(mul_image.shp_file) if mul_image.shp_file else None,
+        current_files=[start_path],
+        current_step=start_step,
     )
     return state
+
+
+def _get_scene_input_start_step(scene: WorldViewScene) -> str:
+    """Return the latest raster step supplied by input_file_glob for a scene."""
+    for step_name in reversed(RASTER_STEP_ORDER):
+        if scene.step_outputs.get(step_name):
+            return step_name
+    return "file_source"
 
 
 def _register_step_outputs(
@@ -944,6 +1504,8 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
     required_outputs: List[str] = []
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         required_outputs.extend(expected_outputs.get("fetch_atmosphere", []))
+    if args.run_file_source and not _is_temp_save_value(args.save_file_source):
+        required_outputs.extend(expected_outputs.get("file_source", []))
     if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
         required_outputs.extend(expected_outputs.get("atmospheric_correction", []))
     if args.run_orthorectification and not _is_temp_save_value(args.save_orthorectification):
@@ -967,16 +1529,50 @@ def _normalize_group_by_basename_spec(raw_spec: object) -> object:
     Returns:
         Normalized grouping specification.
     """
-    if raw_spec in (None, "", []):
+    if raw_spec in (None, ""):
         return None
     if isinstance(raw_spec, str):
         stripped = raw_spec.strip()
-        if stripped.startswith("["):
+        if stripped.startswith("{"):
             return _normalize_group_by_basename_spec(json.loads(stripped))
-        return raw_spec
-    if not isinstance(raw_spec, list):
-        raise ValueError("group_by_basename must be a string or nested list of strings.")
-    return [_normalize_group_by_basename_spec(item) for item in raw_spec]
+        raise ValueError("group_by_basename must be a JSON object such as {'name.tif': ['auto:*123*', 'file:/tmp/ref.tif']}.")
+    return _validate_radiometric_group_spec(raw_spec)
+
+
+def _validate_radiometric_group_spec(group_spec: object) -> Dict[str, object]:
+    """Validate the named radiometric grouping JSON shape."""
+    if not isinstance(group_spec, dict) or not group_spec:
+        raise ValueError("group_by_basename must be a non-empty object with output filename keys.")
+    normalized: Dict[str, object] = {}
+    for output_name, value in group_spec.items():
+        if not isinstance(output_name, str) or not output_name:
+            raise ValueError("Each radiometric group key must be a non-empty output filename string.")
+        normalized[output_name] = _validate_radiometric_group_value(value)
+    return normalized
+
+
+def _validate_radiometric_group_value(value: object) -> object:
+    """Validate a radiometric group value."""
+    if isinstance(value, str):
+        if not (value.startswith("auto:") or value.startswith("file:")):
+            raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
+        if value in {"auto:", "file:"}:
+            raise ValueError("Radiometric group strings must include a pattern or path after the prefix.")
+        return value
+    if isinstance(value, list):
+        if not value:
+            raise ValueError("Radiometric group lists must not be empty.")
+        return [_validate_radiometric_group_item(item) for item in value]
+    raise ValueError("Radiometric group values must be strings or lists.")
+
+
+def _validate_radiometric_group_item(item: object) -> object:
+    """Validate an item inside a radiometric group list."""
+    if isinstance(item, str):
+        return _validate_radiometric_group_value(item)
+    if isinstance(item, dict):
+        return _validate_radiometric_group_spec(item)
+    raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
 
 
 def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
@@ -990,11 +1586,21 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
     matches = [
         path
         for path in available_paths
-        if fnmatch.fnmatch(os.path.basename(path), pattern) or fnmatch.fnmatch(path, pattern)
+        if wc_fnmatch.fnmatch(os.path.basename(path), pattern, flags=WCMATCH_GROUP_FLAGS)
     ]
     if not matches:
         raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
     return matches
+
+
+def _resolve_radiometric_input_token(token: str, available_paths: List[str]) -> List[str]:
+    """Resolve a prefixed radiometric group token into input paths."""
+    source, value = token.split(":", 1)
+    if source == "auto":
+        return _match_radiometric_input_patterns(value, available_paths)
+    if source == "file":
+        return [value]
+    raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
 
 
 def _dedupe_paths(paths: List[str]) -> List[str]:
@@ -1015,108 +1621,92 @@ def _dedupe_paths(paths: List[str]) -> List[str]:
 
 
 def _resolve_radiometric_group_output_path(
-    args: argparse.Namespace,
-    output_dir: str,
     *,
-    group_label: str,
-    is_root: bool,
+    output_name: str,
+    temp_root: str,
+    output_root: str,
 ) -> str:
     """Resolve a radiometric group output path.
     Args:
-        args: Parsed CLI arguments.
-        output_dir: Base output directory for radiometric products.
-        group_label: Group label used in default output naming.
-        is_root: Whether this is the root radiometric group.
+        output_name: Group output filename.
+        temp_root: Temp root directory.
+        output_root: Output root directory.
     Returns:
         Resolved radiometric group output path.
     """
-    configured_output = _build_radiometric_kwargs(args).get("shared_output_image_path")
-    if configured_output is None and is_root:
-        configured_output = args.radiometric_normalization_output
-    if configured_output:
-        if "$" in configured_output:
-            configured_output = configured_output.replace("$", group_label)
-        if os.path.isabs(configured_output):
-            return configured_output
-        return os.path.normpath(os.path.join(output_dir, configured_output))
-    return os.path.join(output_dir, f"{group_label}.tif")
+    del temp_root
+    group_output_path = os.path.join(output_root, os.path.basename(output_name))
+    os.makedirs(os.path.dirname(group_output_path) or ".", exist_ok=True)
+    return group_output_path
 
 
-def _run_radiometric_group(
-    group_spec: object,
+def _run_named_radiometric_group(
+    output_name: str,
+    group_value: object,
     *,
     available_paths: List[str],
     args: argparse.Namespace,
-    output_dir: str,
     temp_root: str,
-    label_parts: List[int],
-) -> str | List[str]:
-    """Run or resolve a radiometric group.
-    Args:
-        group_spec: Group specification string or nested list.
-        available_paths: Available scene output paths.
-        args: Parsed CLI arguments.
-        output_dir: Radiometric output directory.
-        temp_root: Temp root used for SpectralMatch temp files.
-        label_parts: Hierarchical label parts for nested groups.
-    Returns:
-        Group output path or matched input paths.
-    """
-    if isinstance(group_spec, str):
-        return _match_radiometric_input_patterns(group_spec, available_paths)
-    if not isinstance(group_spec, list) or not group_spec:
-        raise ValueError("Each radiometric normalization group must be a non-empty string or list.")
-
+    output_root: str,
+) -> str:
+    """Run one named radiometric group and return its output path."""
     child_inputs: List[str] = []
-    for index, item in enumerate(group_spec):
-        child_label_parts = [*label_parts, index]
-        child_result = _run_radiometric_group(
-            item,
-            available_paths=available_paths,
-            args=args,
-            output_dir=output_dir,
-            temp_root=temp_root,
-            label_parts=child_label_parts,
-        )
-        if isinstance(child_result, list):
-            child_inputs.extend(child_result)
-        else:
-            child_inputs.append(child_result)
+    if isinstance(group_value, str):
+        child_inputs.extend(_resolve_radiometric_input_token(group_value, available_paths))
+    elif isinstance(group_value, list):
+        for item in group_value:
+            if isinstance(item, str):
+                child_inputs.extend(_resolve_radiometric_input_token(item, available_paths))
+            elif isinstance(item, dict):
+                for child_output_name, child_value in item.items():
+                    child_inputs.append(
+                        _run_named_radiometric_group(
+                            child_output_name,
+                            child_value,
+                            available_paths=available_paths,
+                            args=args,
+                            temp_root=temp_root,
+                            output_root=output_root,
+                        )
+                    )
+            else:
+                raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
+    else:
+        raise ValueError("Radiometric group values must be strings or lists.")
 
     child_inputs = _dedupe_paths(child_inputs)
-    group_label = "radiometric_root" if not label_parts else "radiometric_group_" + "_".join(str(part) for part in label_parts)
-    output_path = _resolve_radiometric_group_output_path(
-        args,
-        output_dir,
-        group_label=group_label,
-        is_root=not label_parts,
+    radiometric_kwargs = _build_radiometric_kwargs(args)
+    radiometric_kwargs.pop("shared_output_image_path", None)
+    group_output_path = _resolve_radiometric_group_output_path(
+        output_name=output_name,
+        temp_root=temp_root,
+        output_root=output_root,
     )
     if args.run_from_existing and _existing_outputs_are_reusable(
-        [output_path],
+        [group_output_path],
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="radiometric",
     ):
         _log_step_plan(
             "radiometric",
-            outputs=[output_path],
-            message=f"Skipping group {group_label} because output exists",
+            outputs=[group_output_path],
+            message=f"Skipping group {output_name} because output exists",
             enabled=args.log_to_console,
         )
-        return output_path
+        return group_output_path
 
-    radiometric_kwargs = _build_radiometric_kwargs(args)
     radiometric_kwargs.setdefault("shared_input_images", child_inputs)
-    radiometric_kwargs.setdefault("shared_output_image_path", output_path)
+    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
     radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
-    radiometric_kwargs.setdefault("delete_temp_dir", args.keep_temp_dir is not True)
     radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
     radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
     _log_step_plan(
         "radiometric",
         inputs=child_inputs,
-        outputs=[output_path],
-        message=f"Running SpectralMatch group {group_label}",
+        outputs=[group_output_path],
+        message=f"Running SpectralMatch group {output_name}",
         enabled=args.log_to_console,
     )
     radiometric_normalization(
@@ -1126,8 +1716,78 @@ def _run_radiometric_group(
     )
     if args.calculate_overviews_radiometric_normalization:
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(output_path, args.overview_scales)
-    return output_path
+        calculate_raster_overviews(group_output_path, args.overview_scales)
+    return group_output_path
+
+
+def _run_named_radiometric_groups(
+    group_spec: Dict[str, object],
+    *,
+    available_paths: List[str],
+    args: argparse.Namespace,
+    temp_root: str,
+    output_root: str,
+) -> Optional[str]:
+    """Run named radiometric groups in order and return the final output path."""
+    final_output: Optional[str] = None
+    for output_name, group_value in group_spec.items():
+        final_output = _run_named_radiometric_group(
+            output_name,
+            group_value,
+            available_paths=available_paths,
+            args=args,
+            temp_root=temp_root,
+            output_root=output_root,
+        )
+    return final_output
+
+
+def _run_default_radiometric_normalization(
+    available_paths: List[str],
+    *,
+    args: argparse.Namespace,
+    output_path: str,
+    temp_root: str,
+) -> str:
+    """Run one default radiometric normalization over all scene outputs."""
+    radiometric_kwargs = _build_radiometric_kwargs(args)
+    group_output_path = str(radiometric_kwargs.get("shared_output_image_path") or output_path)
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        [group_output_path],
+        check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console,
+        step="radiometric",
+    ):
+        _log_step_plan(
+            "radiometric",
+            outputs=[group_output_path],
+            message="Skipping radiometric normalization because output exists",
+            enabled=args.log_to_console,
+        )
+        return group_output_path
+
+    radiometric_kwargs.setdefault("shared_input_images", available_paths)
+    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
+    radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
+    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    _log_step_plan(
+        "radiometric",
+        inputs=available_paths,
+        outputs=[group_output_path],
+        message="Running SpectralMatch radiometric normalization",
+        enabled=args.log_to_console,
+    )
+    radiometric_normalization(
+        method=args.radiometric_normalization_method,
+        log_to_console=args.log_to_console,
+        **radiometric_kwargs,
+    )
+    if args.calculate_overviews_radiometric_normalization:
+        log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
+        calculate_raster_overviews(group_output_path, args.overview_scales)
+    return group_output_path
 
 
 def _run_radiometric_normalization_workflow(
@@ -1151,19 +1811,86 @@ def _run_radiometric_normalization_workflow(
         raise ValueError("No scene outputs were available for radiometric normalization.")
 
     group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
-    if group_spec is None:
-        group_spec = available_paths
-    elif isinstance(group_spec, str):
-        group_spec = [group_spec]
+    if group_spec is not None:
+        return _run_named_radiometric_groups(
+            group_spec,
+            available_paths=available_paths,
+            args=args,
+            temp_root=reference_state.step_dirs["temp_root"],
+            output_root=reference_state.step_dirs["output_root"],
+        )
 
-    return _run_radiometric_group(
-        group_spec,
-        available_paths=available_paths,
+    return _run_default_radiometric_normalization(
+        available_paths,
         args=args,
-        output_dir=reference_state.step_dirs["radiometric_normalization"],
+        output_path=reference_state.step_dirs["radiometric_normalization"],
         temp_root=reference_state.step_dirs["temp_root"],
-        label_parts=[],
     )
+
+
+def _run_seamline_metadata_workflow(
+    states: List[SceneWorkflowState],
+    *,
+    args: argparse.Namespace,
+    reference_state: SceneWorkflowState,
+) -> str | None:
+    """Run the aggregate seamline metadata GeoPackage step.
+    Args:
+        states: Processed scene states.
+        args: Parsed CLI arguments.
+        reference_state: State used to resolve aggregate output directories.
+    Returns:
+        Seamline metadata GeoPackage path or None.
+    """
+    if not args.run_seamline_metadata:
+        return None
+
+    output_path = reference_state.step_dirs["seamline_metadata"]
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        [output_path],
+        check_validity=False,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console,
+        step="seamline_metadata",
+    ):
+        _log_step_plan(
+            "seamline_metadata",
+            outputs=[output_path],
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+        )
+        return output_path
+
+    _log_step_plan(
+        "seamline_metadata",
+        inputs=[state.current_files[0] for state in states if state.current_files],
+        outputs=[output_path],
+        message="Writing footprint metadata GeoPackage",
+        enabled=args.log_to_console,
+    )
+    return write_seamline_metadata_gpkg(
+        states,
+        output_path,
+        layer=args.seamline_metadata_layer,
+        image_field_name=args.seamline_metadata_image_field_name,
+        footprint_source=args.seamline_metadata_footprint_source,
+        calculate_bounds_eight_connected=args.seamline_metadata_calculate_bounds_eight_connected,
+        epsg=args.epsg,
+    )
+
+
+def _apply_weighted_seamline_metadata_defaults(args: argparse.Namespace, seamline_metadata_output: str | None) -> None:
+    """Default weighted seamline inputs from the generated WorldView metadata GPKG."""
+    if not seamline_metadata_output:
+        return
+    if not _radiometric_steps_include(args, "weighted_seamline"):
+        return
+    if not getattr(args, "match_weighted_seamline_input_polygons", None):
+        setattr(args, "match_weighted_seamline_input_polygons", seamline_metadata_output)
+    if not getattr(args, "match_weighted_seamline_input_layer", None):
+        setattr(args, "match_weighted_seamline_input_layer", args.seamline_metadata_layer)
+    if not getattr(args, "match_weighted_seamline_image_field_name", None):
+        setattr(args, "match_weighted_seamline_image_field_name", args.seamline_metadata_image_field_name)
 
 
 def _run_cloud_mask_command(
@@ -1203,6 +1930,108 @@ def _run_cloud_mask_command(
     subprocess.run(command, shell=True, check=True)
 
 
+def _image_source_file_map(image: Optional[WorldViewImage], output_dir: str) -> Dict[str, str]:
+    """Return source bundle files mapped to their staged output paths."""
+    if image is None:
+        return {}
+    source_paths = glob.glob(os.path.join(os.path.dirname(image.tif_file), f"{image.basename}.*"))
+    if image.shp_file:
+        source_paths.extend(glob.glob(f"{os.path.splitext(image.shp_file)[0]}.*"))
+    path_map: Dict[str, str] = {}
+    for source_path in _dedupe_paths([path for path in source_paths if os.path.isfile(path)]):
+        path_map[os.path.abspath(source_path)] = os.path.join(output_dir, os.path.basename(source_path))
+    return path_map
+
+
+def _set_image_file_paths_from_source_map(image: Optional[WorldViewImage], path_map: Mapping[str, str]) -> None:
+    """Update a WorldView image to point at staged source bundle files."""
+    if image is None:
+        return
+    for attr_name in ("tif_file", "imd_file", "shp_file", "til_file"):
+        current_path = getattr(image, attr_name)
+        if current_path is None:
+            continue
+        staged_path = path_map.get(os.path.abspath(current_path))
+        if staged_path:
+            setattr(image, attr_name, staged_path)
+
+
+def _copy_file_source_bundle(path_map: Mapping[str, str]) -> None:
+    """Copy source bundle files to their staged file_source paths."""
+    for source_path, output_path in path_map.items():
+        if os.path.abspath(source_path) == os.path.abspath(output_path):
+            continue
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        shutil.copy2(source_path, output_path)
+
+
+def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
+    """Run the file_source staging step."""
+    if not args.run_file_source or state.current_step != "file_source":
+        return state.current_files
+    output_dir = state.step_dirs["file_source"]
+    path_map: Dict[str, str] = {}
+    path_map.update(_image_source_file_map(state.scene.mul_image, output_dir))
+    path_map.update(_image_source_file_map(state.scene.pan_image, output_dir))
+    output_paths = list(path_map.values())
+    expected_outputs = _get_expected_scene_step_outputs(state, args)
+
+    if args.run_from_existing and _existing_outputs_are_reusable(
+        output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console,
+        step="file_source",
+        scene_basename=state.scene.primary_basename,
+    ):
+        _log_step_plan(
+            "file_source",
+            outputs=output_paths,
+            message="Skipping because output exists",
+            enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
+        )
+    else:
+        _log_step_plan(
+            "file_source",
+            inputs=list(path_map.keys()),
+            outputs=output_paths,
+            message="Staging source bundle files",
+            enabled=args.log_to_console,
+            scene_basename=state.scene.primary_basename,
+        )
+        _copy_file_source_bundle(path_map)
+
+    _set_image_file_paths_from_source_map(state.scene.mul_image, path_map)
+    _set_image_file_paths_from_source_map(state.scene.pan_image, path_map)
+    state.scene.step_outputs["file_source"] = output_paths
+    mul_output = path_map.get(
+        os.path.abspath(state.scene.mul_image.tif_file),
+        state.scene.mul_image.tif_file,
+    ) if state.scene.mul_image is not None else expected_outputs["file_source"][0]
+    pan_output = path_map.get(
+        os.path.abspath(state.scene.pan_image.tif_file),
+        state.scene.pan_image.tif_file,
+    ) if state.scene.pan_image is not None else None
+    state.current_files = [mul_output]
+    _set_worldview_scene_step_path(state.scene, "mul", "file_source", mul_output)
+    if pan_output:
+        _set_worldview_scene_step_path(state.scene, "pan", "file_source", pan_output)
+    state.current_step = "file_source"
+    if args.calculate_overviews_file_source:
+        log(
+            "Calculating overviews for step file_source",
+            enabled=args.log_to_console,
+            step="overviews",
+            scene_basename=state.scene.primary_basename,
+        )
+        for output_path in [mul_output, pan_output]:
+            if not output_path:
+                continue
+            calculate_raster_overviews(output_path, args.overview_scales)
+    return state.current_files
+
+
 def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespace) -> None:
     """Run the fetch-atmosphere step.
     Args:
@@ -1216,6 +2045,8 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
     mul_image = state.scene.mul_image
     if mul_image is None or mul_image.standardized_metadata is None:
         return
+    if state.scene_bbox_wgs84 is None:
+        raise ValueError(f"Scene footprint is required to fetch atmosphere data: {state.scene.primary_basename}")
     plan = plan_step_outputs(
         [mul_image.tif_file],
         output_dir=state.step_dirs["fetch_atmosphere"],
@@ -1226,6 +2057,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="fetch_atmosphere",
         scene_basename=state.scene.primary_basename,
@@ -1329,6 +2161,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="atmospheric_correction",
         scene_basename=state.scene.primary_basename,
@@ -1432,7 +2265,7 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         state.py6s_auto_atmos_estimate = py6s_result.auto_atmos_estimate
     else:
         state.current_files = [input_raster]
-        state.current_step = "raw"
+        state.current_step = "file_source"
         return state.current_files
 
     state.current_files = _register_step_outputs(state, "atmospheric_correction", plan.output_paths)
@@ -1479,6 +2312,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
         if args.run_from_existing and _existing_outputs_are_reusable(
             plan.output_paths,
             check_validity=args.run_from_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
             log_to_console=args.log_to_console,
             step="orthorectification",
             scene_basename=state.scene.primary_basename,
@@ -1539,6 +2373,7 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             if args.run_from_existing and _existing_outputs_are_reusable(
                 pan_plan.output_paths,
                 check_validity=args.run_from_existing_check_validity,
+                validity_check_grid_size=args.validity_check_grid_size,
                 log_to_console=args.log_to_console,
                 step="orthorectification_pan",
                 scene_basename=state.scene.primary_basename,
@@ -1612,6 +2447,7 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="pansharpen",
         scene_basename=state.scene.primary_basename,
@@ -1685,6 +2521,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     if args.run_from_existing and _existing_outputs_are_reusable(
         output_plan.output_paths + mask_plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="cloud_mask",
         scene_basename=state.scene.primary_basename,
@@ -1787,6 +2624,7 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
     if args.run_from_existing and _existing_outputs_are_reusable(
         plan.output_paths,
         check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="alignment",
         scene_basename=state.scene.primary_basename,
@@ -1876,6 +2714,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
     if required_outputs and not _existing_outputs_are_reusable(
         required_outputs,
         check_validity=args.skip_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="workflow",
         scene_basename=state.scene.primary_basename,
@@ -1885,6 +2724,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
         return _existing_outputs_are_reusable(
             expected_outputs["final_raster"],
             check_validity=args.skip_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
             log_to_console=args.log_to_console,
             step="workflow",
             scene_basename=state.scene.primary_basename,
@@ -1894,6 +2734,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
     return _existing_outputs_are_reusable(
         expected_outputs["final_raster"],
         check_validity=args.skip_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console,
         step="workflow",
         scene_basename=state.scene.primary_basename,
@@ -1919,6 +2760,8 @@ def _scene_saved_output_paths(state: SceneWorkflowState, args: argparse.Namespac
         """
         saved_paths.extend(state.scene.step_outputs.get(step_name, []))
 
+    if args.run_file_source and not _is_temp_save_value(args.save_file_source):
+        _extend("file_source")
     if args.run_fetch_atmosphere and not _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
     if args.run_atmospheric_correction and not _is_temp_save_value(args.save_atmospheric_correction):
@@ -1981,6 +2824,8 @@ def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespac
         """
         temp_paths.extend(state.scene.step_outputs.get(step_name, []))
 
+    if args.run_file_source and _is_temp_save_value(args.save_file_source):
+        _extend("file_source")
     if args.run_fetch_atmosphere and _is_temp_save_value(args.save_fetch_atmosphere):
         _extend("fetch_atmosphere")
     if args.run_atmospheric_correction and _is_temp_save_value(args.save_atmospheric_correction):
@@ -2017,9 +2862,11 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
     """
     mul_image = state.scene.mul_image
     pan_image = state.scene.pan_image
-    if mul_image is None or pan_image is None:
-        raise ValueError("WorldView scene is missing required images for metadata reporting.")
-    resolved_dem_file_path = _resolve_scene_dem_file_path(state, args)
+    if mul_image is None:
+        raise ValueError("WorldView scene is missing required multispectral image for metadata reporting.")
+    resolved_dem_file_path = state.dem_file_path
+    if resolved_dem_file_path is None and args.dem_file_path not in (None, "", "online"):
+        resolved_dem_file_path = str(args.dem_file_path)
     final_scene_path, scene_metadata_path = _final_output_paths(state, args)
     saved_output_paths = _scene_saved_output_paths(state, args)
     payload = {
@@ -2028,7 +2875,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "catalog_id": state.scene.catalog_id,
             "scene_root": state.scene.root_folder_path,
             "mul_photo_basename": mul_image.basename,
-            "pan_photo_basename": pan_image.basename,
+            "pan_photo_basename": pan_image.basename if pan_image else None,
             "started_utc": scene_started_utc,
             "completed_utc": datetime.utcnow().isoformat() + "Z",
         },
@@ -2036,26 +2883,28 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "mul_imd_file": mul_image.imd_file,
             "mul_tif_file": mul_image.tif_file,
             "mul_shp_file": mul_image.shp_file,
-            "pan_imd_file": pan_image.imd_file,
-            "pan_tif_file": pan_image.tif_file,
-            "pan_shp_file": pan_image.shp_file,
+            "pan_imd_file": pan_image.imd_file if pan_image else None,
+            "pan_tif_file": pan_image.tif_file if pan_image else None,
+            "pan_shp_file": pan_image.shp_file if pan_image else None,
             "dem_file_path": resolved_dem_file_path,
             "dem_file_path_requested": args.dem_file_path,
         },
         "standardized_metadata": {
             "mul": mul_image.standardized_metadata.to_dict() if mul_image.standardized_metadata else None,
-            "pan": pan_image.standardized_metadata.to_dict() if pan_image.standardized_metadata else None,
+            "pan": pan_image.standardized_metadata.to_dict() if pan_image and pan_image.standardized_metadata else None,
         },
         "workflow": {
             "run_from_existing": args.run_from_existing,
             "run_from_existing_check_validity": args.run_from_existing_check_validity,
             "skip_existing_check_validity": args.skip_existing_check_validity,
+            "run_file_source": args.run_file_source,
             "run_fetch_atmosphere": args.run_fetch_atmosphere,
             "run_atmospheric_correction": args.run_atmospheric_correction,
             "run_orthorectification": args.run_orthorectification,
             "run_pansharpen": args.run_pansharpen,
             "run_cloud_mask": args.run_cloud_mask,
             "run_alignment": args.run_alignment,
+            "run_seamline_metadata": args.run_seamline_metadata,
             "run_radiometric_normalization": args.run_radiometric_normalization,
             "atmospheric_method": args.atmospheric_method,
             "epsg": args.epsg,
@@ -2157,7 +3006,9 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
         return state
 
     scene_started_utc = datetime.utcnow().isoformat() + "Z"
-    _run_fetch_atmosphere_step(state, args)
+    _run_file_source_step(state, args)
+    if args.run_atmospheric_correction and RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
+        _run_fetch_atmosphere_step(state, args)
 
     if RASTER_STEP_ORDER.index(state.current_step) < RASTER_STEP_ORDER.index("atmospheric_correction"):
         _run_atmospheric_correction_step(state, args)
@@ -2201,37 +3052,33 @@ def _run_workflow(args: argparse.Namespace) -> int:
         Process exit code.
     """
     filter_basenames = _parse_filter_basenames(args.filter_basename)
-    input_files = _collect_input_files(args.input_file_glob)
+    input_files_by_stage = _collect_input_files_by_stage(args.input_file_glob)
+    input_files = sorted({path for paths in input_files_by_stage.values() for path in paths})
     if not input_files:
         raise ValueError("No files matched --input-file-glob.")
 
-    scenes = load_worldview_scenes_from_tif_files(input_files, filter_basenames=filter_basenames)
+    scenes = _load_worldview_scenes_from_stage_paths(input_files_by_stage, filter_basenames=filter_basenames)
     log(
         f"Discovered {len(input_files)} input files across {len(scenes)} scenes",
         enabled=args.log_to_console,
         step="workflow",
     )
-    processed_states: List[SceneWorkflowState] = []
-    worker_count = _resolve_concurrent_processing(args.concurrent_processing)
-    if worker_count > 1 and len(scenes) > 1:
-        log(
-            f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
-            enabled=args.log_to_console,
-            step="workflow",
+    processed_states = _process_scenes(scenes, args)
+
+    seamline_metadata_output = None
+    if processed_states and args.run_seamline_metadata:
+        seamline_metadata_output = _run_seamline_metadata_workflow(
+            processed_states,
+            args=args,
+            reference_state=processed_states[0],
         )
-        ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
-        with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
-            future_to_index = {
-                executor.submit(_process_scene, scene, args): index
-                for index, scene in enumerate(scenes)
-            }
-            for future in as_completed(future_to_index):
-                index = future_to_index[future]
-                ordered_results[index] = future.result()
-        processed_states = [state for state in ordered_results if state is not None]
-    else:
-        for scene in scenes:
-            processed_states.append(_process_scene(scene, args))
+        if seamline_metadata_output:
+            log(
+                f"Wrote seamline metadata {seamline_metadata_output}",
+                enabled=args.log_to_console,
+                step="seamline_metadata",
+            )
+        _apply_weighted_seamline_metadata_defaults(args, seamline_metadata_output)
 
     if processed_states and args.run_radiometric_normalization:
         log(
@@ -2267,9 +3114,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--input-file-glob",
         action="append",
-        help="Glob used to find input files, for example '/data/**/*.TIF'.",
+        help="Glob used to find raw source files. YAML configs should use one-key stage dictionaries.",
     )
-    parser.add_argument("--input-dir", dest="input_file_glob", action="append", help=argparse.SUPPRESS)
     parser.add_argument(
         "--dem-file-path",
         default="online",
@@ -2287,6 +3133,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-to-console", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-from-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--run-from-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--validity-check-grid-size", type=int, default=0)
     parser.add_argument("--flaash-dem-ground-percentile", type=float, default=50.0)
     parser.add_argument("--flaash-modtran-atm")
     parser.add_argument("--flaash-modtran-aer")
@@ -2314,7 +3161,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir")
     parser.add_argument("--fetch-atmosphere-output-suffix", default="_atmosphere")
     parser.add_argument("--atmospheric-correction-output-suffix", default="_atmospheric")
-    parser.add_argument("--radiometric-normalization-output")
     parser.add_argument("--orthorectification-output-suffix", default="_ortho")
     parser.add_argument("--orthorectification-pan-output-suffix", default="_pan_ortho")
     parser.add_argument("--orthorectification-rpc-refinement-geojson")
@@ -2322,10 +3168,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-existing-check-validity", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--concurrent-processing", default=1)
+    parser.add_argument("--concurrent-processing-backend", choices=["process_pool", "dask"], default="process_pool")
+    parser.add_argument("--dask-scheduler-file")
+    parser.add_argument("--dask-scheduler-address")
     parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
     parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--scratch-dir", dest="temp_dir", help=argparse.SUPPRESS)
+    parser.add_argument("--run-file-source", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save-file-source", default="$temp/file_source")
+    parser.add_argument("--calculate-overviews-file-source", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run-fetch-atmosphere", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-fetch-atmosphere", default="$temp")
     parser.add_argument("--run-atmospheric-correction", action=argparse.BooleanOptionalAction, default=True)
@@ -2343,8 +3194,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-alignment", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-alignment", default="$temp")
     parser.add_argument("--calculate-overviews-alignment", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--run-seamline-metadata", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save-seamline-metadata", default="$temp/seamline_metadata.gpkg")
+    parser.add_argument("--seamline-metadata-layer", default="footprints")
+    parser.add_argument("--seamline-metadata-image-field-name", default="image")
+    parser.add_argument(
+        "--seamline-metadata-footprint-source",
+        choices=["package_bounds", "calculate_bounds"],
+        default="package_bounds",
+    )
+    parser.add_argument(
+        "--seamline-metadata-calculate-bounds-eight-connected",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--run-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--save-radiometric-normalization", default="$temp")
+    parser.add_argument("--save-radiometric-normalization", default="$temp/radiometric_root.tif")
     parser.add_argument("--calculate-overviews-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--skip-flaash", action="store_true")
     parser.add_argument("--existing-flaash-input")
@@ -2362,6 +3227,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--radiometric-normalization-method", default="spectralmatch")
     parser.add_argument("--radiometric-normalization-kwargs-json")
     parser.add_argument("--group-by-basename")
+    parser.add_argument("--match-steps", nargs="+")
     parser.add_argument("--cloud-mask-command")
     parser.add_argument("--cloud-mask-method", choices=["omnicloudmask"], default="omnicloudmask")
     parser.add_argument("--cloud-mask-red-band-index", type=int, default=5)
@@ -2398,9 +3264,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse CLI/config arguments, validate them, and execute the workflow."""
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config-yaml")
-    config_args, _ = config_parser.parse_known_args(argv)
+    config_args, _ = config_parser.parse_known_args(raw_argv)
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
@@ -2409,7 +3276,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     if config_defaults:
         parser.set_defaults(**config_defaults)
-    args, unknown_args = parser.parse_known_args(argv)
+    args, unknown_args = parser.parse_known_args(raw_argv)
     _apply_unknown_prefixed_args(args, unknown_args)
 
     if not args.input_file_glob:
@@ -2446,48 +3313,62 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--fetch-atmosphere-timeout-s must be > 0.")
     if args.dem_online_timeout_s <= 0:
         parser.error("--dem-online-timeout-s must be > 0.")
+    if args.validity_check_grid_size < 0:
+        parser.error("--validity-check-grid-size must be >= 0.")
+    per_scene_save_modes = {
+        "temp_root",
+        "temp_child",
+        "output_root",
+        "output_child",
+        "input_relative",
+        "absolute",
+        "cwd_relative",
+    }
+    aggregate_single_output_modes = {"temp_child", "absolute", "cwd_relative"}
     for arg_name in (
+        "save_file_source",
         "save_fetch_atmosphere",
         "save_atmospheric_correction",
         "save_orthorectification",
         "save_pansharpen",
         "save_cloud_mask",
         "save_alignment",
-        "save_radiometric_normalization",
     ):
-        save_value = getattr(args, arg_name)
-        if save_value in (None, ""):
-            continue
-        normalized = str(save_value).strip()
-        if normalized in ("$temp", "$output"):
-            continue
-        if normalized.startswith(("$temp/", "$output/", "./")):
-            continue
-        if os.path.isabs(normalized):
-            continue
-        if normalized.startswith("../"):
-            continue
-        if normalized in ("temp", "output") or normalized.startswith(("temp/", "output/")):
-            parser.error(
-                f"--{arg_name.replace('_', '-')} no longer supports legacy 'temp'/'output' prefixes; "
-                "use '$temp' or '$output' instead."
-            )
+        _validate_save_target_value(
+            getattr(args, arg_name),
+            arg_name=arg_name,
+            default="$temp",
+            accepted_modes=per_scene_save_modes,
+        )
+    for arg_name, default_value in (
+        ("save_seamline_metadata", "$temp/seamline_metadata.gpkg"),
+        ("save_radiometric_normalization", "$temp/radiometric_root.tif"),
+    ):
+        _validate_save_target_value(
+            getattr(args, arg_name),
+            arg_name=arg_name,
+            default=default_value,
+            accepted_modes=aggregate_single_output_modes,
+        )
     if (
         args.max_cloud_cover_to_process is not None
         and (args.max_cloud_cover_to_process < 0 or args.max_cloud_cover_to_process > 100)
     ):
         parser.error("--max-cloud-cover-to-process must be in [0, 100].")
-    try:
-        args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
-    except ValueError as exc:
-        parser.error(str(exc))
+    args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
+    args.concurrent_processing_backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
+    if args.concurrent_processing_backend == "dask" and bool(args.dask_scheduler_file) == bool(args.dask_scheduler_address):
+        parser.error("--concurrent-processing-backend=dask requires exactly one of --dask-scheduler-file or --dask-scheduler-address.")
+    if args.concurrent_processing_backend != "dask" and (args.dask_scheduler_file or args.dask_scheduler_address):
+        parser.error("--dask-scheduler-file/--dask-scheduler-address require --concurrent-processing-backend=dask.")
     if args.overview_scales is not None:
         if isinstance(args.overview_scales, str):
             args.overview_scales = [int(value.strip()) for value in args.overview_scales.split(",") if value.strip()]
         else:
             args.overview_scales = [int(value) for value in args.overview_scales]
     if (
-        args.calculate_overviews_atmospheric_correction
+        args.calculate_overviews_file_source
+        or args.calculate_overviews_atmospheric_correction
         or args.calculate_overviews_orthorectification
         or args.calculate_overviews_pansharpen
         or args.calculate_overviews_cloud_mask
@@ -2511,18 +3392,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--alignment-edge-trim-detection-band-index must be >= 0.")
     if args.alignment_solve_resolution is not None and args.alignment_solve_resolution <= 0:
         parser.error("--alignment-solve-resolution must be > 0.")
-    try:
-        _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
-    except Exception as exc:
-        parser.error(f"Invalid --cloud-mask-omnicloud-kwargs-json: {exc}")
-    try:
-        _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    except Exception as exc:
-        parser.error(f"Invalid --radiometric-normalization-kwargs-json: {exc}")
-    try:
-        _normalize_group_by_basename_spec(args.group_by_basename)
-    except Exception as exc:
-        parser.error(f"Invalid --group-by-basename: {exc}")
+    _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
+    radiometric_kwargs_json = _parse_json_dict(args.radiometric_normalization_kwargs_json)
+    save_radiometric_output_is_explicit = (
+        "save_radiometric_normalization" in config_defaults
+        or _explicit_cli_arg_present(raw_argv, "save_radiometric_normalization")
+    )
+    match_shared_output_is_explicit = (
+        getattr(args, "match_shared_output_image_path", None) is not None
+        or "shared_output_image_path" in radiometric_kwargs_json
+    )
+    if save_radiometric_output_is_explicit and match_shared_output_is_explicit:
+        parser.error(
+            "Cannot set both save_radiometric_normalization and "
+            "match_shared_output_image_path/shared_output_image_path; use only one radiometric output path option."
+        )
+    group_by_basename_spec = _normalize_group_by_basename_spec(args.group_by_basename)
+    if group_by_basename_spec is not None and save_radiometric_output_is_explicit:
+        parser.error("Cannot set save_radiometric_normalization when group_by_basename is set; use group keys as output filenames.")
+    if group_by_basename_spec is not None and match_shared_output_is_explicit:
+        parser.error("Cannot set match_shared_output_image_path/shared_output_image_path when group_by_basename is set; use group keys as output filenames.")
     return _run_workflow(args)
 
 

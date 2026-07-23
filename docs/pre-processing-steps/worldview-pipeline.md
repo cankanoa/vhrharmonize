@@ -54,6 +54,7 @@ The scene pipeline works in this order:
 6. Pansharpening
 7. Optional cloud masking
 8. Optional alignment to a fixed raster
-9. Optional radiometric normalization after scene-level raster steps complete
+9. Optional seamline metadata vector after scene-level raster steps complete
+10. Optional radiometric normalization after scene-level raster steps complete
 
 At the end of the scene run, the workflow writes a scene metadata JSON beside the final raster output. If the scene is skipped because of cloud cover filtering, it writes a short metadata JSON explaining the skip.

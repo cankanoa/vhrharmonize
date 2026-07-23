@@ -600,10 +600,7 @@ class WorldViewMetadata:
         value = self.find_first(*keys)
         if value is None:
             return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
+        return float(value)
 
     def find_first_datetime(self, *keys: str) -> Optional[datetime]:
         """Find the first matching datetime metadata value.
@@ -615,10 +612,7 @@ class WorldViewMetadata:
         raw_value = self.find_first(*keys)
         if raw_value in (None, ""):
             return None
-        try:
-            parsed = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
-        except ValueError:
-            return None
+        parsed = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)

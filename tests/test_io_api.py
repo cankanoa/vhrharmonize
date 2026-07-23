@@ -23,6 +23,7 @@ def test_workflow_utils_paths(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     assert resolve_relative_to_input("a/b", str(input_dir)) == str(input_dir / "a/b")
+    assert resolve_relative_to_input("~/a/b", str(input_dir)) == str(Path.home() / "a/b")
     assert resolve_output_dir(None, temp_dir=str(tmp_path / "temp"), step_name="step").endswith("step")
     assert Path(resolve_temp_dir(str(tmp_path / "custom_temp"), input_folder=str(input_dir))).exists()
     assert build_output_path_from_input(str(input_dir / "image.tif"), str(tmp_path), suffix="_x") == str(tmp_path / "image_x.tif")

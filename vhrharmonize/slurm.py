@@ -1,0 +1,1660 @@
+"""Prepare file-to-file Slurm staging plans for vhrharmonize providers."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime as dt
+import glob as std_glob
+import hashlib
+import os
+import re
+import shlex
+import subprocess
+import tempfile
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
+
+import yaml
+
+from vhrharmonize.cli import worldview
+from vhrharmonize.providers.worldview import WorldViewImage, WorldViewScene
+
+
+PATH_TEMPLATE_RUN_ID = "{run_id}"
+SLURM_PREPARE_CONFIG_KEYS = (
+    "run_id",
+    "provider",
+    "provider_config",
+    "staged_provider_file",
+    "slurm_start_file",
+    "staged_slurm_start_file",
+    "staged_hpc_file",
+    "debug_logs",
+    "ssh_host",
+    "ssh_user",
+    "ssh_private_key",
+    "remote_output_dir",
+    "remote_log_dir",
+    "remote_temp_dir",
+    "remote_reference_dir",
+    "provider_upload_keys",
+)
+
+
+def load_yaml_file(path: str) -> Dict[str, Any]:
+    """Load a YAML file as a dictionary."""
+    with open(path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected YAML mapping in {path}")
+    return data
+
+
+def write_yaml_file(path: str, data: Mapping[str, Any]) -> None:
+    """Write a YAML mapping to disk."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(dict(data), handle, sort_keys=False)
+
+
+LOG_HEADER_BY_KEY = {
+    "run_id": "# Set task ID",
+    "provider": "# Provider class",
+    "provider_config": "# Editable files",
+    "staged_provider_file": "# Generated files",
+    "ssh_host": "# SSH login",
+    "remote_output_dir": "# Remote directories.",
+    "remote_provider_config": "# Uploaded remote control files.",
+    "remote_slurm_log_templates": "# Slurm log files.",
+    "submitted_job_id": "# Job status.",
+    "uploaded_input_paths": "# All mappings are local file: remote file.",
+    "raw_slurm_log_text": "# Raw Slurm log text.",
+    "raw_status_text": "# Raw scheduler status text.",
+}
+
+WORLDVIEW_HEADER_BY_KEY = {
+    "shared": "# Shared settings",
+    "workflow": "# Workflow steps",
+    "atmospheric_correction": "# Atmospheric correction settings",
+    "orthorectification": "# Orthorectification settings",
+    "cloud_mask": "# Cloud mask settings",
+    "alignment": "# Alignment settings",
+    "seamline_metadata": "# Seamline metadata settings",
+    "radiometric_normalization": "# Radiometric normalization settings",
+}
+
+
+def write_sectioned_yaml_file(
+    path: str,
+    data: Mapping[str, Any],
+    *,
+    header_by_key: Mapping[str, str] | None = None,
+) -> None:
+    """Write a YAML mapping with optional comments before selected top-level keys."""
+    lines: List[str] = []
+    for key, value in data.items():
+        header = (header_by_key or {}).get(key)
+        if header:
+            if lines:
+                lines.append("")
+            lines.append(header)
+        rendered = yaml.safe_dump({key: value}, sort_keys=False, width=4096).rstrip()
+        lines.extend(rendered.splitlines())
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines).rstrip() + "\n")
+
+
+def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
+    """Write the staged HPC YAML with readable section comments."""
+    ordered = dict(data)
+    upload_results = ordered.pop("upload_results", None)
+    raw_start_output = ordered.pop("raw_start_output", None)
+    raw_slurm_log_text = ordered.pop("raw_slurm_log_text", None)
+    raw_status_text = ordered.pop("raw_status_text", None)
+    if upload_results is not None:
+        ordered["upload_results"] = upload_results
+    if raw_start_output is not None:
+        ordered["raw_start_output"] = raw_start_output
+    if raw_slurm_log_text is not None:
+        ordered["raw_slurm_log_text"] = raw_slurm_log_text
+    if raw_status_text is not None:
+        ordered["raw_status_text"] = raw_status_text
+    write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
+
+
+def make_run_id(now: dt.datetime | None = None) -> str:
+    """Return a compact UTC run id."""
+    current = now or dt.datetime.now(dt.timezone.utc)
+    return current.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def resolve_run_template(value: str, run_id: str) -> str:
+    """Resolve a Slurm path template with ``{run_id}``."""
+    return value.replace(PATH_TEMPLATE_RUN_ID, run_id)
+
+
+def render_run_templates(text: str, variables: Mapping[str, str]) -> str:
+    """Render supported template variables in staged text files."""
+    rendered = text
+    for key, value in variables.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
+
+
+def write_staged_template_file(source_path: str, staged_path: str, variables: Mapping[str, str]) -> None:
+    """Copy a text template to a staged path with supported variables rendered."""
+    with open(source_path, "r", encoding="utf-8") as handle:
+        rendered = render_run_templates(handle.read(), variables)
+    os.makedirs(os.path.dirname(os.path.abspath(staged_path)) or ".", exist_ok=True)
+    with open(staged_path, "w", encoding="utf-8") as handle:
+        handle.write(rendered)
+
+
+def _yaml_scalar(value: Any) -> str:
+    rendered = yaml.safe_dump(value, default_flow_style=True, sort_keys=False, width=4096).strip()
+    lines = [line for line in rendered.splitlines() if line != "..."]
+    return lines[0] if lines else "null"
+
+
+def _render_yaml_key_block(key: str, value: Any, *, indent: int) -> List[str]:
+    prefix = " " * indent
+    if not isinstance(value, (dict, list)):
+        return [f"{prefix}{key}: {_yaml_scalar(value)}"]
+    rendered = yaml.safe_dump(value, sort_keys=False, width=4096).rstrip()
+    return [f"{prefix}{key}:"] + [f"{prefix}  {line}" for line in rendered.splitlines()]
+
+
+def _line_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _find_top_level_section(lines: List[str], section: str) -> tuple[int, int] | None:
+    pattern = re.compile(rf"^{re.escape(section)}\s*:\s*(?:#.*)?$")
+    for index, line in enumerate(lines):
+        if not pattern.match(line):
+            continue
+        end = index + 1
+        while end < len(lines):
+            candidate = lines[end]
+            if candidate.strip() and _line_indent(candidate) == 0 and not candidate.lstrip().startswith("#"):
+                break
+            end += 1
+        return index, end
+    return None
+
+
+def _replace_yaml_key_block(
+    lines: List[str],
+    *,
+    key: str,
+    value: Any,
+    start: int,
+    end: int,
+    indent: int | None = None,
+    insert_indent: int = 2,
+) -> None:
+    if indent is None:
+        pattern = re.compile(rf"^(\s*){re.escape(key)}\s*:")
+    else:
+        pattern = re.compile(rf"^{' ' * indent}{re.escape(key)}\s*:")
+    index = start
+    while index < end:
+        if lines[index].lstrip().startswith("#"):
+            index += 1
+            continue
+        match = pattern.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        current_indent = indent if indent is not None else len(match.group(1))
+        block_end = index + 1
+        while block_end < end:
+            candidate = lines[block_end]
+            if candidate.strip() and _line_indent(candidate) <= current_indent:
+                break
+            block_end += 1
+        rendered = _render_yaml_key_block(key, value, indent=current_indent)
+        lines[index:block_end] = rendered
+        return
+    lines[end:end] = _render_yaml_key_block(key, value, indent=insert_indent)
+
+
+def _iter_leaf_changes(
+    original: Any,
+    rewritten: Any,
+    path: tuple[str, ...] = (),
+) -> Iterable[tuple[tuple[str, ...], Any]]:
+    if isinstance(rewritten, dict) and isinstance(original, Mapping):
+        for key, rewritten_value in rewritten.items():
+            yield from _iter_leaf_changes(original.get(key), rewritten_value, (*path, str(key)))
+        return
+    if original != rewritten and path:
+        yield path, rewritten
+
+
+def _collect_yaml_key_ranges(source_text: str) -> Dict[tuple[str, ...], tuple[int, int, int]]:
+    """Collect source line ranges for YAML key blocks using parser marks."""
+    root = yaml.compose(source_text)
+    ranges: Dict[tuple[str, ...], tuple[int, int, int]] = {}
+
+    def _walk_mapping(node: Any, path: tuple[str, ...] = ()) -> None:
+        if getattr(node, "id", None) != "mapping":
+            return
+        entries = list(getattr(node, "value", []))
+        for index, (key_node, value_node) in enumerate(entries):
+            key = str(getattr(key_node, "value", ""))
+            current_path = (*path, key)
+            start_line = key_node.start_mark.line
+            if index + 1 < len(entries):
+                end_line = entries[index + 1][0].start_mark.line
+            else:
+                end_line = value_node.end_mark.line + 1
+            ranges[current_path] = (start_line, end_line, key_node.start_mark.column)
+            _walk_mapping(value_node, current_path)
+
+    if root is not None:
+        _walk_mapping(root)
+    return ranges
+
+
+def _write_staged_yaml_from_source(
+    source_path: str,
+    staged_path: str,
+    original_data: Mapping[str, Any],
+    staged_data: Mapping[str, Any],
+) -> None:
+    """Copy YAML text and replace only values changed by staging."""
+    with open(source_path, "r", encoding="utf-8") as handle:
+        source_text = handle.read()
+    lines = source_text.splitlines()
+
+    changes = list(_iter_leaf_changes(original_data, staged_data))
+    ranges = _collect_yaml_key_ranges(source_text)
+    fallback_changes: List[tuple[tuple[str, ...], Any]] = []
+
+    ranged_changes = []
+    for path, value in changes:
+        key_range = ranges.get(path)
+        if key_range is None:
+            fallback_changes.append((path, value))
+            continue
+        ranged_changes.append((key_range, path[-1], value))
+
+    for (start, end, indent), key, value in sorted(ranged_changes, key=lambda item: item[0][0], reverse=True):
+        lines[start:end] = _render_yaml_key_block(key, value, indent=indent)
+
+    for path, value in fallback_changes:
+        key = path[-1]
+        if len(path) >= 2:
+            section_range = _find_top_level_section(lines, path[0])
+            if section_range is not None:
+                _replace_yaml_key_block(
+                    lines,
+                    key=key,
+                    value=value,
+                    start=section_range[0] + 1,
+                    end=section_range[1],
+                    insert_indent=2,
+                )
+                continue
+        _replace_yaml_key_block(lines, key=key, value=value, start=0, end=len(lines), insert_indent=0)
+
+    os.makedirs(os.path.dirname(os.path.abspath(staged_path)) or ".", exist_ok=True)
+    with open(staged_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines).rstrip() + "\n")
+
+
+def _require_config_value(config: Mapping[str, Any], key: str) -> str:
+    value = config.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"slurm config requires non-empty string: {key}")
+    return value
+
+
+def _parse_bool(value: Any, *, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    raise ValueError(f"{key} must be true or false.")
+
+
+def validate_slurm_config(config: Mapping[str, Any]) -> None:
+    """Validate orchestration-level Slurm config values."""
+    required_keys = (
+        "provider",
+        "provider_config",
+        "ssh_host",
+        "ssh_user",
+        "remote_output_dir",
+        "remote_log_dir",
+        "remote_temp_dir",
+        "remote_reference_dir",
+    )
+    for key in required_keys:
+        _require_config_value(config, key)
+    _require_config_value(config, "slurm_start_file")
+    for key in ("remote_output_dir", "remote_log_dir", "remote_temp_dir"):
+        value = _require_config_value(config, key)
+        if PATH_TEMPLATE_RUN_ID not in value:
+            raise ValueError(f"{key} must include {{run_id}}.")
+    slurm_start_file = _require_config_value(config, "slurm_start_file")
+    if not os.path.isfile(slurm_start_file):
+        raise ValueError(f"slurm_start_file does not exist: {slurm_start_file}")
+    staged_provider_file = config.get("staged_provider_file")
+    if staged_provider_file is not None and (
+        not isinstance(staged_provider_file, str) or not staged_provider_file.strip()
+    ):
+        raise ValueError("staged_provider_file must be a non-empty string when set.")
+    staged_hpc_file = config.get("staged_hpc_file")
+    if staged_hpc_file is not None and (
+        not isinstance(staged_hpc_file, str) or not staged_hpc_file.strip()
+    ):
+        raise ValueError("staged_hpc_file must be a non-empty string when set.")
+    staged_slurm_start_file = config.get("staged_slurm_start_file")
+    if staged_slurm_start_file is not None and (
+        not isinstance(staged_slurm_start_file, str) or not staged_slurm_start_file.strip()
+    ):
+        raise ValueError("staged_slurm_start_file must be a non-empty string when set.")
+    configured_run_id = config.get("run_id")
+    if configured_run_id is not None and (
+        not isinstance(configured_run_id, str) or not configured_run_id.strip()
+    ):
+        raise ValueError("run_id must be a non-empty string when set.")
+    upload_keys = config.get("provider_upload_keys", [])
+    if upload_keys is not None and not isinstance(upload_keys, list):
+        raise ValueError("provider_upload_keys must be a list of provider YAML keys.")
+    if "debug_logs" in config:
+        _parse_bool(config["debug_logs"], key="debug_logs")
+    for key in ("ssh_private_key",):
+        value = config.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{key} must be a non-empty string when set.")
+
+
+def resolve_run_id(config: Mapping[str, Any]) -> str:
+    """Resolve the Slurm run id from config or timestamp."""
+    configured_run_id = config.get("run_id")
+    if isinstance(configured_run_id, str) and configured_run_id.strip():
+        return configured_run_id.strip()
+    return make_run_id()
+
+
+def _resolve_local_template_path(value: str) -> str:
+    return value if os.path.isabs(value) else os.path.abspath(value)
+
+
+def resolve_staged_provider_file(
+    config: Mapping[str, Any],
+    *,
+    config_path: str,
+    provider_config: str,
+    run_id: str,
+) -> str:
+    """Resolve the local staged provider YAML path."""
+    del config_path
+    configured_path = config.get("staged_provider_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        staged_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        provider_abs = os.path.abspath(provider_config)
+        provider_dir = os.path.dirname(provider_abs)
+        provider_name = os.path.basename(provider_abs)
+        stem, extension = os.path.splitext(provider_name)
+        provider_label = stem.rsplit(".", 1)[-1]
+        staged_path = os.path.join(provider_dir, f"{run_id}.staged.{provider_label}{extension or '.yml'}")
+    if not os.path.isabs(staged_path):
+        staged_path = _resolve_local_template_path(staged_path)
+    if os.path.abspath(staged_path) == os.path.abspath(provider_config):
+        raise ValueError("staged_provider_file must not overwrite provider_config.")
+    return staged_path
+
+
+def resolve_staged_hpc_file(config: Mapping[str, Any], *, config_path: str, run_id: str) -> str:
+    """Resolve the local staged HPC YAML path."""
+    configured_path = config.get("staged_hpc_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        staged_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        staged_path = os.path.join(config_dir, f"{run_id}.staged.hpc.yml")
+    return _resolve_local_template_path(staged_path)
+
+
+def resolve_staged_slurm_start_file(
+    config: Mapping[str, Any],
+    *,
+    slurm_start_file: str,
+    run_id: str,
+) -> str:
+    """Resolve the local staged sbatch path."""
+    configured_path = config.get("staged_slurm_start_file")
+    if isinstance(configured_path, str) and configured_path.strip():
+        staged_path = resolve_run_template(configured_path.strip(), run_id)
+    else:
+        start_abs = os.path.abspath(slurm_start_file)
+        start_dir = os.path.dirname(start_abs)
+        staged_path = os.path.join(start_dir, f"{run_id}.staged.slurm.sbatch")
+    if not os.path.isabs(staged_path):
+        staged_path = _resolve_local_template_path(staged_path)
+    if os.path.abspath(staged_path) == os.path.abspath(slurm_start_file):
+        raise ValueError("staged_slurm_start_file must not overwrite slurm_start_file.")
+    return staged_path
+
+
+def resolve_slurm_paths(config: Mapping[str, Any], run_id: str) -> Dict[str, str]:
+    """Resolve remote output, log, temp, and reference directories."""
+    return {
+        "remote_output_dir": resolve_run_template(_require_config_value(config, "remote_output_dir"), run_id),
+        "remote_log_dir": resolve_run_template(_require_config_value(config, "remote_log_dir"), run_id),
+        "remote_temp_dir": resolve_run_template(_require_config_value(config, "remote_temp_dir"), run_id),
+        "remote_reference_dir": resolve_run_template(_require_config_value(config, "remote_reference_dir"), run_id),
+    }
+
+
+def _load_worldview_args(provider_config: str) -> argparse.Namespace:
+    config_defaults = worldview._normalize_config_defaults(worldview._load_worldview_yaml_config(provider_config))
+    parser = worldview._build_parser()
+    parser.set_defaults(**config_defaults)
+    args, _ = parser.parse_known_args(["--config-yaml", provider_config])
+    return args
+
+
+def _discover_worldview_input_files(args: argparse.Namespace) -> List[str]:
+    return worldview._collect_input_files(args.input_file_glob)
+
+
+def _discover_worldview_input_files_by_stage(args: argparse.Namespace) -> Dict[str, List[str]]:
+    return worldview._collect_input_files_by_stage(args.input_file_glob)
+
+
+def _iter_existing(paths: Iterable[str | None]) -> Iterable[str]:
+    for path in paths:
+        if path and os.path.isfile(path):
+            yield os.path.abspath(path)
+
+
+def _worldview_image_required_files(image: WorldViewImage | None) -> List[str]:
+    if image is None:
+        return []
+    paths = std_glob.glob(os.path.join(os.path.dirname(image.tif_file), f"{image.basename}.*"))
+    if image.shp_file:
+        stem = os.path.splitext(image.shp_file)[0]
+        paths.extend(std_glob.glob(f"{stem}.*"))
+    return list(_iter_existing(paths))
+
+
+def _first_path(paths: Iterable[str]) -> List[str]:
+    """Return the first path from an ordered list of candidate step outputs."""
+    for path in paths:
+        return [path]
+    return []
+
+
+def _worldview_file_source_upload_inputs(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files for the file_source step."""
+    del args, state
+    upload_files: List[str] = []
+    upload_files.extend(_worldview_image_required_files(scene.mul_image))
+    upload_files.extend(_worldview_image_required_files(scene.pan_image))
+    input_entries = [(source_step, image.tif_file) for image in scene.iter_images()]
+    return upload_files, input_entries, upload_files
+
+
+def _worldview_raster_step_upload_inputs(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files for processed raster steps."""
+    if source_step in scene.step_outputs:
+        step_files = list(_iter_existing(scene.step_outputs.get(source_step, [])))
+    elif state is not None:
+        step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
+    else:
+        step_files = []
+    return step_files, [(source_step, path) for path in _first_path(step_files)], []
+
+
+WORLDVIEW_UPLOAD_INPUT_COLLECTORS = {
+    "file_source": _worldview_file_source_upload_inputs,
+}
+
+
+def _worldview_scene_upload_inputs_for_step(
+    scene: WorldViewScene,
+    args: argparse.Namespace,
+    *,
+    source_step: str,
+    state: worldview.SceneWorkflowState | None,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Return upload files and remote discovery inputs for one selected source step."""
+    collector = WORLDVIEW_UPLOAD_INPUT_COLLECTORS.get(source_step, _worldview_raster_step_upload_inputs)
+    return collector(scene, args, source_step=source_step, state=state)
+
+
+def collect_worldview_upload_input_files(
+    scenes: Iterable[WorldViewScene],
+    args: argparse.Namespace,
+) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+    """Collect workflow source files and remote discovery TIFF inputs."""
+    paths: List[str] = []
+    input_entries: List[Tuple[str, str]] = []
+    file_source_files: List[str] = []
+    for scene in scenes:
+        explicit_source_step = worldview._get_scene_input_start_step(scene)
+        state = None if explicit_source_step != "file_source" else _make_planning_state(scene, args)
+        source_step = explicit_source_step if state is None else worldview._get_scene_upload_source_step(state, args)
+        step_uploads, step_input_entries, step_file_source_files = _worldview_scene_upload_inputs_for_step(
+            scene,
+            args,
+            source_step=source_step,
+            state=state,
+        )
+        paths.extend(step_uploads)
+        input_entries.extend(step_input_entries)
+        file_source_files.extend(step_file_source_files)
+    unique_entries = sorted(set((stage, os.path.abspath(path)) for stage, path in input_entries))
+    return sorted(set(paths)), unique_entries, sorted(set(file_source_files))
+
+
+def _common_parent(paths: Iterable[str]) -> str:
+    normalized = [os.path.abspath(path) for path in paths]
+    if not normalized:
+        return os.getcwd()
+    common = os.path.commonpath(normalized)
+    return common if os.path.isdir(common) else os.path.dirname(common)
+
+
+def _remote_file_source_path(local_path: str, *, input_root: str, remote_output_dir: str) -> str:
+    rel_path = os.path.relpath(local_path, input_root)
+    return os.path.join(remote_output_dir, "file_source", rel_path)
+
+
+def build_input_path_map(
+    input_files: Iterable[str],
+    *,
+    file_source_files: Iterable[str],
+    remote_output_dir: str,
+) -> Dict[str, str]:
+    """Map local workflow input files to remote output-tree paths."""
+    local_files = sorted({os.path.abspath(path) for path in input_files})
+    file_source_set = {os.path.abspath(path) for path in file_source_files}
+    input_root = _common_parent(local_files)
+    output_map: Dict[str, str] = {}
+    for local_path in local_files:
+        if local_path in file_source_set:
+            output_map[local_path] = _remote_file_source_path(
+                local_path,
+                input_root=input_root,
+                remote_output_dir=remote_output_dir,
+            )
+        else:
+            output_map[local_path] = os.path.join(remote_output_dir, os.path.basename(local_path))
+    return output_map
+
+
+def _hash_path(path: str) -> str:
+    return hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:10]
+
+
+def build_reference_path_map(reference_files: Iterable[str], *, remote_reference_dir: str) -> Dict[str, str]:
+    """Map local reference files to remote reference file paths."""
+    local_files = sorted({os.path.abspath(path) for path in reference_files})
+    basenames: Dict[str, List[str]] = {}
+    for path in local_files:
+        basenames.setdefault(os.path.basename(path), []).append(path)
+
+    path_map: Dict[str, str] = {}
+    for local_path in local_files:
+        basename = os.path.basename(local_path)
+        if len(basenames[basename]) > 1:
+            basename = f"{_hash_path(local_path)}_{basename}"
+        path_map[local_path] = os.path.join(remote_reference_dir, basename)
+    return path_map
+
+
+def _is_local_file_reference(value: str) -> bool:
+    if value.strip().lower() == "online":
+        return False
+    return os.path.isfile(value)
+
+
+def _collect_values_for_key(value: Any, target_key: str) -> List[Any]:
+    """Collect values for a key anywhere in a nested mapping."""
+    matches: List[Any] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == target_key:
+                matches.append(item)
+            matches.extend(_collect_values_for_key(item, target_key))
+    elif isinstance(value, list):
+        for item in value:
+            matches.extend(_collect_values_for_key(item, target_key))
+    return matches
+
+
+def _collect_group_by_basename_file_values(value: Any) -> List[str]:
+    """Collect literal file: paths from group_by_basename values."""
+    refs: List[str] = []
+    if isinstance(value, str):
+        if value.startswith("file:") and os.path.isfile(value[len("file:"):]):
+            refs.append(os.path.abspath(value[len("file:"):]))
+    elif isinstance(value, list):
+        for item in value:
+            refs.extend(_collect_group_by_basename_file_values(item))
+    elif isinstance(value, dict):
+        for item in value.values():
+            refs.extend(_collect_group_by_basename_file_values(item))
+    return refs
+
+
+def _collect_simple_path_values(value: Any) -> List[str]:
+    """Collect existing file paths from a configured simple path value."""
+    refs: List[str] = []
+    if isinstance(value, str):
+        if value.startswith("file:"):
+            value = value[len("file:"):]
+        if _is_local_file_reference(value):
+            refs.append(os.path.abspath(value))
+    elif isinstance(value, list):
+        for item in value:
+            refs.extend(_collect_simple_path_values(item))
+    return refs
+
+
+def collect_provider_reference_files(
+    provider_config_data: Mapping[str, Any],
+    *,
+    upload_keys: Iterable[str],
+    exclude_paths: Iterable[str],
+) -> List[str]:
+    """Collect explicit provider file paths requested by upload keys."""
+    excluded = {os.path.abspath(path) for path in exclude_paths}
+    refs: List[str] = []
+    for key in upload_keys:
+        if key == "input_file_glob":
+            continue
+        values = _collect_values_for_key(provider_config_data, key)
+        for value in values:
+            if key == "group_by_basename":
+                refs.extend(_collect_group_by_basename_file_values(value))
+            else:
+                refs.extend(_collect_simple_path_values(value))
+    return sorted({path for path in refs if path not in excluded})
+
+
+def _remote_save_value(save_value: Any, *, remote_kind: str) -> Any:
+    if not isinstance(save_value, str):
+        return save_value
+    normalized, save_kind = worldview._classify_save_target(save_value, default="$temp")
+    if remote_kind == "temp":
+        return normalized if save_kind in {"temp_root", "temp_child"} else f"$temp/{os.path.basename(normalized)}"
+    if save_kind in {"temp_root", "temp_child"}:
+        return normalized
+    if save_kind in {"output_root", "output_child"}:
+        return normalized
+    return f"$output/{os.path.basename(normalized)}"
+
+
+def _remote_save_value_for_key(save_key: str, save_value: Any, *, remote_output_dir: str) -> Any:
+    if save_key in {"save_seamline_metadata", "save_radiometric_normalization"} and isinstance(save_value, str):
+        normalized, save_kind = worldview._classify_save_target(save_value, default="$temp")
+        if save_kind in {"temp_root", "temp_child"}:
+            return normalized
+        return os.path.join(remote_output_dir, os.path.basename(normalized))
+    return _remote_save_value(save_value, remote_kind="output")
+
+
+def _set_nested_key(config: MutableMapping[str, Any], section: str, key: str, value: Any) -> None:
+    section_value = config.setdefault(section, {})
+    if isinstance(section_value, dict):
+        section_value[key] = value
+    else:
+        config[key] = value
+
+
+def rewrite_worldview_config_for_remote(
+    provider_config_data: Mapping[str, Any],
+    *,
+    input_file_entries: Iterable[Mapping[str, str]] | None,
+    path_rewrites: Mapping[str, str],
+    remote_output_dir: str,
+    remote_temp_dir: str,
+) -> Dict[str, Any]:
+    """Rewrite a WorldView provider config for remote execution."""
+    rewritten = copy.deepcopy(dict(provider_config_data))
+    if input_file_entries is not None:
+        _set_nested_key(rewritten, "shared", "input_file_glob", list(input_file_entries))
+    _set_nested_key(rewritten, "shared", "output_dir", remote_output_dir)
+    _set_nested_key(rewritten, "shared", "temp_dir", remote_temp_dir)
+
+    for section_name, section_value in list(rewritten.items()):
+        if not isinstance(section_value, dict):
+            continue
+        for key, value in list(section_value.items()):
+            if key.startswith("save_"):
+                section_value[key] = _remote_save_value_for_key(
+                    key,
+                    value,
+                    remote_output_dir=remote_output_dir,
+                )
+
+    return _rewrite_paths_recursive(rewritten, path_rewrites)
+
+
+def write_staged_worldview_config_for_remote(
+    source_config_path: str,
+    staged_config_path: str,
+    provider_config_data: Mapping[str, Any],
+    *,
+    input_file_entries: Iterable[Mapping[str, str]] | None,
+    path_rewrites: Mapping[str, str],
+    remote_output_dir: str,
+    remote_temp_dir: str,
+) -> None:
+    """Copy a provider YAML and replace staged remote execution values."""
+    staged_config_data = rewrite_worldview_config_for_remote(
+        provider_config_data,
+        input_file_entries=input_file_entries,
+        path_rewrites=path_rewrites,
+        remote_output_dir=remote_output_dir,
+        remote_temp_dir=remote_temp_dir,
+    )
+    _write_staged_yaml_from_source(
+        source_config_path,
+        staged_config_path,
+        provider_config_data,
+        staged_config_data,
+    )
+
+
+def _rewrite_string_path(value: str, path_rewrites: Mapping[str, str]) -> str:
+    if value.startswith("file:"):
+        local_path = os.path.abspath(value[len("file:"):])
+        if local_path in path_rewrites:
+            return f"file:{path_rewrites[local_path]}"
+        return value
+    local_path = os.path.abspath(value)
+    return path_rewrites.get(local_path, value)
+
+
+def _rewrite_paths_recursive(value: Any, path_rewrites: Mapping[str, str]) -> Any:
+    if isinstance(value, str):
+        return _rewrite_string_path(value, path_rewrites)
+    if isinstance(value, list):
+        return [_rewrite_paths_recursive(item, path_rewrites) for item in value]
+    if isinstance(value, dict):
+        return {key: _rewrite_paths_recursive(item, path_rewrites) for key, item in value.items()}
+    return value
+
+
+def _make_planning_state(scene: WorldViewScene, args: argparse.Namespace) -> worldview.SceneWorkflowState:
+    mul_image = worldview._require_scene_image(scene, "mul")
+    return worldview.SceneWorkflowState(
+        scene=scene,
+        step_dirs=worldview._resolve_scene_step_dirs(args, scene),
+        scene_bbox_wgs84=(0.0, 0.0, 0.0, 0.0),
+        current_files=[mul_image.tif_file],
+    )
+
+
+def _collect_planned_non_temp_outputs(
+    scenes: Iterable[WorldViewScene],
+    local_args: argparse.Namespace,
+    *,
+    remote_output_dir: str,
+) -> Dict[str, str]:
+    scene_list = list(scenes)
+    output_map: Dict[str, str] = {}
+    for scene in scene_list:
+        local_state = _make_planning_state(scene, local_args)
+        for local_path in worldview._scene_skip_required_outputs(local_state, local_args):
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
+
+    if local_args.run_seamline_metadata and not worldview._is_temp_save_value(local_args.save_seamline_metadata):
+        first_scene = next(iter(scene_list), None)
+        if first_scene is not None:
+            local_state = _make_planning_state(first_scene, local_args)
+            local_path = local_state.step_dirs["seamline_metadata"]
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
+
+    if local_args.run_radiometric_normalization and not getattr(local_args, "group_by_basename", None):
+        first_scene = next(iter(scene_list), None)
+        if first_scene is not None and not worldview._is_temp_save_value(local_args.save_radiometric_normalization):
+            local_state = _make_planning_state(first_scene, local_args)
+            local_path = local_state.step_dirs["radiometric_normalization"]
+            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
+
+    if local_args.run_radiometric_normalization and getattr(local_args, "group_by_basename", None):
+        first_scene = next(iter(scene_list), None)
+        if first_scene is not None:
+            local_state = _make_planning_state(first_scene, local_args)
+            output_map.update(
+                _collect_group_by_basename_output_downloads(
+                    local_args.group_by_basename,
+                    local_temp_root=local_state.step_dirs["temp_root"],
+                    local_output_root=local_state.step_dirs["output_root"],
+                    remote_output_dir=remote_output_dir,
+                )
+            )
+
+    return dict(sorted(output_map.items()))
+
+
+def _remote_output_file_path(local_path: str, remote_output_dir: str) -> str:
+    """Return the remote output file path for a planned local output."""
+    return os.path.join(remote_output_dir, os.path.basename(local_path))
+
+
+def _collect_group_by_basename_output_downloads(
+    group_by_basename: Any,
+    *,
+    local_temp_root: str,
+    local_output_root: str,
+    remote_output_dir: str,
+) -> Dict[str, str]:
+    output_map: Dict[str, str] = {}
+    group_spec = worldview._normalize_group_by_basename_spec(group_by_basename)
+
+    def _walk(spec: Mapping[str, Any]) -> None:
+        for output_key, value in spec.items():
+            local_path = worldview._resolve_radiometric_group_output_path(
+                output_name=output_key,
+                temp_root=local_temp_root,
+                output_root=local_output_root,
+            )
+            output_map[
+                os.path.abspath(local_path)
+            ] = _remote_output_file_path(local_path, remote_output_dir)
+            if isinstance(value, dict):
+                _walk(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        _walk(item)
+
+    _walk(group_spec)
+    return output_map
+
+
+def _remote_provider_config_path(staged_provider_config: str, *, remote_reference_dir: str) -> str:
+    return os.path.join(remote_reference_dir, os.path.basename(staged_provider_config))
+
+
+def _parse_sbatch_log_templates(sbatch_path: str) -> Dict[str, str]:
+    """Return output/error log templates declared by SBATCH flags."""
+    flag_to_key = {
+        "-o": "output",
+        "--output": "output",
+        "-e": "error",
+        "--error": "error",
+    }
+    templates: Dict[str, str] = {}
+    with open(sbatch_path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped.startswith("#SBATCH"):
+                continue
+            try:
+                args = shlex.split(stripped[len("#SBATCH"):].strip())
+            except ValueError:
+                continue
+            index = 0
+            while index < len(args):
+                arg = args[index]
+                key = None
+                value = None
+                if arg.startswith("--output="):
+                    key = "output"
+                    value = arg.split("=", 1)[1]
+                elif arg.startswith("--error="):
+                    key = "error"
+                    value = arg.split("=", 1)[1]
+                elif arg in flag_to_key and index + 1 < len(args):
+                    key = flag_to_key[arg]
+                    value = args[index + 1]
+                    index += 1
+                if key and value:
+                    templates[key] = value
+                index += 1
+    return templates
+
+
+def _resolve_remote_sbatch_log_templates(
+    local_templates: Mapping[str, str],
+    *,
+    remote_slurm_start_file: str,
+) -> Dict[str, str]:
+    """Resolve sbatch log templates relative to the remote sbatch file directory."""
+    remote_start_dir = _remote_parent(remote_slurm_start_file)
+    resolved: Dict[str, str] = {}
+    for key, template in local_templates.items():
+        if template.startswith("/") or template.startswith("~/"):
+            remote_template = template
+        else:
+            remote_template = os.path.normpath(os.path.join(remote_start_dir, template))
+        resolved[key] = remote_template
+    return resolved
+
+
+def _resolve_slurm_log_paths(slurm_data: Mapping[str, Any]) -> Dict[str, str]:
+    """Resolve sbatch log templates to concrete paths once a job id is known."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    templates = slurm_data.get("remote_slurm_log_templates") or slurm_data.get("remote_slurm_log_paths") or {}
+    if not isinstance(templates, dict):
+        return {}
+    resolved: Dict[str, str] = {}
+    for key, value in templates.items():
+        remote_path = str(value)
+        if job_id and job_id != "None":
+            remote_path = remote_path.replace("%j", job_id).replace("%A", job_id)
+        resolved[str(key)] = remote_path
+    return resolved
+
+
+def _add_reference_upload(reference_uploads: Dict[str, str], local_path: str, *, remote_reference_dir: str) -> str:
+    local_abs = os.path.abspath(local_path)
+    basename = os.path.basename(local_abs)
+    used_remote_paths = set(reference_uploads.values())
+    remote_path = os.path.join(remote_reference_dir, basename)
+    if remote_path in used_remote_paths:
+        remote_path = os.path.join(remote_reference_dir, f"{_hash_path(local_abs)}_{basename}")
+    reference_uploads[local_abs] = remote_path
+    return remote_path
+
+
+def _slurm_config_with_overrides(
+    config_path: str,
+    overrides: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Load a HPC YAML config and apply explicit caller/CLI overrides."""
+    config = load_yaml_file(config_path)
+    for key, value in (overrides or {}).items():
+        if value is not None:
+            config[key] = value
+    return config
+
+
+def prepare_slurm_plan(
+    config_path: str,
+    *,
+    overrides: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Prepare start Slurm and staged provider YAML files."""
+    slurm_config = _slurm_config_with_overrides(config_path, overrides)
+    validate_slurm_config(slurm_config)
+    provider = _require_config_value(slurm_config, "provider")
+    if provider != "vhr-worldview":
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    resolved_run_id = resolve_run_id(slurm_config)
+    paths = resolve_slurm_paths(slurm_config, resolved_run_id)
+    staged_hpc_file = resolve_staged_hpc_file(slurm_config, config_path=config_path, run_id=resolved_run_id)
+    provider_config = _require_config_value(slurm_config, "provider_config")
+    provider_config_data = load_yaml_file(provider_config)
+    local_args = _load_worldview_args(provider_config)
+    input_files_by_stage = _discover_worldview_input_files_by_stage(local_args)
+    scenes = worldview._load_worldview_scenes_from_stage_paths(
+        input_files_by_stage,
+        filter_basenames=local_args.filter_basename,
+    )
+    upload_keys = [str(key) for key in (slurm_config.get("provider_upload_keys") or [])]
+    input_entries_for_remote: List[Tuple[str, str]] = []
+    if "input_file_glob" in upload_keys:
+        (
+            upload_input_files,
+            input_entries_for_remote,
+            file_source_files,
+        ) = collect_worldview_upload_input_files(scenes, local_args)
+        input_uploads = build_input_path_map(
+            upload_input_files,
+            file_source_files=file_source_files,
+            remote_output_dir=paths["remote_output_dir"],
+        )
+    else:
+        input_uploads = {}
+
+    reference_files = collect_provider_reference_files(
+        provider_config_data,
+        upload_keys=upload_keys,
+        exclude_paths=input_uploads.keys(),
+    )
+    reference_uploads = build_reference_path_map(reference_files, remote_reference_dir=paths["remote_reference_dir"])
+    path_rewrites = {**input_uploads, **reference_uploads}
+    remote_input_entries = (
+        [
+            {worldview.input_file_stage_config_key(stage): path_rewrites[os.path.abspath(path)]}
+            for stage, path in input_entries_for_remote
+            if os.path.abspath(path) in path_rewrites
+        ]
+        if input_uploads
+        else None
+    )
+    staged_config = resolve_staged_provider_file(
+        slurm_config,
+        config_path=config_path,
+        provider_config=provider_config,
+        run_id=resolved_run_id,
+    )
+    write_staged_worldview_config_for_remote(
+        provider_config,
+        staged_config,
+        provider_config_data,
+        input_file_entries=remote_input_entries,
+        path_rewrites=path_rewrites,
+        remote_output_dir=paths["remote_output_dir"],
+        remote_temp_dir=paths["remote_temp_dir"],
+    )
+    staged_config_abs = os.path.abspath(staged_config)
+    remote_provider_config = _add_reference_upload(
+        reference_uploads,
+        staged_config_abs,
+        remote_reference_dir=paths["remote_reference_dir"],
+    )
+
+    output_downloads = _collect_planned_non_temp_outputs(
+        scenes,
+        local_args,
+        remote_output_dir=paths["remote_output_dir"],
+    )
+
+    slurm_start_file = _require_config_value(slurm_config, "slurm_start_file")
+    staged_slurm_start_file = resolve_staged_slurm_start_file(
+        slurm_config,
+        slurm_start_file=slurm_start_file,
+        run_id=resolved_run_id,
+    )
+    write_staged_template_file(
+        slurm_start_file,
+        staged_slurm_start_file,
+        {"run_id": resolved_run_id},
+    )
+    remote_slurm_start_file = _add_reference_upload(
+        reference_uploads,
+        staged_slurm_start_file,
+        remote_reference_dir=paths["remote_reference_dir"],
+    )
+    remote_slurm_log_templates = _resolve_remote_sbatch_log_templates(
+        _parse_sbatch_log_templates(staged_slurm_start_file),
+        remote_slurm_start_file=remote_slurm_start_file,
+    )
+
+    slurm_data: Dict[str, Any] = {
+        "provider": provider,
+        "run_id": resolved_run_id,
+        "provider_config": provider_config,
+        "slurm_start_file": slurm_start_file,
+        "staged_provider_file": staged_config_abs,
+        "staged_slurm_start_file": staged_slurm_start_file,
+        "staged_hpc_file": staged_hpc_file,
+        "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
+        "ssh_host": _require_config_value(slurm_config, "ssh_host"),
+        "ssh_user": _require_config_value(slurm_config, "ssh_user"),
+        **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
+        **paths,
+        "remote_provider_config": remote_provider_config,
+        "remote_slurm_start_file": remote_slurm_start_file,
+        "remote_slurm_log_templates": remote_slurm_log_templates,
+        "remote_slurm_log_paths": {},
+        "submitted_job_id": None,
+        "status": "prepared",
+        "uploaded_input_paths": input_uploads,
+        "uploaded_reference_paths": dict(sorted(reference_uploads.items())),
+        "download_output_paths": output_downloads,
+        "download_log_paths": {},
+        "raw_status_text": "",
+    }
+    _write_staged_hpc_file(staged_hpc_file, slurm_data)
+    return slurm_data
+
+
+def _ssh_target(slurm_data: Mapping[str, Any]) -> str:
+    return f"{_require_config_value(slurm_data, 'ssh_user')}@{_require_config_value(slurm_data, 'ssh_host')}"
+
+
+def _ssh_private_key(slurm_data: Mapping[str, Any]) -> str | None:
+    configured = slurm_data.get("ssh_private_key")
+    if not isinstance(configured, str) or not configured.strip():
+        return None
+    return os.path.expanduser(configured.strip())
+
+
+def _ssh_option_args(slurm_data: Mapping[str, Any], *, open_master: bool = False) -> List[str]:
+    del open_master
+    option_args: List[str] = []
+    private_key = _ssh_private_key(slurm_data)
+    if private_key:
+        option_args.extend(["-i", private_key])
+    return option_args
+
+
+def _ssh_command(slurm_data: Mapping[str, Any], *, open_master: bool = False) -> List[str]:
+    return ["ssh", *_ssh_option_args(slurm_data, open_master=open_master), _ssh_target(slurm_data)]
+
+
+def _ssh_close_command(slurm_data: Mapping[str, Any]) -> List[str]:
+    return ["ssh", *_ssh_option_args(slurm_data), "-O", "exit", _ssh_target(slurm_data)]
+
+
+def _ssh_command_string(slurm_data: Mapping[str, Any]) -> str:
+    return " ".join(shlex.quote(part) for part in ["ssh", *_ssh_option_args(slurm_data)])
+
+
+def _debug_enabled(slurm_data: Mapping[str, Any]) -> bool:
+    return _parse_bool(slurm_data.get("debug_logs", False), key="debug_logs")
+
+
+def _debug(slurm_data: Mapping[str, Any], message: str) -> None:
+    if _debug_enabled(slurm_data):
+        print(f"[slurm debug] {message}", flush=True)
+
+
+def _run_local_command(
+    command: List[str],
+    *,
+    check: bool = True,
+    capture_output: bool = True,
+    stream_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    if stream_output:
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        output_parts: List[str] = []
+        assert process.stdout is not None
+        while True:
+            chunk = process.stdout.read(1)
+            if not chunk:
+                break
+            print(chunk, end="", flush=True)
+            output_parts.append(chunk)
+        return_code = process.wait()
+        output = "".join(output_parts)
+        if check and return_code:
+            raise subprocess.CalledProcessError(return_code, command, output=output)
+        return subprocess.CompletedProcess(command, return_code, stdout=output, stderr="")
+    return subprocess.run(command, check=check, text=True, capture_output=capture_output)
+
+
+def _run_ssh(
+    slurm_data: Mapping[str, Any],
+    remote_command: str,
+    *,
+    check: bool = True,
+    capture_output: bool = True,
+    stream_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    return _run_local_command(
+        [*_ssh_command(slurm_data), remote_command],
+        check=check,
+        capture_output=capture_output,
+        stream_output=stream_output,
+    )
+
+
+def _remote_quote(path: str) -> str:
+    if path == "~":
+        return "~"
+    if path.startswith("~/"):
+        return "~/" + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
+def _remote_parent(path: str) -> str:
+    return os.path.dirname(path.rstrip("/")) or "."
+
+
+def _scp_download(slurm_data: Mapping[str, Any], remote_path: str, local_path: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(local_path)) or ".", exist_ok=True)
+    command = ["scp", "-p"]
+    option_args = _ssh_option_args(slurm_data)
+    for index in range(0, len(option_args), 2):
+        option, value = option_args[index:index + 2]
+        command.extend(["-o", value] if option == "-o" else [option, value])
+    command.extend([f"{_ssh_target(slurm_data)}:{remote_path}", local_path])
+    _run_local_command(command)
+
+
+def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str, str]]:
+    for section in ("uploaded_input_paths", "uploaded_reference_paths"):
+        mapping = slurm_data.get(section) or {}
+        if not isinstance(mapping, dict):
+            raise ValueError(f"{section} must be a mapping of local file to remote file.")
+        for local_path, remote_path in mapping.items():
+            yield section, str(local_path), str(remote_path)
+
+
+def _upload_root_for_section(slurm_data: Mapping[str, Any], section: str) -> str:
+    if section == "uploaded_input_paths":
+        return _require_config_value(slurm_data, "remote_output_dir")
+    if section == "uploaded_reference_paths":
+        return _require_config_value(slurm_data, "remote_reference_dir")
+    raise ValueError(f"Unsupported upload section: {section}")
+
+
+def _remote_relative_to_root(remote_path: str, remote_root: str) -> str | None:
+    root = remote_root.rstrip("/")
+    if remote_path == root:
+        return os.path.basename(remote_path)
+    prefix = f"{root}/"
+    if remote_path.startswith(prefix):
+        return remote_path[len(prefix):]
+    return None
+
+
+def _safe_remote_relative_path(path: str) -> str:
+    normalized = os.path.normpath(path).lstrip("/")
+    if normalized in {"", "."} or normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+        raise ValueError(f"Unsafe remote relative path: {path}")
+    return normalized
+
+
+def _stage_upload_tree(upload_items: Iterable[Tuple[str, str, str, str]], stage_root: str) -> None:
+    seen: Dict[str, str] = {}
+    for _section, local_path, remote_path, remote_relative_path in upload_items:
+        if not os.path.isfile(local_path):
+            raise FileNotFoundError(local_path)
+        safe_relative_path = _safe_remote_relative_path(remote_relative_path)
+        previous_source = seen.get(safe_relative_path)
+        if previous_source is not None and os.path.abspath(previous_source) != os.path.abspath(local_path):
+            raise ValueError(f"Multiple local files map to one remote path: {remote_path}")
+        seen[safe_relative_path] = local_path
+        staged_path = os.path.join(stage_root, safe_relative_path)
+        os.makedirs(os.path.dirname(staged_path), exist_ok=True)
+        if os.path.lexists(staged_path):
+            os.unlink(staged_path)
+        os.symlink(os.path.abspath(local_path), staged_path)
+
+
+def _rsync_upload_tree(
+    slurm_data: Mapping[str, Any],
+    *,
+    stage_root: str,
+    remote_root: str,
+) -> subprocess.CompletedProcess[str]:
+    debug = _debug_enabled(slurm_data)
+    command = ["rsync", "-aL", "--itemize-changes"]
+    if debug:
+        command.append("--info=progress2")
+    command.extend(["--rsync-path", f"mkdir -p {_remote_quote(remote_root)} && rsync"])
+    if _ssh_option_args(slurm_data):
+        command.extend(["-e", _ssh_command_string(slurm_data)])
+    command.extend([f"{stage_root.rstrip('/')}/", f"{_ssh_target(slurm_data)}:{remote_root.rstrip('/')}/"])
+    _debug(slurm_data, f"starting batched rsync to {remote_root}")
+    return _run_local_command(command, capture_output=not debug, stream_output=debug)
+
+
+def _group_upload_items_by_remote_root(
+    slurm_data: Mapping[str, Any],
+    upload_items: Iterable[Tuple[str, str, str]],
+) -> Dict[str, List[Tuple[str, str, str, str]]]:
+    grouped: Dict[str, List[Tuple[str, str, str, str]]] = {}
+    for section, local_path, remote_path in upload_items:
+        remote_root = _upload_root_for_section(slurm_data, section)
+        remote_relative_path = _remote_relative_to_root(remote_path, remote_root)
+        if remote_relative_path is None:
+            remote_root = _remote_parent(remote_path)
+            remote_relative_path = os.path.basename(remote_path)
+        grouped.setdefault(remote_root, []).append((section, local_path, remote_path, remote_relative_path))
+    return grouped
+
+
+def upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
+    """Upload missing or stale files listed in the staged HPC YAML."""
+    results: Dict[str, Dict[str, str]] = {}
+    upload_items = list(_iter_upload_maps(slurm_data))
+    _debug(slurm_data, f"checking {len(upload_items)} upload files")
+    grouped_uploads = _group_upload_items_by_remote_root(slurm_data, upload_items)
+    for remote_root, grouped_items in grouped_uploads.items():
+        print(f"syncing {len(grouped_items)} files -> {remote_root}", flush=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix="vhr-hpc-upload-") as stage_root:
+                _stage_upload_tree(grouped_items, stage_root)
+                result = _rsync_upload_tree(slurm_data, stage_root=stage_root, remote_root=remote_root)
+            rsync_output = ((result.stdout or "") + (result.stderr or "")).strip()
+            status = "rsync_complete" if _debug_enabled(slurm_data) else ("synced" if rsync_output else "current")
+            print(f"{status} {len(grouped_items)} files -> {remote_root}", flush=True)
+            if rsync_output:
+                _debug(slurm_data, f"rsync output for {remote_root}: {rsync_output}")
+            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
+                results[local_path] = {"remote_path": remote_path, "status": status}
+        except Exception as exc:
+            print(f"sync error {len(grouped_items)} files -> {remote_root}", flush=True)
+            print(exc)
+            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
+                results[local_path] = {"remote_path": remote_path, "status": "error", "error": str(exc)}
+            raise
+    return results
+
+
+def upload_slurm_files(config_path: str, *, overrides: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    """Prepare when needed, upload mapped files, and write upload results."""
+    slurm_data = load_yaml_file(config_path)
+    if "uploaded_input_paths" not in slurm_data and "uploaded_reference_paths" not in slurm_data:
+        slurm_data = prepare_slurm_plan(config_path, overrides=overrides)
+        output_path = _require_config_value(slurm_data, "staged_hpc_file")
+    else:
+        if overrides:
+            slurm_data.update(overrides)
+        output_path = config_path
+
+    _debug(slurm_data, f"loaded upload config: {config_path}")
+    _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
+    _debug(slurm_data, "step: upload files")
+    upload_results = upload_required_files(slurm_data)
+    slurm_data["upload_results"] = upload_results
+    slurm_data["status"] = "uploaded"
+    _debug(slurm_data, "step complete: upload files")
+    _write_staged_hpc_file(output_path, slurm_data)
+    return slurm_data
+
+
+def _status_command(job_id: str) -> str:
+    return f"scontrol show job {shlex.quote(job_id)} -dd"
+
+
+def fetch_status_text(slurm_data: Mapping[str, Any]) -> str:
+    """Fetch raw Slurm status text for the submitted job."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        return "No submitted_job_id in staged HPC YAML."
+    result = _run_ssh(slurm_data, _status_command(job_id), check=False)
+    return (result.stdout or "") + (result.stderr or "")
+
+
+def _read_remote_slurm_log(slurm_data: Mapping[str, Any], remote_path: str) -> str:
+    """Read a remote Slurm log file, returning the remote error text on failure."""
+    result = _run_ssh(slurm_data, f"cat {_remote_quote(remote_path)}", check=False)
+    text = (result.stdout or "") + (result.stderr or "")
+    if result.returncode:
+        return f"Could not read {remote_path} (exit {result.returncode}).\n{text}".rstrip()
+    return text
+
+
+def fetch_slurm_log_texts(slurm_data: Mapping[str, Any]) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Fetch resolved Slurm output/error logs declared by the sbatch file."""
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        return {}, {}
+    log_paths = _resolve_slurm_log_paths(slurm_data)
+    log_texts: Dict[str, str] = {}
+    for key in ("error", "output"):
+        remote_path = log_paths.get(key)
+        if not remote_path:
+            continue
+        try:
+            log_texts[key] = _read_remote_slurm_log(slurm_data, remote_path)
+        except Exception as exc:
+            log_texts[key] = f"Could not read {remote_path}: {exc}"
+    return log_paths, log_texts
+
+
+def _print_slurm_log_texts(log_paths: Mapping[str, str], log_texts: Mapping[str, str]) -> None:
+    for key, label in (("output", "Slurm output log"), ("error", "Slurm error log")):
+        remote_path = log_paths.get(key)
+        if not remote_path:
+            continue
+        print(f"\n=== {label}: {remote_path} ===")
+        text = log_texts.get(key, "")
+        print(text if text else "(empty)")
+
+
+def _print_slurm_status_text(raw_status_text: str) -> None:
+    print("\n=== Slurm status ===")
+    print(raw_status_text)
+
+
+def _status_from_text(raw_status_text: str) -> str:
+    match = re.search(r"\bJobState=([A-Za-z_]+)", raw_status_text)
+    if not match:
+        return "unknown"
+    state = match.group(1).upper()
+    if state in {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"}:
+        return "failed"
+    if state in {"RUNNING", "PENDING", "CONFIGURING", "COMPLETING"}:
+        return "running"
+    if state == "COMPLETED":
+        return "completed"
+    return "unknown"
+
+
+def update_status_slurm_file(config_path: str) -> Dict[str, Any]:
+    """Update job status fields in a staged HPC YAML."""
+    slurm_data = load_yaml_file(config_path)
+    raw_status_text = fetch_status_text(slurm_data)
+    log_paths, log_texts = fetch_slurm_log_texts(slurm_data)
+    slurm_data["raw_status_text"] = raw_status_text
+    slurm_data["remote_slurm_log_paths"] = log_paths
+    slurm_data["raw_slurm_log_text"] = log_texts
+    slurm_data["status"] = _status_from_text(raw_status_text)
+    _write_staged_hpc_file(config_path, slurm_data)
+    _print_slurm_log_texts(log_paths, log_texts)
+    _print_slurm_status_text(raw_status_text)
+    return slurm_data
+
+
+def start_slurm_job(config_path: str) -> Dict[str, Any]:
+    """Submit the Slurm job and update the staged HPC YAML."""
+    slurm_data = load_yaml_file(config_path)
+    _debug(slurm_data, f"loaded start file: {config_path}")
+    _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
+
+    remote_start_file = _require_config_value(slurm_data, "remote_slurm_start_file")
+    remote_provider_config = _require_config_value(slurm_data, "remote_provider_config")
+    _debug(slurm_data, f"remote start file: {remote_start_file}")
+    _debug(slurm_data, f"remote provider config: {remote_provider_config}")
+    remote_command = (
+        f"cd {_remote_quote(_remote_parent(remote_start_file))} && "
+        f"sbatch {_remote_quote(remote_start_file)} {_remote_quote(remote_provider_config)}"
+    )
+    _debug(slurm_data, f"submit command: {remote_command}")
+    _debug(slurm_data, "step: submit job")
+    result = _run_ssh(
+        slurm_data,
+        remote_command,
+        check=True,
+        capture_output=not _debug_enabled(slurm_data),
+        stream_output=_debug_enabled(slurm_data),
+    )
+    start_output = (result.stdout or "") + (result.stderr or "")
+    if not _debug_enabled(slurm_data):
+        print(start_output)
+    match = re.search(r"Submitted batch job\s+(\d+)", start_output)
+    if not match:
+        raise RuntimeError(f"Could not parse sbatch job id from output:\n{start_output}")
+
+    slurm_data["submitted_job_id"] = match.group(1)
+    _debug(slurm_data, f"submitted job id: {slurm_data['submitted_job_id']}")
+    slurm_data["status"] = "submitted"
+    slurm_data["raw_start_output"] = start_output
+    slurm_data["remote_slurm_log_paths"] = _resolve_slurm_log_paths(slurm_data)
+    _debug(slurm_data, "step: fetch status")
+    raw_status_text = fetch_status_text(slurm_data)
+    slurm_data["raw_status_text"] = raw_status_text
+    slurm_data["status"] = _status_from_text(raw_status_text)
+    _debug(slurm_data, f"status after submit: {slurm_data['status']}")
+    _debug(slurm_data, "step: write start file")
+    _write_staged_hpc_file(config_path, slurm_data)
+    print(raw_status_text)
+    return slurm_data
+
+
+def _require_submitted_job_id(slurm_data: Mapping[str, Any]) -> str:
+    job_id = str(slurm_data.get("submitted_job_id") or "").strip()
+    if not job_id or job_id == "None":
+        raise ValueError("staged HPC YAML has no submitted_job_id.")
+    return job_id
+
+
+def stop_slurm_job(config_path: str) -> subprocess.CompletedProcess[str]:
+    """Cancel the submitted Slurm job listed in the staged HPC YAML."""
+    slurm_data = load_yaml_file(config_path)
+    job_id = _require_submitted_job_id(slurm_data)
+    result = _run_ssh(slurm_data, f"scancel {shlex.quote(job_id)}", check=True)
+    output = (result.stdout or "") + (result.stderr or "")
+    if output:
+        print(output)
+    return result
+
+
+def close_hpc_connection(config_path: str) -> subprocess.CompletedProcess[str]:
+    """Close the SSH multiplex master for the staged HPC YAML target."""
+    slurm_data = load_yaml_file(config_path)
+    result = _run_local_command(_ssh_close_command(slurm_data), check=False)
+    output = (result.stdout or "") + (result.stderr or "")
+    if output:
+        print(output)
+    return result
+
+
+def download_slurm_outputs(config_path: str) -> None:
+    """Download files listed in download sections of the staged HPC YAML."""
+    slurm_data = load_yaml_file(config_path)
+    for section in ("download_output_paths", "download_log_paths"):
+        mapping = slurm_data.get(section) or {}
+        if not isinstance(mapping, dict):
+            print(f"{section} is not a mapping")
+            continue
+        for local_path, remote_path in mapping.items():
+            print(f"downloading {remote_path} -> {local_path}")
+            try:
+                _scp_download(slurm_data, str(remote_path), str(local_path))
+                print(f"downloaded {local_path}")
+            except Exception as exc:
+                print(f"download error {remote_path} -> {local_path}")
+                print(exc)
+
+
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="vhr-hpc", description="Prepare and manage vhrharmonize Slurm jobs.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    prepare_parser = subparsers.add_parser("prepare", help="Prepare local staged files and staged HPC YAML.")
+    prepare_parser.add_argument("--config", required=True, help="Path to HPC config YAML.")
+    for key in SLURM_PREPARE_CONFIG_KEYS:
+        option = f"--{key.replace('_', '-')}"
+        if key == "provider_upload_keys":
+            prepare_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
+        elif key == "debug_logs":
+            prepare_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during start.")
+        else:
+            prepare_parser.add_argument(option, help=f"Override HPC config key: {key}.")
+
+    upload_parser = subparsers.add_parser("upload", help="Prepare when needed and upload mapped files.")
+    upload_parser.add_argument("--config", required=True, help="Path to prepare HPC YAML or staged HPC YAML.")
+    for key in SLURM_PREPARE_CONFIG_KEYS:
+        option = f"--{key.replace('_', '-')}"
+        if key == "provider_upload_keys":
+            upload_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
+        elif key == "debug_logs":
+            upload_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during upload.")
+        else:
+            upload_parser.add_argument(option, help=f"Override HPC config key: {key}.")
+
+    start_parser = subparsers.add_parser("start", help="Submit the Slurm job.")
+    start_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
+    status_parser = subparsers.add_parser("status", help="Refresh Slurm job status in the staged HPC YAML.")
+    status_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
+    stop_parser = subparsers.add_parser("stop", help="Cancel the submitted Slurm job.")
+    stop_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
+    close_parser = subparsers.add_parser("close", help="Close the SSH multiplex connection.")
+    close_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+
+    download_parser = subparsers.add_parser("download", help="Download files listed in the staged HPC YAML.")
+    download_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
+    return parser
+
+
+def _collect_prepare_overrides(args: argparse.Namespace) -> Dict[str, Any]:
+    """Collect CLI values that should override HPC YAML config defaults."""
+    overrides: Dict[str, Any] = {}
+    for key in SLURM_PREPARE_CONFIG_KEYS:
+        value = getattr(args, key, None)
+        if value is None:
+            continue
+        overrides[key] = _parse_bool(value, key=key) if key == "debug_logs" else value
+    return overrides
+
+
+def main(argv: List[str] | None = None) -> int:
+    """CLI entrypoint for Slurm staging and job control."""
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    if args.command == "prepare":
+        slurm_data = prepare_slurm_plan(args.config, overrides=_collect_prepare_overrides(args))
+        print(f"Wrote staged HPC file {slurm_data['staged_hpc_file']}")
+        print(f"Wrote staged provider file {slurm_data['staged_provider_file']}")
+        print(f"Wrote staged Slurm start file {slurm_data['staged_slurm_start_file']}")
+        return 0
+    if args.command == "upload":
+        slurm_data = upload_slurm_files(args.config, overrides=_collect_prepare_overrides(args))
+        print(f"Uploaded files listed in {slurm_data['staged_hpc_file']}")
+        return 0
+    if args.command == "start":
+        start_slurm_job(args.config)
+        return 0
+    if args.command == "status":
+        update_status_slurm_file(args.config)
+        return 0
+    if args.command == "stop":
+        stop_slurm_job(args.config)
+        return 0
+    if args.command == "close":
+        close_hpc_connection(args.config)
+        return 0
+    if args.command == "download":
+        download_slurm_outputs(args.config)
+        return 0
+    parser.error(f"Unsupported command: {args.command}")
+    return 2
+
+
+__all__ = [
+    "build_input_path_map",
+    "build_reference_path_map",
+    "close_hpc_connection",
+    "collect_provider_reference_files",
+    "collect_worldview_upload_input_files",
+    "download_slurm_outputs",
+    "fetch_status_text",
+    "load_yaml_file",
+    "make_run_id",
+    "prepare_slurm_plan",
+    "resolve_staged_hpc_file",
+    "resolve_staged_slurm_start_file",
+    "resolve_run_id",
+    "resolve_staged_provider_file",
+    "resolve_slurm_paths",
+    "rewrite_worldview_config_for_remote",
+    "start_slurm_job",
+    "stop_slurm_job",
+    "update_status_slurm_file",
+    "upload_required_files",
+    "upload_slurm_files",
+    "validate_slurm_config",
+    "write_staged_template_file",
+    "write_staged_worldview_config_for_remote",
+    "write_yaml_file",
+]

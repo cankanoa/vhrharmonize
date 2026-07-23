@@ -4,7 +4,7 @@ The main workflow config is the YAML file used by `vhr-worldview`.
 
 Use the tracked template:
 
-- [configs/worldview.example.yml](https://github.com/cankanoa/vhrharmonize/blob/main/configs/worldview.example.yml)
+- [configs/example.worldview.yml](https://github.com/cankanoa/vhrharmonize/blob/main/configs/example.worldview.yml)
 
 The file is organized into these sections:
 

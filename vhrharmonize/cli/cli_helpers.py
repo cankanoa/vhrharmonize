@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import yaml
+
 
 def load_yaml_config(path: str) -> Dict[str, Any]:
     """Load and normalize a YAML config file.
@@ -12,13 +14,6 @@ def load_yaml_config(path: str) -> Dict[str, Any]:
     Returns:
         Loaded config mapping with hyphenated keys normalized to underscores.
     """
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError(
-            "PyYAML is required for --config-yaml. Install it with `pip install pyyaml`."
-        ) from exc
-
     with open(path, "r", encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, dict):

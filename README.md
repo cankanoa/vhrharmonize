@@ -37,10 +37,10 @@ conda activate vhrharmonize
 pip install vhrharmonize[defaults]
 ```
 ## Getting Started
-For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/worldview.example.yml](docs/configs/worldview.example.yml) and running:
+For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/example.worldview.yml](docs/configs/example.worldview.yml) and running:
 
 ```bash
-vhr-worldview --config-yaml worldview.example.yml
+vhr-worldview --config-yaml example.worldview.yml
 ```
 Or pass in arguments directly from the command line:
 
@@ -64,6 +64,23 @@ vhr-align-image-pair --help
 vhr-orthorectification --help
 vhr-radiometric-normalization --help
 vhr-py6s --help
+```
+
+To use on a super computer (slurm):
+```
+vhr-hpc prepare --config configs/example.hpc.yml # Create staged HPC/provider/slurm files
+vhr-hpc upload --config configs/1.staged.hpc.yml # Upload required files
+vhr-hpc start --config configs/1.staged.hpc.yml # Submit the job
+vhr-hpc status --config configs/1.staged.hpc.yml # Print logs and job status
+vhr-hpc download --config configs/1.staged.hpc.yml # Download declared outputs
+
+# Other commands:
+vhr-hpc stop --config configs/1.staged.hpc.yml # Cancel the submitted job
+vhr-hpc close --config configs/1.staged.hpc.yml # Close the SSH multiplex connection
+
+# Or all together:
+vhr-hpc prepare --config configs/example.hpc.yml && vhr-hpc upload --config configs/1.staged.hpc.yml && vhr-hpc start --config configs/1.staged.hpc.yml && vhr-hpc status --config configs/1.staged.hpc.yml && vhr-hpc download --config configs/1.staged.hpc.yml
+
 ```
 
 ## Contributing

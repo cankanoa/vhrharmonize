@@ -125,6 +125,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--calculation-dtype", default="float32")
     parser.add_argument("--output-dtype")
     parser.add_argument("--save-as-cog", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--match-steps", nargs="+", help="SpectralMatch pipeline steps to run in order.")
     parser.add_argument(
         "--extra-kwargs-json",
         help="Optional JSON object of additional SpectralMatch pipeline kwargs.",
@@ -144,7 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     _apply_unknown_match_args(args, unknown_args)
 
     extra_kwargs = _json_dict(args.extra_kwargs_json)
-    extra_kwargs.update(_collect_prefixed_kwargs(args, "match_"))
+    match_kwargs = _collect_prefixed_kwargs(args, "match_")
+    extra_kwargs.update(match_kwargs)
 
     output = radiometric_normalization(
         shared_input_images=args.input_image,

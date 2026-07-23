@@ -1,13 +1,13 @@
 # Quickstart
 
 ## WorldView-3
-WorldView-3 is the only currently streamlined end-to-end sensor workflow. For easy setup,use the example config as your starting point at [../configs/worldview.example.yml](../configs/worldview.example.yml)
+WorldView-3 is the only currently streamlined end-to-end sensor workflow. For easy setup,use the example config as your starting point at [../configs/example.worldview.yml](../configs/example.worldview.yml)
 
 ### Full workflow
 Assuming you already have the library installed.
 1. Obtain the example config:
-   2. If you have installed from Pypi as a Python library, download this file: [../configs/worldview.example.yml](../configs/worldview.example.yml).
-   3. If you have cloned the repository, navigate to the configs/worldview.example.yml file.
+   2. If you have installed from Pypi as a Python library, download this file: [../configs/example.worldview.yml](../configs/example.worldview.yml).
+   3. If you have cloned the repository, navigate to the configs/example.worldview.yml file.
 2. Run the config from the command line with:
 
 ```bash

@@ -129,12 +129,8 @@ class StandardizedMetadata:
             if isinstance(band_group, dict):
                 abs_cal = band_group.get("absCalFactor")
                 effective_bandwidth = band_group.get("effectiveBandwidth")
-            try:
-                abs_cal = float(abs_cal) if abs_cal is not None else None
-                effective_bandwidth = float(effective_bandwidth) if effective_bandwidth is not None else None
-            except (TypeError, ValueError):
-                abs_cal = None
-                effective_bandwidth = None
+            abs_cal = float(abs_cal) if abs_cal is not None else None
+            effective_bandwidth = float(effective_bandwidth) if effective_bandwidth is not None else None
             if abs_cal is None or effective_bandwidth in (None, 0.0):
                 continue
             discovered_band_order.append(band_name)

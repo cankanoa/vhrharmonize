@@ -1,0 +1,45 @@
+# Provider class
+provider: vhr-worldview # Provider runner to stage
+
+# Set task ID
+run_id: "1" # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime
+
+# Editable files
+provider_config: configs/example.worldview.yml # Local provider YAML to rewrite for Slurm
+slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
+
+# Generated files
+staged_provider_file: configs/{run_id}.staged.worldview.yml # Generated rewritten provider YAML
+staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch with {run_id} replaced
+staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
+debug_logs: true # Print debug logs
+
+# SSH login
+ssh_host: koa.its.hawaii.edu
+ssh_user: username
+# ssh_private_key: ~/.ssh/id_ed25519 # Optional identity file
+
+# Remote directories. Optional, {run_id} will be replaced with the run ID
+remote_output_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/output # Non-temp outputs and uploaded workflow inputs
+remote_log_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/logs # Slurm/stdout logs
+remote_temp_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/tmp # $temp outputs
+remote_reference_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/references # Shared reference files
+
+# Provider YAML keys to upload. Only upload keys that are set
+provider_upload_keys:
+  - input_file_glob # Special case: uploads the workflow input step selected by WorldView
+  - group_by_basename # Special case: uploads only literal file: entries
+  - dem_file_path
+  - existing_flaash_input
+  - existing_mul_ortho_input
+  - existing_pan_ortho_input
+  - orthorectification_rpc_refinement_geojson
+  - alignment_fixed_image
+  - match_global_regression_vector_mask
+  - match_local_block_adjustment_vector_mask
+  - match_voronoi_center_seamline_aoi_path
+  - match_voronoi_center_seamline_vector_mask
+  - match_weighted_seamline_input_polygons
+  - match_mask_rasters_vector_mask
+  - match_global_regression_load_adjustments
+  - match_local_block_adjustment_load_block_maps

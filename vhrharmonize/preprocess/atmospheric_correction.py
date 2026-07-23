@@ -10,6 +10,7 @@ import shutil
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import numpy as np
+from Py6S import AeroProfile, AtmosCorr, AtmosProfile, Geometry, SixS, Wavelength
 import rasterio
 from tqdm import tqdm
 
@@ -307,13 +308,6 @@ class Py6SCorrector:
 
     def run(self, input_raster: str, output_raster: str, **kwargs: Any) -> str:
         """Run block-wise Py6S atmospheric correction for multispectral rasters."""
-        try:
-            from Py6S import AeroProfile, AtmosCorr, AtmosProfile, Geometry, SixS, Wavelength
-        except ImportError as exc:
-            raise RuntimeError(
-                "Py6S is not installed. Install extras with `pip install -e \".[py6s]\"`."
-            ) from exc
-
         required = ("solar_zenith", "solar_azimuth", "view_zenith", "view_azimuth", "day", "month")
         missing = [k for k in required if kwargs.get(k) is None]
         if missing:

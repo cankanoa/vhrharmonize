@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import rasterio
+import yaml
 
 import vhrharmonize.preprocess.atmospheric_correction as atmos_mod
 import vhrharmonize.preprocess.fetch_external_data as fetch_mod
@@ -174,3 +175,641 @@ def test_pansharpen_and_radiometric(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(rad_mod, "_load_spectralmatch_pipeline", lambda: (lambda **kwargs: kwargs["shared_output_image_path"]))
     result = radiometric_normalization([str(out)], str(tmp_path / "norm.tif"), shared_cache="auto")
     assert result.endswith("norm.tif")
+
+
+def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    root_output = str(tmp_path / "out" / "root.tif")
+    child_output = str(tmp_path / "out" / "child.tif")
+    spec = worldview._normalize_group_by_basename_spec({
+        "root.tif": [
+            "auto:*893242343*",
+            {"child.tif": ["file:/external/ref.tif", "auto:*222222222*"]},
+            "auto:*123456789*",
+        ]
+    })
+    assert spec["root.tif"][1]["child.tif"][0] == "file:/external/ref.tif"
+    assert worldview._resolve_radiometric_group_output_path(
+        output_name="from_output.tif",
+        temp_root=str(tmp_path / "tmp"),
+        output_root=str(tmp_path / "out"),
+    ) == str(tmp_path / "out" / "from_output.tif")
+    assert worldview._resolve_radiometric_group_output_path(
+        output_name="nested/from_output.tif",
+        temp_root=str(tmp_path / "tmp"),
+        output_root=str(tmp_path / "out"),
+    ) == str(tmp_path / "out" / "from_output.tif")
+    assert worldview._match_radiometric_input_patterns("*893242343*", ["/scene/auto_893242343.tif"]) == [
+        "/scene/auto_893242343.tif"
+    ]
+    for bad_spec in ({"x.tif": "*missing-prefix*"}, {"": "auto:*"}, {"x.tif": []}):
+        try:
+            worldview._normalize_group_by_basename_spec(bad_spec)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid group spec was accepted")
+
+    calls = []
+    monkeypatch.setattr(
+        worldview,
+        "radiometric_normalization",
+        lambda **kwargs: calls.append(kwargs) or kwargs["shared_output_image_path"],
+    )
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=None,
+        run_from_existing=False,
+        run_from_existing_check_validity=False,
+        log_to_console=False,
+        keep_temp_dir=False,
+        dtype="int16",
+        radiometric_normalization_method="spectralmatch",
+        calculate_overviews_radiometric_normalization=False,
+    )
+    available = [
+        "/scene/auto_893242343.tif",
+        "/scene/auto_222222222.tif",
+        "/scene/auto_123456789.tif",
+    ]
+    result = worldview._run_named_radiometric_groups(
+        spec,
+        available_paths=available,
+        args=args,
+        temp_root=str(tmp_path / "tmp"),
+        output_root=str(tmp_path / "out"),
+    )
+    assert result == root_output
+    assert [call["shared_output_image_path"] for call in calls] == [
+        child_output,
+        root_output,
+    ]
+    assert calls[0]["shared_input_images"] == ["/external/ref.tif", "/scene/auto_222222222.tif"]
+    assert calls[1]["shared_input_images"] == [
+        "/scene/auto_893242343.tif",
+        child_output,
+        "/scene/auto_123456789.tif",
+    ]
+
+
+def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=None,
+        match_steps=["global_regression", "weighted_seamline", "mask"],
+        match_weighted_seamline_input_polygons=None,
+        match_weighted_seamline_input_layer=None,
+        match_weighted_seamline_image_field_name=None,
+        seamline_metadata_layer="footprints",
+        seamline_metadata_image_field_name="image",
+    )
+
+    assert worldview._build_radiometric_kwargs(args)["steps"] == [
+        "global_regression",
+        "weighted_seamline",
+        "mask",
+    ]
+    worldview._apply_weighted_seamline_metadata_defaults(args, "/tmp/seamline_metadata.gpkg")
+    assert args.match_weighted_seamline_input_polygons == "/tmp/seamline_metadata.gpkg"
+    assert args.match_weighted_seamline_input_layer == "footprints"
+    assert args.match_weighted_seamline_image_field_name == "image"
+
+
+def test_worldview_dask_scene_backend(monkeypatch) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    calls = {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            calls["client_args"] = args
+            calls["client_kwargs"] = kwargs
+            self.closed = False
+
+        def map(self, fn, scenes, args_list):
+            calls["mapped"] = list(scenes)
+            return [fn(scene, args) for scene, args in zip(scenes, args_list)]
+
+        def gather(self, futures):
+            return futures
+
+        def close(self):
+            calls["closed"] = True
+
+    fake_dask = ModuleType("dask")
+    fake_distributed = ModuleType("dask.distributed")
+    fake_distributed.Client = _Client
+    fake_dask.distributed = fake_distributed
+    monkeypatch.setitem(sys.modules, "dask", fake_dask)
+    monkeypatch.setitem(sys.modules, "dask.distributed", fake_distributed)
+    monkeypatch.setattr(worldview, "_process_scene", lambda scene, args: f"state:{scene}")
+
+    args = SimpleNamespace(
+        concurrent_processing=2,
+        concurrent_processing_backend="dask",
+        dask_scheduler_file="/tmp/dask-scheduler.json",
+        dask_scheduler_address=None,
+        log_to_console=False,
+    )
+    assert worldview._process_scenes(["scene-a", "scene-b"], args) == ["state:scene-a", "state:scene-b"]
+    assert calls["client_kwargs"] == {"scheduler_file": "/tmp/dask-scheduler.json"}
+    assert calls["mapped"] == ["scene-a", "scene-b"]
+    assert calls["closed"] is True
+
+
+def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    nan_path = tmp_path / "all_nan.tif"
+    valid_path = tmp_path / "valid.tif"
+    profile = {
+        "driver": "GTiff",
+        "width": 4,
+        "height": 4,
+        "count": 1,
+        "dtype": "float32",
+        "transform": rasterio.transform.from_origin(0, 4, 1, 1),
+        "crs": "EPSG:4326",
+        "nodata": np.nan,
+    }
+    with rasterio.open(nan_path, "w", **profile) as dst:
+        dst.write(np.full((1, 4, 4), np.nan, dtype=np.float32))
+    with rasterio.open(valid_path, "w", **profile) as dst:
+        data = np.full((1, 4, 4), np.nan, dtype=np.float32)
+        data[0, 1, 1] = 1.0
+        dst.write(data)
+
+    assert worldview._gdal_raster_is_valid(str(nan_path), validity_check_grid_size=0) == (True, None)
+    assert worldview._gdal_raster_is_valid(
+        str(nan_path),
+        validity_check_grid_size=1,
+    ) == (False, "no finite valid pixels found in validity sample")
+    assert worldview._gdal_raster_is_valid(str(valid_path), validity_check_grid_size=2) == (True, None)
+
+
+def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle) -> None:
+    from vhrharmonize.slurm import load_yaml_file, prepare_slurm_plan
+
+    bundle = make_worldview_bundle()
+    dem_path = tmp_path / "dem.tif"
+    with rasterio.open(bundle["mul_tif"]) as src:
+        profile = src.profile.copy()
+        data = src.read(1)
+    profile.update(count=1)
+    with rasterio.open(dem_path, "w", **profile) as dst:
+        dst.write(data, 1)
+    unlisted_path = tmp_path / "unlisted_reference.tif"
+    with rasterio.open(unlisted_path, "w", **profile) as dst:
+        dst.write(data, 1)
+
+    provider_config = tmp_path / "worldview.yml"
+    provider_config.write_text(
+        yaml.safe_dump(
+            {
+                "shared": {
+                    "input_file_glob": [{"file_source": str(bundle["scene_root"] / "**" / "*.TIF")}],
+                    "dem_file_path": str(dem_path),
+                    "alignment_fixed_image": str(unlisted_path),
+                    "output_dir": str(tmp_path / "local_output"),
+                    "run_cloud_mask": True,
+                    "save_cloud_mask": str(tmp_path / "local_output"),
+                    "run_radiometric_normalization": True,
+                    "run_from_existing": False,
+                },
+                "cloud_mask": {
+                    "cloud_mask_method": "threshold",
+                },
+                "radiometric_normalization": {
+                    "group_by_basename": {
+                        "grouped.tif": "auto:**/*.tif",
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    slurm_config = tmp_path / "example.hpc.yml"
+    staged_hpc_file = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm_start_file = tmp_path / "RUN123.staged.slurm.sbatch"
+    script_path = tmp_path / "example.slurm.sbatch"
+    script_path.write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --output=../logs/slurm-%j.out\n"
+        "#SBATCH --error=../logs/slurm-%j.err\n"
+        "scheduler_file=\"${HOME}/dask-scheduler-{run_id}.json\"\n"
+        "vhr-worldview --config-yaml \"$1\"\n",
+        encoding="utf-8",
+    )
+    slurm_config.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "RUN123",
+                "provider": "vhr-worldview",
+                "provider_config": str(provider_config),
+                "staged_hpc_file": str(staged_hpc_file),
+                "staged_slurm_start_file": str(staged_slurm_start_file),
+                "debug_logs": True,
+                "ssh_host": "example.edu",
+                "ssh_user": "user",
+                "ssh_private_key": "~/.ssh/id_ed25519",
+                "remote_output_dir": "/remote/runs/{run_id}/output",
+                "remote_log_dir": "/remote/runs/{run_id}/logs",
+                "remote_temp_dir": "/remote/runs/{run_id}/tmp",
+                "remote_reference_dir": "/remote/references",
+                "slurm_start_file": str(script_path),
+                "provider_upload_keys": [
+                    "input_file_glob",
+                    "dem_file_path",
+                    "group_by_basename",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    plan = prepare_slurm_plan(str(slurm_config))
+    written_slurm = load_yaml_file(str(staged_hpc_file))
+
+    assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
+    assert written_slurm["status"] == "prepared"
+    assert written_slurm["debug_logs"] is True
+    assert written_slurm["ssh_private_key"] == "~/.ssh/id_ed25519"
+    assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
+    assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
+    assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
+    assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
+    assert str(staged_slurm_start_file.resolve()) in plan["uploaded_reference_paths"]
+    assert str(script_path.resolve()) not in plan["uploaded_reference_paths"]
+    assert plan["remote_slurm_start_file"] == "/remote/references/RUN123.staged.slurm.sbatch"
+    assert plan["remote_slurm_log_templates"] == {
+        "output": "/remote/logs/slurm-%j.out",
+        "error": "/remote/logs/slurm-%j.err",
+    }
+    assert all(not Path(remote).suffix == "" for remote in plan["uploaded_reference_paths"].values())
+    assert any(remote.startswith("/remote/runs/RUN123/output") for remote in plan["download_output_paths"].values())
+
+    staged = load_yaml_file(plan["staged_provider_file"])
+    assert staged["shared"]["temp_dir"] == "/remote/runs/RUN123/tmp"
+    assert staged["shared"]["output_dir"] == "/remote/runs/RUN123/output"
+    assert staged["shared"]["dem_file_path"] == "/remote/references/dem.tif"
+    staged_inputs = staged["shared"]["input_file_glob"]
+    assert all(isinstance(item, dict) and len(item) == 1 for item in staged_inputs)
+    assert all(next(iter(item)) == "file_source" for item in staged_inputs)
+    assert all(
+        next(iter(item.values())).startswith("/remote/runs/RUN123/output/file_source")
+        for item in staged_inputs
+    )
+    assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
+    assert (
+        plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
+        == "/remote/runs/RUN123/output/grouped.tif"
+    )
+    assert "dask-scheduler-RUN123.json" in staged_slurm_start_file.read_text(encoding="utf-8")
+
+
+def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
+    from vhrharmonize.slurm import (
+        _first_path,
+        _parse_sbatch_log_templates,
+        _remote_quote,
+        _resolve_remote_sbatch_log_templates,
+        _status_command,
+        _status_from_text,
+        resolve_staged_hpc_file,
+        resolve_staged_provider_file,
+        resolve_staged_slurm_start_file,
+        write_sectioned_yaml_file,
+    )
+
+    output_path = tmp_path / "RUN123.staged.hpc.yml"
+    long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
+    write_sectioned_yaml_file(
+        str(output_path),
+        {"uploaded_input_paths": {long_path: "~/koa_scratch/run/output/image.tif"}},
+        header_by_key={"uploaded_input_paths": "# All mappings are local file: remote file."},
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "? " not in text
+    assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
+    assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
+    assert resolve_staged_hpc_file({}, config_path=str(tmp_path / "example.hpc.yml"), run_id="RUN123") == str(
+        tmp_path / "RUN123.staged.hpc.yml"
+    )
+    assert resolve_staged_provider_file(
+        {},
+        config_path=str(tmp_path / "example.hpc.yml"),
+        provider_config=str(tmp_path / "example.worldview.yml"),
+        run_id="RUN123",
+    ) == str(tmp_path / "RUN123.staged.worldview.yml")
+    assert resolve_staged_slurm_start_file(
+        {},
+        slurm_start_file=str(tmp_path / "example.slurm.sbatch"),
+        run_id="RUN123",
+    ) == str(tmp_path / "RUN123.staged.slurm.sbatch")
+    assert _first_path(
+        [
+            "/remote/scene_py6s_ortho_pansharpen_cloudmasked.tif",
+            "/remote/scene_py6s_ortho_pansharpen_cloudmask.tif",
+        ]
+    ) == ["/remote/scene_py6s_ortho_pansharpen_cloudmasked.tif"]
+    sbatch_path = tmp_path / "job.sbatch"
+    sbatch_path.write_text(
+        "#!/bin/bash\n"
+        "#SBATCH --output ../logs/slurm-%j.out\n"
+        "#SBATCH -e ../logs/slurm-%j.err\n",
+        encoding="utf-8",
+    )
+    assert _resolve_remote_sbatch_log_templates(
+        _parse_sbatch_log_templates(str(sbatch_path)),
+        remote_slurm_start_file="~/remote/references/job.sbatch",
+    ) == {
+        "output": "~/remote/logs/slurm-%j.out",
+        "error": "~/remote/logs/slurm-%j.err",
+    }
+    status_command = _status_command("123")
+    assert status_command == "scontrol show job 123 -dd"
+    assert _status_from_text("JobId=13590014 JobName=vhr-worldview\n   JobState=FAILED Reason=None") == "failed"
+    assert _status_from_text("JobId=123 JobName=vhr-worldview\n   JobState=RUNNING Reason=None") == "running"
+
+
+def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    local_path = tmp_path / "input.tif"
+    local_path.write_text("data", encoding="utf-8")
+    calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        calls.append(("ssh", remote_command))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def fake_run_local_command(command, *, check=True, capture_output=True, stream_output=False):
+        calls.append(("local", command))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    monkeypatch.setattr(slurm_mod, "_run_local_command", fake_run_local_command)
+
+    result = slurm_mod._rsync_upload(
+        {"ssh_user": "user", "ssh_host": "host"},
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+
+    assert result.returncode == 0
+    assert calls[0] == ("ssh", "mkdir -p ~/remote/output")
+    assert calls[1] == (
+        "local",
+        ["rsync", "-a", "--itemize-changes", str(local_path), "user@host:~/remote/output/input.tif"],
+    )
+
+    calls.clear()
+    slurm_mod._rsync_upload(
+        {
+            "ssh_user": "user",
+            "ssh_host": "host",
+            "ssh_private_key": "~/.ssh/id_ed25519",
+        },
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+    assert calls[1] == (
+        "local",
+        [
+            "rsync",
+            "-a",
+            "--itemize-changes",
+            "-e",
+            f"ssh -i {Path.home()}/.ssh/id_ed25519",
+            str(local_path),
+            "user@host:~/remote/output/input.tif",
+        ],
+    )
+
+    calls.clear()
+    slurm_mod._rsync_upload(
+        {
+            "ssh_user": "user",
+            "ssh_host": "host",
+            "ssh_private_key": "~/.ssh/id_ed25519",
+            "debug_logs": True,
+        },
+        str(local_path),
+        "~/remote/output/input.tif",
+    )
+    assert calls[1] == (
+        "local",
+        [
+            "rsync",
+            "-a",
+            "--itemize-changes",
+            "--info=progress2",
+            "-e",
+            f"ssh -i {Path.home()}/.ssh/id_ed25519",
+            str(local_path),
+            "user@host:~/remote/output/input.tif",
+        ],
+    )
+
+
+def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    local_path = tmp_path / "input.tif"
+    local_path.write_text("data", encoding="utf-8")
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "RUN123",
+                "provider": "vhr-worldview",
+                "staged_hpc_file": str(staged_slurm),
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "remote_provider_config": "~/remote/provider.yml",
+                "remote_slurm_start_file": "~/remote/worldview.sbatch",
+                "remote_slurm_log_templates": {
+                    "output": "~/remote/slurm-%j.out",
+                    "error": "~/remote/slurm-%j.err",
+                },
+                "remote_slurm_log_paths": {},
+                "uploaded_input_paths": {str(local_path): "~/remote/input.tif"},
+                "uploaded_reference_paths": {},
+                "download_output_paths": {},
+                "download_log_paths": {},
+                "debug_logs": False,
+                "status": "prepared",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        slurm_mod,
+        "_rsync_upload",
+        lambda slurm_data, source, dest: SimpleNamespace(stdout="<f+++++++++ input.tif\n", stderr="", returncode=0),
+    )
+    uploaded = slurm_mod.upload_slurm_files(str(staged_slurm))
+    assert uploaded["status"] == "uploaded"
+    assert slurm_mod.load_yaml_file(str(staged_slurm))["upload_results"][str(local_path)]["status"] == "synced"
+
+    def fail_upload(_slurm_data):
+        raise AssertionError("start should not upload files")
+
+    ssh_calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        ssh_calls.append(remote_command)
+        if "sbatch" in remote_command:
+            return SimpleNamespace(stdout="Submitted batch job 123\n", stderr="", returncode=0)
+        return SimpleNamespace(
+            stdout="JobId=123 JobName=vhr-worldview\n   JobState=PENDING Reason=Priority\n",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(slurm_mod, "upload_required_files", fail_upload)
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    started = slurm_mod.start_slurm_job(str(staged_slurm))
+    assert started["submitted_job_id"] == "123"
+    assert started["status"] == "running"
+    assert started["remote_slurm_log_paths"] == {
+        "output": "~/remote/slurm-123.out",
+        "error": "~/remote/slurm-123.err",
+    }
+    assert len(ssh_calls) == 2
+
+
+def test_slurm_status_reads_sbatch_logs(tmp_path: Path, monkeypatch, capsys) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "RUN123",
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "submitted_job_id": "123",
+                "remote_slurm_log_templates": {
+                    "output": "~/remote/slurm-%j.out",
+                    "error": "~/remote/slurm-%j.err",
+                },
+                "status": "submitted",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        if "scontrol show job" in remote_command:
+            return SimpleNamespace(stdout="JobId=123 JobName=vhr-worldview\n   JobState=COMPLETED Reason=None\n", stderr="", returncode=0)
+        if "slurm-123.err" in remote_command:
+            return SimpleNamespace(stdout="stderr text\n", stderr="", returncode=0)
+        if "slurm-123.out" in remote_command:
+            return SimpleNamespace(stdout="stdout text\n", stderr="", returncode=0)
+        raise AssertionError(remote_command)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    updated = slurm_mod.update_status_slurm_file(str(staged_slurm))
+    captured = capsys.readouterr().out
+
+    assert updated["status"] == "completed"
+    assert updated["remote_slurm_log_paths"] == {
+        "output": "~/remote/slurm-123.out",
+        "error": "~/remote/slurm-123.err",
+    }
+    assert updated["raw_slurm_log_text"] == {"error": "stderr text\n", "output": "stdout text\n"}
+    assert "JobState=COMPLETED" in updated["raw_status_text"]
+    assert "=== Slurm error log: ~/remote/slurm-123.err ===" in captured
+    assert "stderr text" in captured
+    assert "=== Slurm output log: ~/remote/slurm-123.out ===" in captured
+    assert "stdout text" in captured
+    assert "=== Slurm status ===" in captured
+    assert "JobState=COMPLETED" in captured
+    assert captured.index("=== Slurm output log") < captured.index("=== Slurm error log")
+    assert captured.index("=== Slurm error log") < captured.index("=== Slurm status ===")
+
+
+def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    source = tmp_path / "example.worldview.yml"
+    staged = tmp_path / "staged.worldview.yml"
+    source.write_text(
+        "shared:\n"
+        "  input_file_glob:\n"
+        "    - cloud_mask: \"/data/**/@(\\\n"
+        "  A*|\\\n"
+        "  B*\\\n"
+        "  ).TIF\"\n"
+        "  output_dir: local_output\n"
+        "  temp_dir: local_temp\n",
+        encoding="utf-8",
+    )
+    original = slurm_mod.load_yaml_file(str(source))
+
+    slurm_mod.write_staged_worldview_config_for_remote(
+        str(source),
+        str(staged),
+        original,
+        input_file_entries=[{"cloud_mask": "/remote/image.tif"}],
+        path_rewrites={},
+        remote_output_dir="/remote/output",
+        remote_temp_dir="/remote/temp",
+    )
+
+    staged_text = staged.read_text(encoding="utf-8")
+    staged_data = slurm_mod.load_yaml_file(str(staged))
+    assert staged_data["shared"]["input_file_glob"] == [{"cloud_mask": "/remote/image.tif"}]
+    assert staged_data["shared"]["output_dir"] == "/remote/output"
+    assert "A*|" not in staged_text
+    assert ").TIF" not in staged_text
+
+
+def test_slurm_stop_and_close_are_narrow(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+
+    import vhrharmonize.slurm as slurm_mod
+
+    staged_slurm = tmp_path / "RUN123.staged.hpc.yml"
+    staged_slurm.write_text(
+        yaml.safe_dump(
+            {
+                "ssh_host": "host",
+                "ssh_user": "user",
+                "submitted_job_id": "123",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    ssh_calls = []
+    local_calls = []
+
+    def fake_run_ssh(slurm_data, remote_command, *, check=True, capture_output=True, stream_output=False):
+        ssh_calls.append(remote_command)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def fake_run_local(command, *, check=True, capture_output=True, stream_output=False):
+        local_calls.append(command)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
+    monkeypatch.setattr(slurm_mod, "_run_local_command", fake_run_local)
+
+    slurm_mod.stop_slurm_job(str(staged_slurm))
+    slurm_mod.close_hpc_connection(str(staged_slurm))
+
+    assert ssh_calls == ["scancel 123"]
+    assert local_calls == [["ssh", "-O", "exit", "user@host"]]
+
+    staged_slurm.write_text(
+        yaml.safe_dump({"ssh_host": "host", "ssh_user": "user", "submitted_job_id": None}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="submitted_job_id"):
+        slurm_mod.stop_slurm_job(str(staged_slurm))
