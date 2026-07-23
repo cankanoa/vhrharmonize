@@ -16,7 +16,7 @@ vhrharmonize = ["py.typed"]
 
 [project]
 name = "vhrharmonize"
-version = "0.0.2"
+version = "1.0.0"
 description = "Automated open source library to preprocess satellite imagery"
 readme = "README.md"
 license = {text = "MIT"}
