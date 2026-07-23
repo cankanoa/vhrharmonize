@@ -28,7 +28,7 @@
 
 ## Installation
 
-See [docs/getting-started/installation.md](docs/getting-started/installation.md) for detailed installation instructions or simply install like this: 
+See the [installation docs](https://vhrharmonize.sefa.ai/getting-started/installation/) for detailed installation instructions or simply install like this: 
 
 ```bash
 conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
@@ -36,7 +36,7 @@ conda activate vhrharmonize
 pip install vhrharmonize[defaults]
 ```
 ## Getting Started
-For an overview of using the library see [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md). The CLI can be usd by passing in arguments from a yaml file like this one [docs/configs/example.worldview.yml](docs/configs/example.worldview.yml) and running:
+For an overview of using the library see the [quickstart docs](https://vhrharmonize.sefa.ai/getting-started/quickstart/). The CLI can be usd by passing in arguments from a yaml file like this one [configs/example.worldview.yml](configs/example.worldview.yml) and running:
 
 ```bash
 vhr-worldview --config-yaml example.worldview.yml
@@ -84,10 +84,10 @@ vhr-hpc prepare --config configs/example.hpc.yml && vhr-hpc upload --config conf
 
 ## Contributing
 
-We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See [docs/getting-started/contributing.md](docs/getting-started/contributing.md).
+We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See the [contributing docs](https://vhrharmonize.sefa.ai/getting-started/contributing/).
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/cankanoa/vhrharmonize/blob/main/LICENSE) for details.
