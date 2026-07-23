@@ -1,10 +1,9 @@
 # vhrharmonize: VHR Satellite Imagery Preprocessing Library
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green)](#)
-
-> [!IMPORTANT]
-> This library is under active development and may change.
-
+![PyPI Version](https://img.shields.io/pypi/v/vhrharmonize)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/vhrharmonize?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=GREEN&left_text=PyPI+Downloads)](https://pepy.tech/projects/vhrharmonize)
+[![Your-License-Badge](https://img.shields.io/badge/License-MIT-green)](#)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15311571.svg)](https://doi.org/10.5281/zenodo.15311571)
 
 ---
 
@@ -24,6 +23,7 @@
 - Relative Radiometric Normalization ([spectralmatch](https://github.com/spectralmatch/spectralmatch))
 - WorldView scene discovery, IMD parsing, and standardized metadata mapping
 - CLI and library-first interfaces
+- Automated SLURM processing for distributed High Performance Computing processing
 
 ---
 
