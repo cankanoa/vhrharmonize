@@ -1658,3 +1658,7 @@ __all__ = [
     "write_staged_worldview_config_for_remote",
     "write_yaml_file",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

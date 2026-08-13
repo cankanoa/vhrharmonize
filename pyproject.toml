@@ -41,7 +41,6 @@ dependencies = [
     "shapely>=2.1",
     "pyyaml",
     "requests>=2.32.3",
-    "gdal>=3.11",
     "pyproj>=3.7",
     "tqdm",
     "wcmatch>=10.0",
@@ -56,6 +55,10 @@ dependencies = [
 #    "black>=23.0.0",
 #    "pre-commit>=4.1.0"
 #]
+
+system-level = [
+    "gdal>=3.11",
+]
 
 cloud = [
     "omnicloudmask",
