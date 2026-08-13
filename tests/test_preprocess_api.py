@@ -251,6 +251,27 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
     ]
 
 
+def test_worldview_save_target_expands_user_home(monkeypatch, tmp_path: Path) -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    normalized, kind = worldview._classify_save_target(
+        "~/koa_scratch/output/mosaic.tif",
+        default="$temp/radiometric_root.tif",
+    )
+
+    assert normalized == str(tmp_path / "koa_scratch" / "output" / "mosaic.tif")
+    assert kind == "absolute"
+    assert worldview._classify_save_target("$temp/result.tif", default="$temp") == (
+        "$temp/result.tif",
+        "temp_child",
+    )
+    assert worldview._classify_save_target("relative/result.tif", default="$temp") == (
+        "relative/result.tif",
+        "cwd_relative",
+    )
+
+
 def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     args = SimpleNamespace(

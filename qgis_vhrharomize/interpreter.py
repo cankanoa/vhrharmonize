@@ -16,8 +16,8 @@ def _log(message: str) -> None:
 def python_command() -> str:
     """Return QGIS's Python command using qpip's platform resolution order."""
     if (Path(sys.prefix) / "conda-meta").exists():
-        _log("Using the Conda environment's python shortcut")
-        return "python"
+        _log(f"Using the Conda environment's Python at {sys.executable}")
+        return sys.executable
 
     if platform.system() == "Windows":
         for filename in ("python.exe", "python3.exe"):

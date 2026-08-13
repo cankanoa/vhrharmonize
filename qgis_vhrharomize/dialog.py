@@ -405,7 +405,6 @@ class VHRHarmonizeDialog(QDialog):
         eof.clicked.connect(self.terminal.send_eof)
         terminal_row.addWidget(eof)
         layout.addLayout(terminal_row)
-        self._set_local_command_preset()
         return page
 
     def _build_local_controls(self) -> QWidget:
