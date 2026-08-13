@@ -5,7 +5,7 @@
 1. Create and activate a conda environment.
 
 ```bash
-conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
+conda create -n vhrharmonize -c conda-forge gdal python=3.11
 conda activate vhrharmonize
 ```
 
@@ -34,7 +34,7 @@ pip install "vhrharmonize[all]"
 1. Create and activate a conda environment.
 
 ```bash
-conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
+conda create -n vhrharmonize -c conda-forge gdal python=3.11
 conda activate vhrharmonize
 ```
 
@@ -64,6 +64,10 @@ pip install -e ".[radiometric-normalization]"
 pip install -e ".[docs]"
 pip install -e ".[all]"
 ```
+
+## Py6S and 6S troubleshooting
+
+This installs Py6S and a packaged 6S executable (from [6s-bin](https://github.com/brianschubert/6s-bin)) as Python ependencies. If the packaged executable is unavailable or fails on your platform, run `pip install Py6S`, then follow the [Py6S installation guide](https://py6s.readthedocs.io/en/latest/installation.html) to install 6S manually. Pass its executable path using `--py6s-executable` if its not included in sys.path.
 
 5. Verify the entry points if desired.
 

@@ -10,6 +10,8 @@
 pip install "vhrharmonize[py6s]"
 ```
 
+This installs Py6S and a packaged 6S executable (from [6s-bin](https://github.com/brianschubert/6s-bin)) as Python ependencies. If the packaged executable is unavailable or fails on your platform, run `pip install Py6S`, then follow the [Py6S installation guide](https://py6s.readthedocs.io/en/latest/installation.html) to install 6S manually. Pass its executable path using `--py6s-executable` if its not included in sys.path.
+
 ## Usage
 
 ```bash

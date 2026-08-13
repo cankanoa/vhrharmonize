@@ -31,10 +31,11 @@
 See the [installation docs](https://vhrharmonize.sefa.ai/getting-started/installation/) for detailed installation instructions or simply install like this: 
 
 ```bash
-conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11
+conda create -n vhrharmonize -c conda-forge gdal python=3.11
 conda activate vhrharmonize
-pip install vhrharmonize[defaults]
+pip install "vhrharmonize[defaults]"
 ```
+
 ## Getting Started
 For an overview of using the library see the [quickstart docs](https://vhrharmonize.sefa.ai/getting-started/quickstart/). The CLI can be usd by passing in arguments from a yaml file like this one [configs/example.worldview.yml](configs/example.worldview.yml) and running:
 
