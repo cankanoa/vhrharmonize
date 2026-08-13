@@ -7,8 +7,8 @@ import shlex
 import sys
 from pathlib import Path
 
-from qgis.PyQt.QtCore import QTimer, Qt
-from qgis.PyQt.QtGui import QColor, QFontDatabase, QIcon, QPalette, QTextCursor
+from qgis.PyQt.QtCore import QTimer, Qt, QUrl
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QFontDatabase, QIcon, QPalette, QTextCursor
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -409,13 +409,18 @@ class VHRHarmonizeDialog(QDialog):
 
     def _build_local_controls(self) -> QWidget:
         page = QWidget(self)
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout = QGridLayout(page)
         start = QPushButton("Start", page)
+        layout.setRowMinimumHeight(0, start.sizeHint().height())
         start.setToolTip("Load the provider pipeline command into the command field")
         start.clicked.connect(self._set_local_command_preset)
-        layout.addWidget(start)
-        layout.addStretch(1)
+        layout.addWidget(start, 1, 0)
+        open_configs = QPushButton("Open Configs Folder", page)
+        open_configs.setToolTip("Open the editable config directory in the system file manager")
+        open_configs.clicked.connect(self._open_configs_folder)
+        layout.addWidget(open_configs, 1, 1)
+        layout.setColumnStretch(2, 1)
+        layout.setColumnStretch(3, 1)
         return page
 
     def _build_hpc_controls(self) -> QWidget:
@@ -430,7 +435,11 @@ class VHRHarmonizeDialog(QDialog):
         self.staged_hpc_input.setToolTip(
             "Filename used by HPC commands after Prepare. Relative names are resolved in configs/."
         )
-        layout.addWidget(self.staged_hpc_input, 0, 1, 1, 3)
+        layout.addWidget(self.staged_hpc_input, 0, 1, 1, 2)
+        open_configs = QPushButton("Open Configs Folder", page)
+        open_configs.setToolTip("Open the editable config directory in the system file manager")
+        open_configs.clicked.connect(self._open_configs_folder)
+        layout.addWidget(open_configs, 0, 3)
 
         actions = (
             ("Prepare", "prepare"),
@@ -445,11 +454,18 @@ class VHRHarmonizeDialog(QDialog):
             button = QPushButton(label, page)
             button.clicked.connect(lambda _checked=False, value=action: self._set_hpc_command_preset(value))
             layout.addWidget(button, 1 + index // 4, index % 4)
-        quick_start = QPushButton("Quick Start", page)
-        quick_start.setToolTip("Load prepare, upload, start, status, and download into the command field")
-        quick_start.clicked.connect(self._set_quick_start_preset)
-        layout.addWidget(quick_start, 2, 3)
+        full_run = QPushButton("Full Run", page)
+        full_run.setToolTip("Load prepare, upload, start, and status into the command field")
+        full_run.clicked.connect(self._set_full_run_preset)
+        layout.addWidget(full_run, 2, 3)
         return page
+
+    def _open_configs_folder(self) -> None:
+        folder_url = QUrl.fromLocalFile(str(self.manager.config_dir.resolve()))
+        if not QDesktopServices.openUrl(folder_url):
+            self.terminal_status.setText(
+                f"Could not open the configs folder: {self.manager.config_dir}"
+            )
 
     def _provider_changed(self, provider: str) -> None:
         self.settings.setValue(self.SETTINGS_PROVIDER, provider)
@@ -499,11 +515,11 @@ class VHRHarmonizeDialog(QDialog):
             self._refresh_staged_hpc_file()
         self._set_terminal_text(self._hpc_command(action))
 
-    def _set_quick_start_preset(self) -> None:
+    def _set_full_run_preset(self) -> None:
         self._refresh_staged_hpc_file()
         commands = [
             self._hpc_command(action)
-            for action in ("prepare", "upload", "start", "status", "download")
+            for action in ("prepare", "upload", "start", "status")
         ]
         self._set_terminal_text(" && ".join(commands))
 
