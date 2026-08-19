@@ -428,6 +428,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                 "staged_hpc_file": str(staged_hpc_file),
                 "staged_slurm_start_file": str(staged_slurm_start_file),
                 "debug_logs": True,
+                "enable_rsync_checksum": True,
                 "ssh_host": "example.edu",
                 "ssh_user": "user",
                 "ssh_private_key": "~/.ssh/id_ed25519",
@@ -453,6 +454,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
     assert written_slurm["status"] == "prepared"
     assert written_slurm["debug_logs"] is True
+    assert written_slurm["enable_rsync_checksum"] is True
     assert written_slurm["ssh_private_key"] == "~/.ssh/id_ed25519"
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
@@ -583,7 +585,6 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
         "local",
         ["rsync", "-a", "--itemize-changes", str(local_path), "user@host:~/remote/output/input.tif"],
     )
-
     calls.clear()
     slurm_mod._rsync_upload(
         {
@@ -632,6 +633,28 @@ def test_slurm_upload_uses_rsync(tmp_path: Path, monkeypatch) -> None:
         ],
     )
 
+
+def test_slurm_upload_tree_can_enable_rsync_checksum(tmp_path: Path, monkeypatch) -> None:
+    import vhrharmonize.slurm as slurm_mod
+
+    calls = []
+
+    def fake_run_local_command(command, *, check=True, capture_output=True, stream_output=False):
+        calls.append(command)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm_mod, "_run_local_command", fake_run_local_command)
+    slurm_mod._rsync_upload_tree(
+        {"ssh_user": "user", "ssh_host": "host", "enable_rsync_checksum": True},
+        stage_root=str(tmp_path),
+        remote_root="~/remote/output",
+    )
+
+    assert calls == [[
+        "rsync", "-aL", "--itemize-changes", "--checksum",
+        "--rsync-path", "mkdir -p ~/remote/output && rsync",
+        f"{tmp_path}/", "user@host:~/remote/output/",
+    ]]
 
 def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> None:
     import vhrharmonize.slurm as slurm_mod

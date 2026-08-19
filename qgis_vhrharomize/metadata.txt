@@ -18,4 +18,3 @@ deprecated=False
 hasProcessingProvider=no
 server=False
 supportsQt6=True
-plugin_dependencies=qpip

@@ -13,31 +13,20 @@ PLUGIN_DIR = ROOT / "qgis_vhrharomize"
 ZIP_PATH = ROOT / "qgis_vhrharomize.zip"
 
 
-# Kept identical to spectralmatch/spectralmatch's QGIS requirements generator.
-def generate_requirements_txt(
-    input_toml_path="pyproject.toml",
-    output_txt_path="spectralmatch_qgis/requirements.txt",
-):
-    with open(input_toml_path, "rb") as f:
-        pyproject = tomllib.load(f)
-
-    project = pyproject["project"]
-    deps = list(project.get("dependencies", []))
-
-    with open(output_txt_path, "w") as f:
-        for dep in deps:
-            f.write(dep + "\n")
-
-
 def generate_optional_dependency_commands(
     input_toml_path: Path,
     output_json_path: Path,
 ) -> None:
-    """Write install command templates for every optional dependency group."""
+    """Write install templates for the base and optional dependencies."""
     with input_toml_path.open("rb") as handle:
         pyproject = tomllib.load(handle)
+    project = pyproject["project"]
+    base_dependencies = list(project.get("dependencies", []))
+    optional_dependencies = project.get("optional-dependencies", {})
+    ordered_names = sorted(optional_dependencies, key=lambda name: name != "defaults")
     groups = []
-    for name, dependencies in pyproject["project"].get("optional-dependencies", {}).items():
+    for name in ordered_names:
+        dependencies = optional_dependencies[name]
         groups.append(
             {
                 "name": name,
@@ -56,7 +45,28 @@ def generate_optional_dependency_commands(
             }
         )
     output_json_path.write_text(
-        json.dumps({"version": 1, "groups": groups}, indent=2) + "\n",
+        json.dumps(
+            {
+                "version": 1,
+                "base": {
+                    "dependencies": base_dependencies,
+                    "command": [
+                        "{python}",
+                        "-u",
+                        "-m",
+                        "pip",
+                        "install",
+                        *base_dependencies,
+                        "--target",
+                        "{target}",
+                        "--upgrade",
+                    ],
+                },
+                "groups": groups,
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -106,7 +116,9 @@ def build() -> Path:
     copy_vhrharmonize_package()
     copy_default_configs()
     shutil.copy2(ROOT / "LICENSE", PLUGIN_DIR / "LICENSE")
-    generate_requirements_txt(ROOT / "pyproject.toml", PLUGIN_DIR / "requirements.txt")
+    legacy_requirements = PLUGIN_DIR / "requirements.txt"
+    if legacy_requirements.exists():
+        legacy_requirements.unlink()
     generate_optional_dependency_commands(
         ROOT / "pyproject.toml",
         PLUGIN_DIR / "optional_dependency_commands.json",

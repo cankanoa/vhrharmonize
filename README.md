@@ -79,8 +79,13 @@ vhr-hpc stop --config configs/1.staged.hpc.yml # Cancel the submitted job
 vhr-hpc close --config configs/1.staged.hpc.yml # Close the SSH multiplex connection
 
 # Or all together:
-vhr-hpc prepare --config configs/example.hpc.yml && vhr-hpc upload --config configs/1.staged.hpc.yml && vhr-hpc start --config configs/1.staged.hpc.yml && vhr-hpc status --config configs/1.staged.hpc.yml && vhr-hpc download --config configs/1.staged.hpc.yml
+vhr-hpc prepare --config configs/example.hpc.yml && vhr-hpc upload --config configs/1.staged.hpc.yml && vhr-hpc start --config configs/1.staged.hpc.yml && vhr-hpc status --config configs/1.staged.hpc.yml
 
+# Helpful commands:
+# Create preview image and download
+conda install gdal
+gdal raster resize --size 1%,1% -r average --co TILED=YES --co COMPRESS=DEFLATE "input.tif" "preview.tif"
+rsync -avP user@ip:preview.tif .preview.tif
 ```
 
 ## Contributing

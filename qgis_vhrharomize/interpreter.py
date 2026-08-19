@@ -14,7 +14,7 @@ def _log(message: str) -> None:
 
 
 def python_command() -> str:
-    """Return QGIS's Python command using qpip's platform resolution order."""
+    """Return the Python command associated with the running QGIS process."""
     if (Path(sys.prefix) / "conda-meta").exists():
         _log(f"Using the Conda environment's Python at {sys.executable}")
         return sys.executable

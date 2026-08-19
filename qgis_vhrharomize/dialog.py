@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -200,6 +201,9 @@ class VHRHarmonizeDialog(QDialog):
     """Main VHRHarmonize interface."""
 
     SETTINGS_PROVIDER = "vhrharmonize/provider"
+    SETTINGS_USE_CONDA = "vhrharmonize/use_conda"
+    SETTINGS_CONDA_ENV = "vhrharmonize/conda_env"
+    DEFAULT_CONDA_ENV = "vhrharmonize"
 
     def __init__(self, plugin_dir: Path, manager: ConfigManager, parent: QWidget | None = None):
         super().__init__(parent)
@@ -214,6 +218,9 @@ class VHRHarmonizeDialog(QDialog):
         self.terminal = TerminalSession(self.plugin_dir, self)
         self.optional_command_inputs: dict[str, QLineEdit] = {}
         self.optional_command_defaults: dict[str, str] = {}
+        self.optional_dependencies: dict[str, list[str]] = {}
+        self.base_dependencies: list[str] = []
+        self.conda_python: str | None = None
 
         self.setWindowTitle("VHRHarmonize")
         self.resize(980, 720)
@@ -239,23 +246,108 @@ class VHRHarmonizeDialog(QDialog):
         page = QWidget(self)
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel(f"QGIS Python interpreter: {self.interpreter}", page))
-        layout.addWidget(QLabel(f"qpip dependency directory: {self.dependency_target}", page))
+        layout.addWidget(QLabel(f"Dependency directory: {self.dependency_target}", page))
         explanation = QLabel(
-            "Optional dependency commands are editable. Press play to place a command in the "
+            "Dependency commands are editable. Press play to place a command in the "
             "interactive terminal input on the Run tab; press Enter there to run it.",
             page,
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
+        self.use_conda = QCheckBox("Use Conda", page)
+        saved_use_conda = self.settings.value(self.SETTINGS_USE_CONDA, False, type=bool)
+        self.use_conda.setChecked(saved_use_conda)
+        self.use_conda.setToolTip(
+            "Install dependencies and run command presets in the selected Conda environment"
+        )
+        layout.addWidget(self.use_conda)
+
+        self.conda_controls = QWidget(page)
+        conda_layout = QGridLayout(self.conda_controls)
+        conda_layout.setContentsMargins(0, 0, 0, 0)
+        conda_layout.setColumnStretch(1, 1)
+        conda_layout.addWidget(QLabel("Environment name:", self.conda_controls), 0, 0)
+        saved_env = str(
+            self.settings.value(self.SETTINGS_CONDA_ENV, self.DEFAULT_CONDA_ENV)
+        ).strip()
+        self.conda_env_input = QLineEdit(saved_env or self.DEFAULT_CONDA_ENV, self.conda_controls)
+        self.conda_env_input.setPlaceholderText(self.DEFAULT_CONDA_ENV)
+        self.conda_env_input.setToolTip("Conda environment used by Setup and Run commands")
+        conda_layout.addWidget(self.conda_env_input, 0, 1, 1, 3)
+        conda_layout.addWidget(
+            QLabel("<b>Step 0</b> Create:", self.conda_controls), 1, 0, 1, 4
+        )
+        self.conda_create_input = QLineEdit(self.conda_controls)
+        self.conda_create_input.setToolTip("Editable command to create the Conda environment")
+        conda_layout.addWidget(self.conda_create_input, 2, 0, 1, 2)
+        reset_create = _refresh_button(
+            self.conda_controls, "Reset the create Conda environment command"
+        )
+        reset_create.clicked.connect(self._reset_conda_create_command)
+        conda_layout.addWidget(reset_create, 2, 2)
+        create_env = _play_button(
+            self.conda_controls,
+            "Open the create Conda environment command in the terminal",
+        )
+        create_env.clicked.connect(self._load_conda_create_command)
+        conda_layout.addWidget(create_env, 2, 3)
+
+        conda_layout.addWidget(
+            QLabel("<b>Step 0.5</b> Activate (every time):", self.conda_controls),
+            3,
+            0,
+            1,
+            4,
+        )
+        self.conda_activate_input = QLineEdit(self.conda_controls)
+        self.conda_activate_input.setToolTip("Editable command to activate the Conda environment")
+        conda_layout.addWidget(self.conda_activate_input, 4, 0, 1, 2)
+        reset_activate = _refresh_button(
+            self.conda_controls, "Reset the activate Conda environment command"
+        )
+        reset_activate.clicked.connect(self._reset_conda_activate_command)
+        conda_layout.addWidget(reset_activate, 4, 2)
+        activate_env = _play_button(
+            self.conda_controls, "Open the activate Conda environment command in the terminal"
+        )
+        activate_env.clicked.connect(self._load_conda_activate_command)
+        conda_layout.addWidget(activate_env, 4, 3)
+        layout.addWidget(self.conda_controls)
+
+        manifest_path = self.plugin_dir / "optional_dependency_commands.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        base = manifest.get("base", {})
+        self.base_dependencies = [str(value) for value in base.get("dependencies", [])]
+        base_tokens = [
+            str(token).format(python=self.interpreter, target=str(self.dependency_target))
+            for token in base.get("command", [])
+        ]
+        self.base_command_default = shlex.join(base_tokens)
+        layout.addWidget(QLabel("<b>Step 1</b> Install base dependencies:", page))
+        base_row = QHBoxLayout()
+        self.base_command_input = QLineEdit(self.base_command_default, page)
+        self.base_command_input.setToolTip("Editable command to install the base dependencies")
+        base_row.addWidget(self.base_command_input, 1)
+        reset_base = _refresh_button(page, "Reset the base dependency install command")
+        reset_base.clicked.connect(self._reset_base_command)
+        base_row.addWidget(reset_base)
+        install_base = _play_button(page, "Open the base dependency install command in the terminal")
+        install_base.clicked.connect(self._load_base_dependencies)
+        base_row.addWidget(install_base)
+        layout.addLayout(base_row)
+
+        layout.addWidget(
+            QLabel("<b>Step 2</b> Install additional dependencies (only as needed):", page)
+        )
+
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         content = QWidget(scroll)
         content_layout = QVBoxLayout(content)
-        manifest_path = self.plugin_dir / "optional_dependency_commands.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for group in manifest.get("groups", []):
             name = str(group["name"])
+            self.optional_dependencies[name] = [str(value) for value in group["dependencies"]]
             tokens = [
                 str(token).format(
                     python=self.interpreter,
@@ -267,31 +359,27 @@ class VHRHarmonizeDialog(QDialog):
             self.optional_command_defaults[name] = default_command
 
             section = QWidget(content)
-            section_layout = QVBoxLayout(section)
+            section_layout = QHBoxLayout(section)
             section_layout.setContentsMargins(0, 4, 0, 4)
-            header = QHBoxLayout()
             name_label = QLabel(name, section)
             name_label.setStyleSheet("font-weight: bold")
-            header.addWidget(name_label)
+            section_layout.addWidget(name_label)
+            command_input = QLineEdit(default_command, section)
+            command_input.setToolTip(
+                f"Editable install command for the {name} optional dependency group"
+            )
+            self.optional_command_inputs[name] = command_input
+            section_layout.addWidget(command_input, 1)
             reset = _refresh_button(section, f"Reset the {name} install command")
             reset.clicked.connect(
                 lambda _checked=False, group_name=name: self._reset_optional_command(group_name)
             )
-            header.addWidget(reset)
-            header.addStretch(1)
-            section_layout.addLayout(header)
-
-            command_row = QHBoxLayout()
-            command_input = QLineEdit(default_command, section)
-            command_input.setToolTip(f"Editable pip command for the {name} optional dependency group")
-            self.optional_command_inputs[name] = command_input
-            command_row.addWidget(command_input, 1)
+            section_layout.addWidget(reset)
             play = _play_button(section, f"Open the {name} install command in the terminal")
             play.clicked.connect(
                 lambda _checked=False, group_name=name: self._load_optional_dependency(group_name)
             )
-            command_row.addWidget(play)
-            section_layout.addLayout(command_row)
+            section_layout.addWidget(play)
             content_layout.addWidget(section)
 
         content_layout.addStretch(1)
@@ -299,6 +387,11 @@ class VHRHarmonizeDialog(QDialog):
         layout.addWidget(scroll, 1)
         self.setup_status = QLabel("", page)
         layout.addWidget(self.setup_status)
+        self.use_conda.toggled.connect(self._conda_toggled)
+        self.conda_env_input.textChanged.connect(self._conda_environment_changed)
+        if self.use_conda.isChecked():
+            self.conda_python = self._find_conda_python()
+        self._update_conda_ui()
         return page
 
     def _build_provider_tab(self) -> QWidget:
@@ -471,7 +564,130 @@ class VHRHarmonizeDialog(QDialog):
         self.settings.setValue(self.SETTINGS_PROVIDER, provider)
 
     def _reset_optional_command(self, name: str) -> None:
-        self.optional_command_inputs[name].setText(self.optional_command_defaults[name])
+        self.optional_command_inputs[name].setText(self._optional_command(name))
+
+    def _reset_base_command(self) -> None:
+        self.base_command_input.setText(self._base_command())
+
+    def _reset_conda_create_command(self) -> None:
+        self.conda_create_input.setText(self._conda_create_command())
+
+    def _reset_conda_activate_command(self) -> None:
+        self.conda_activate_input.setText(self._conda_activate_command())
+
+    def _conda_environment_name(self) -> str:
+        return self.conda_env_input.text().strip() or self.DEFAULT_CONDA_ENV
+
+    def _conda_create_command(self) -> str:
+        return shlex.join(
+            [
+                "conda",
+                "create",
+                "-n",
+                self._conda_environment_name(),
+                "-c",
+                "conda-forge",
+                "gdal",
+                "python=3.11",
+            ]
+        )
+
+    def _conda_activate_command(self) -> str:
+        return (
+            shlex.join(["conda", "activate", self._conda_environment_name()])
+            + " && unset PYTHONPATH"
+        )
+
+    def _find_conda_python(self) -> str | None:
+        """Return the selected environment's interpreter, or None if it is not valid."""
+        try:
+            result = subprocess.run(
+                [
+                    "conda",
+                    "run",
+                    "--no-capture-output",
+                    "-n",
+                    self._conda_environment_name(),
+                    "python",
+                    "-c",
+                    "import sys; print(sys.executable)",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return lines[-1] if lines else None
+
+    def _conda_pip_command(self, dependencies: list[str]) -> str:
+        if self.conda_python is None:
+            return ""
+        return shlex.join(
+            [self.conda_python, "-m", "pip", "install", *dependencies, "--upgrade"]
+        )
+
+    def _optional_command(self, name: str) -> str:
+        if not self.use_conda.isChecked():
+            return self.optional_command_defaults[name]
+        return self._conda_pip_command(self.optional_dependencies[name])
+
+    def _base_command(self) -> str:
+        if not self.use_conda.isChecked():
+            return self.base_command_default
+        return self._conda_pip_command(self.base_dependencies)
+
+    def _update_conda_ui(self) -> None:
+        enabled = self.use_conda.isChecked()
+        self.conda_controls.setVisible(enabled)
+        self.conda_create_input.setText(self._conda_create_command())
+        self.conda_activate_input.setText(self._conda_activate_command())
+        self.base_command_input.setText(self._base_command())
+        for name, command_input in self.optional_command_inputs.items():
+            command_input.setText(self._optional_command(name))
+
+    def _conda_toggled(self, checked: bool) -> None:
+        self.settings.setValue(self.SETTINGS_USE_CONDA, checked)
+        self.conda_python = self._find_conda_python() if checked else None
+        self._update_conda_ui()
+
+    def _conda_environment_changed(self, name: str) -> None:
+        self.settings.setValue(self.SETTINGS_CONDA_ENV, name.strip())
+        if self.use_conda.isChecked():
+            self.conda_python = self._find_conda_python()
+            self._update_conda_ui()
+            if self.conda_python is None:
+                self.setup_status.setText(
+                    f"Conda environment '{self._conda_environment_name()}' was not found."
+                )
+            else:
+                self.setup_status.setText(
+                    f"Using Conda Python interpreter: {self.conda_python}"
+                )
+
+    def _load_conda_create_command(self) -> None:
+        text = self.conda_create_input.text().strip()
+        if not text:
+            self.setup_status.setText("The Conda create command is empty.")
+            return
+        self._set_terminal_text(text, switch_to_run=True)
+        self.setup_status.setText(
+            "Loaded the Conda create command in the terminal. Press Enter to run it."
+        )
+
+    def _load_conda_activate_command(self) -> None:
+        text = self.conda_activate_input.text().strip()
+        if not text:
+            self.setup_status.setText("The Conda activate command is empty.")
+            return
+        self._set_terminal_text(text, switch_to_run=True)
+        self.setup_status.setText(
+            "Loaded the Conda activate command in the terminal. Press Enter to run it."
+        )
 
     def _load_optional_dependency(self, name: str) -> None:
         text = self.optional_command_inputs[name].text().strip()
@@ -481,13 +697,36 @@ class VHRHarmonizeDialog(QDialog):
         self._set_terminal_text(text, switch_to_run=True)
         self.setup_status.setText(f"Loaded {name} in the terminal. Press Enter to install it.")
 
+    def _load_base_dependencies(self) -> None:
+        text = self.base_command_input.text().strip()
+        if not text:
+            self.setup_status.setText("The base dependency command is empty.")
+            return
+        self._set_terminal_text(text, switch_to_run=True)
+        self.setup_status.setText(
+            "Loaded the base dependencies in the terminal. Press Enter to install them."
+        )
+
     def _flush_configs(self) -> None:
         self.provider_editor.flush()
         self.hpc_editor.flush()
         self.slurm_editor.flush()
 
     def _module_command(self, module: str, args: list[str]) -> str:
-        return shlex.join([self.interpreter, "-u", "-m", module, *args])
+        command = [self.interpreter, "-u", "-m", module, *args]
+        if self.use_conda.isChecked():
+            command = [
+                "conda",
+                "run",
+                "-n",
+                self._conda_environment_name(),
+                "python",
+                "-u",
+                "-m",
+                module,
+                *args,
+            ]
+        return shlex.join(command)
 
     def _local_command(self) -> str:
         config = str(self.manager.path(ConfigManager.WORLDVIEW))
