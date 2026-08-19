@@ -1442,8 +1442,9 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p><code>vhr-py6s</code> runs Py6S-only atmospheric correction on discovered WorldView scenes. It can optionally orthorectify the corrected raster afterward.</p>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;vhrharmonize[py6s]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"vhrharmonize[py6s]"</span>
 </code></pre></div>
+<p>This installs Py6S and a packaged 6S executable (from <a href="https://github.com/brianschubert/6s-bin">6s-bin</a>) as Python ependencies. If the packaged executable is unavailable or fails on your platform, run <code>pip install Py6S</code>, then follow the <a href="https://py6s.readthedocs.io/en/latest/installation.html">Py6S installation guide</a> to install 6S manually. Pass its executable path using <code>--py6s-executable</code> if its not included in sys.path.</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>vhr-py6s<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/data/worldview_batch<span class="w"> </span><span class="se">\</span>

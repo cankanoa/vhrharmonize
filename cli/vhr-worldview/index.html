@@ -1442,7 +1442,7 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p><code>vhr-worldview</code> is the main end-to-end workflow for WorldView scenes. It discovers MUL and PAN pairs, reads IMD metadata, and runs the selected preprocessing steps in sequence.</p>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;vhrharmonize[all]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"vhrharmonize[all]"</span>
 </code></pre></div>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>configs/example.worldview.yml<span class="w"> </span>configs/worldview.yml
@@ -1450,7 +1450,7 @@
 vhr-worldview<span class="w"> </span>--config-yaml<span class="w"> </span>configs/worldview.yml
 </code></pre></div>
 <div class="highlight"><pre><span></span><code>vhr-worldview<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-file-glob<span class="w"> </span><span class="s2">&quot;/data/worldview/**/*.TIF&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input-file-glob<span class="w"> </span><span class="s2">"/data/worldview/**/*.TIF"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--dem-file-path<span class="w"> </span>/data/dem.tif<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output-dir<span class="w"> </span>../../processed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--atmospheric-method<span class="w"> </span>py6s<span class="w"> </span><span class="se">\</span>

@@ -1,7 +1,7 @@
 # This file has arguments to process WorldView-3 B1 images and brief setup instructions below.
 
 # 1. To install the required system level libraries run:
-  # `conda create -n vhrharmonize -c conda-forge py6s sixs gdal python=3.11`
+  # `conda create -n vhrharmonize -c conda-forge gdal python=3.11`
   # `conda activate vhrharmonize`
 
 # 2. To install the library, depending on if you are installing from pip or source:

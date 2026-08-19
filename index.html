@@ -1526,9 +1526,9 @@
 <hr />
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
 <p>See the <a href="https://vhrharmonize.sefa.ai/getting-started/installation/">installation docs</a> for detailed installation instructions or simply install like this: </p>
-<div class="highlight"><pre><span></span><code>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>vhrharmonize<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>py6s<span class="w"> </span>sixs<span class="w"> </span>gdal<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11
+<div class="highlight"><pre><span></span><code>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>vhrharmonize<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>gdal<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11
 conda<span class="w"> </span>activate<span class="w"> </span>vhrharmonize
-pip<span class="w"> </span>install<span class="w"> </span>vhrharmonize<span class="o">[</span>defaults<span class="o">]</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"vhrharmonize[defaults]"</span>
 </code></pre></div>
 <h2 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
 <p>For an overview of using the library see the <a href="https://vhrharmonize.sefa.ai/getting-started/quickstart/">quickstart docs</a>. The CLI can be usd by passing in arguments from a yaml file like this one <a href="configs/example.worldview.yml">configs/example.worldview.yml</a> and running:</p>
@@ -1536,7 +1536,7 @@ pip<span class="w"> </span>install<span class="w"> </span>vhrharmonize<span clas
 </code></pre></div>
 Or pass in arguments directly from the command line:</p>
 <div class="highlight"><pre><span></span><code>vhr-worldview<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-file-glob<span class="w"> </span><span class="s2">&quot;/data/worldview/**/*.TIF&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input-file-glob<span class="w"> </span><span class="s2">"/data/worldview/**/*.TIF"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output-dir<span class="w"> </span>../../processed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--run-alignment<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--alignment-fixed-image<span class="w"> </span>/data/reference.tif
@@ -1564,7 +1564,13 @@ vhr-hpc stop --config configs/1.staged.hpc.yml # Cancel the submitted job
 vhr-hpc close --config configs/1.staged.hpc.yml # Close the SSH multiplex connection
 
 # Or all together:
-vhr-hpc prepare --config configs/example.hpc.yml &amp;&amp; vhr-hpc upload --config configs/1.staged.hpc.yml &amp;&amp; vhr-hpc start --config configs/1.staged.hpc.yml &amp;&amp; vhr-hpc status --config configs/1.staged.hpc.yml &amp;&amp; vhr-hpc download --config configs/1.staged.hpc.yml
+vhr-hpc prepare --config configs/example.hpc.yml &amp;&amp; vhr-hpc upload --config configs/1.staged.hpc.yml &amp;&amp; vhr-hpc start --config configs/1.staged.hpc.yml &amp;&amp; vhr-hpc status --config configs/1.staged.hpc.yml
+
+# Helpful commands:
+# Create preview image and download
+conda install gdal
+gdal raster resize --size 1%,1% -r average --co TILED=YES --co COMPRESS=DEFLATE "input.tif" "preview.tif"
+rsync -avP user@ip:preview.tif .preview.tif
 </code></pre></div></p>
 <h2 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h2>
 <p>We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See the <a href="https://vhrharmonize.sefa.ai/getting-started/contributing/">contributing docs</a>.</p>
