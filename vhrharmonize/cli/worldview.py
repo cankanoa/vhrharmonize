@@ -726,7 +726,9 @@ def _log_step_plan(
 
 def _classify_save_target(save_value: Optional[str], *, default: str) -> tuple[str, str]:
     """Return a normalized save target and target kind."""
-    normalized = (save_value if save_value not in (None, "") else default).strip()
+    normalized = os.path.expanduser(
+        (save_value if save_value not in (None, "") else default).strip()
+    )
     if normalized == "$temp":
         return normalized, "temp_root"
     if normalized.startswith("$temp/"):

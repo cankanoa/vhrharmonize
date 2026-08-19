@@ -187,3 +187,12 @@ outputs/*.json
 
 # Local user config (copy from tracked example)
 configs/worldview.yml
+
+# QGIS plugin build and runtime artifacts
+qgis_vhrharomize.zip
+qgis_vhrharomize/configs/
+qgis_vhrharomize/default_configs/
+qgis_vhrharomize/requirements.txt
+qgis_vhrharomize/optional_dependency_commands.json
+qgis_vhrharomize/vhrharmonize/
+qgis_vhrharomize/LICENSE

@@ -30,6 +30,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "staged_slurm_start_file",
     "staged_hpc_file",
     "debug_logs",
+    "enable_rsync_checksum",
     "ssh_host",
     "ssh_user",
     "ssh_private_key",
@@ -372,6 +373,8 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
         raise ValueError("provider_upload_keys must be a list of provider YAML keys.")
     if "debug_logs" in config:
         _parse_bool(config["debug_logs"], key="debug_logs")
+    if "enable_rsync_checksum" in config:
+        _parse_bool(config["enable_rsync_checksum"], key="enable_rsync_checksum")
     for key in ("ssh_private_key",):
         value = config.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):
@@ -1104,6 +1107,9 @@ def prepare_slurm_plan(
         "staged_slurm_start_file": staged_slurm_start_file,
         "staged_hpc_file": staged_hpc_file,
         "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
+        "enable_rsync_checksum": _parse_bool(
+            slurm_config.get("enable_rsync_checksum", False), key="enable_rsync_checksum"
+        ),
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
         **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
@@ -1293,6 +1299,8 @@ def _rsync_upload_tree(
 ) -> subprocess.CompletedProcess[str]:
     debug = _debug_enabled(slurm_data)
     command = ["rsync", "-aL", "--itemize-changes"]
+    if _parse_bool(slurm_data.get("enable_rsync_checksum", False), key="enable_rsync_checksum"):
+        command.append("--checksum")
     if debug:
         command.append("--info=progress2")
     command.extend(["--rsync-path", f"mkdir -p {_remote_quote(remote_root)} && rsync"])
@@ -1554,8 +1562,8 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         option = f"--{key.replace('_', '-')}"
         if key == "provider_upload_keys":
             prepare_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
-        elif key == "debug_logs":
-            prepare_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during start.")
+        elif key in {"debug_logs", "enable_rsync_checksum"}:
+            prepare_parser.add_argument(option, choices=("true", "false"), help=f"Override boolean HPC config key: {key}.")
         else:
             prepare_parser.add_argument(option, help=f"Override HPC config key: {key}.")
 
@@ -1565,8 +1573,8 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         option = f"--{key.replace('_', '-')}"
         if key == "provider_upload_keys":
             upload_parser.add_argument(option, nargs="+", help="Provider YAML keys whose file values should upload.")
-        elif key == "debug_logs":
-            upload_parser.add_argument(option, choices=("true", "false"), help="Print concise debug logs during upload.")
+        elif key in {"debug_logs", "enable_rsync_checksum"}:
+            upload_parser.add_argument(option, choices=("true", "false"), help=f"Override boolean HPC config key: {key}.")
         else:
             upload_parser.add_argument(option, help=f"Override HPC config key: {key}.")
 
@@ -1594,7 +1602,11 @@ def _collect_prepare_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         value = getattr(args, key, None)
         if value is None:
             continue
-        overrides[key] = _parse_bool(value, key=key) if key == "debug_logs" else value
+        overrides[key] = (
+            _parse_bool(value, key=key)
+            if key in {"debug_logs", "enable_rsync_checksum"}
+            else value
+        )
     return overrides
 
 
@@ -1658,3 +1670,7 @@ __all__ = [
     "write_staged_worldview_config_for_remote",
     "write_yaml_file",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
