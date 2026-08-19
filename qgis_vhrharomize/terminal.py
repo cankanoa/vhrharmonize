@@ -25,7 +25,6 @@ class TerminalInput(QLineEdit):
         super().__init__(parent)
         self._history: list[str] = []
         self._history_index = 0
-        self.returnPressed.connect(self.submit)
 
     def submit(self) -> None:
         text = self.text()
@@ -36,10 +35,14 @@ class TerminalInput(QLineEdit):
             if not self._history or self._history[-1] != text:
                 self._history.append(text)
             self._history_index = len(self._history)
-        self.submitted.emit(text)
         self.clear()
+        self.submitted.emit(text)
 
     def keyPressEvent(self, event) -> None:
+        if event.key() in {Qt.Key_Return, Qt.Key_Enter}:
+            self.submit()
+            event.accept()
+            return
         if event.key() == Qt.Key_Up and self._history:
             self._history_index = max(0, self._history_index - 1)
             self.setText(self._history[self._history_index])

@@ -32,7 +32,7 @@ def generate_optional_dependency_commands(
                 "name": name,
                 "dependencies": list(dependencies),
                 "command": [
-                    "{python}",
+                    "python",
                     "-u",
                     "-m",
                     "pip",
@@ -51,7 +51,7 @@ def generate_optional_dependency_commands(
                 "base": {
                     "dependencies": base_dependencies,
                     "command": [
-                        "{python}",
+                        "python",
                         "-u",
                         "-m",
                         "pip",

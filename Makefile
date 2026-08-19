@@ -1,12 +1,13 @@
 SHELL := /bin/bash
 
-.PHONY: help clean-package python-build build-qgis version tag release
+.PHONY: help clean-package python-build build-qgis upload-qgis version tag release
 
 help:
 	@echo "Python package release helpers:"
 	@echo "  make clean-package"
 	@echo "  make python-build"
 	@echo "  make build-qgis"
+	@echo "  make upload-qgis"
 	@echo "  make version version=0.0.2"
 	@echo "  make tag version=0.0.2"
 	@echo "  make release version=0.0.2"
@@ -19,6 +20,9 @@ python-build: clean-package
 
 build-qgis:
 	python qgis_vhrharomize/build_plugin.py
+
+upload-qgis: build-qgis
+	python qgis_vhrharomize/plugin_upload.py qgis_vhrharomize.zip
 
 tag:
 	@if [ -z "$(version)" ]; then \
