@@ -92,13 +92,23 @@ def copy_default_configs() -> None:
         shutil.rmtree(runtime_configs)
 
 
-def sync_metadata_version() -> None:
+def read_metadata_version() -> str:
+    metadata = (PLUGIN_DIR / "metadata.txt").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^version=(.+)$", metadata)
+    if match is None:
+        raise ValueError("QGIS metadata.txt does not contain a version")
+    return match.group(1).strip()
+
+
+def validate_metadata_version() -> None:
     with (ROOT / "pyproject.toml").open("rb") as handle:
-        version = tomllib.load(handle)["project"]["version"]
-    metadata_path = PLUGIN_DIR / "metadata.txt"
-    metadata = metadata_path.read_text(encoding="utf-8")
-    metadata = re.sub(r"(?m)^version=.*$", f"version={version}", metadata)
-    metadata_path.write_text(metadata, encoding="utf-8")
+        package_version = tomllib.load(handle)["project"]["version"]
+    metadata_version = read_metadata_version()
+    if metadata_version != package_version:
+        raise ValueError(
+            "QGIS metadata version "
+            f"{metadata_version} does not match package version {package_version}"
+        )
 
 
 def build_zip() -> None:
@@ -113,6 +123,7 @@ def build_zip() -> None:
 
 
 def build() -> Path:
+    validate_metadata_version()
     copy_vhrharmonize_package()
     copy_default_configs()
     shutil.copy2(ROOT / "LICENSE", PLUGIN_DIR / "LICENSE")
@@ -123,7 +134,6 @@ def build() -> Path:
         ROOT / "pyproject.toml",
         PLUGIN_DIR / "optional_dependency_commands.json",
     )
-    sync_metadata_version()
     build_zip()
     return ZIP_PATH
 

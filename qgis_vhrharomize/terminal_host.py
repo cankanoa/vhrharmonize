@@ -64,7 +64,8 @@ def main() -> int:
         environment.setdefault("TERM", "xterm-256color")
         environment.setdefault("COLORTERM", "truecolor")
         arguments = [shell, "--noediting", "-i"] if shell.endswith("bash") else [shell, "-i"]
-        os.execvpe(shell, arguments, environment)
+        # The terminal intentionally starts the executable validated by _shell_path().
+        os.execvpe(shell, arguments, environment)  # nosec B606
 
     _set_terminal_size(master_fd)
     os.set_blocking(sys.stdin.fileno(), False)

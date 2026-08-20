@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -1907,7 +1908,7 @@ def _run_cloud_mask_command(
 ) -> None:
     """Run an external cloud mask command template.
     Args:
-        command_template: Shell command template to execute.
+        command_template: Command argument template to execute.
         input_image_path: Input raster path.
         output_image_path: Output raster path.
         scene_root_path: Scene root directory.
@@ -1917,19 +1918,22 @@ def _run_cloud_mask_command(
     Returns:
         None.
     """
-    command = command_template.format(
-        input=input_image_path,
-        output=output_image_path,
-        scene_root=scene_root_path,
-        image_basename=image_basename,
-    )
+    command = [
+        argument.format(
+            input=input_image_path,
+            output=output_image_path,
+            scene_root=scene_root_path,
+            image_basename=image_basename,
+        )
+        for argument in shlex.split(command_template)
+    ]
     log(
         "Running external cloud mask command",
         enabled=log_to_console,
         step="cloud_mask",
         scene_basename=scene_basename,
     )
-    subprocess.run(command, shell=True, check=True)
+    subprocess.run(command, check=True)  # nosec B603
 
 
 def _image_source_file_map(image: Optional[WorldViewImage], output_dir: str) -> Dict[str, str]:

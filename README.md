@@ -8,7 +8,7 @@
 
 ## Overview
 
-`vhrharmonize` is an open-source Python library and CLI suite for preprocessing very high resolution (VHR) satellite imagery into analysis-ready products. Current supported end-to-end workflows: **WorldView-3 B1 imagery**. Additional providers and sensors (for example, Planet) will be added.
+vhrharmonize is an open-source Python library, CLI, and QGIS plugin suite for preprocessing very high resolution (VHR) satellite imagery into analysis-ready products. Current supported end-to-end workflows: **WorldView-3 B1 imagery**. Additional providers and sensors (for example, Planet) will be added.
 
 ---
 

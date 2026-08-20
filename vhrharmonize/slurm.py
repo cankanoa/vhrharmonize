@@ -613,7 +613,10 @@ def build_input_path_map(
 
 
 def _hash_path(path: str) -> str:
-    return hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha1(  # nosec B324
+        os.path.abspath(path).encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:10]
 
 
 def build_reference_path_map(reference_files: Iterable[str], *, remote_reference_dir: str) -> Dict[str, str]:
@@ -1179,14 +1182,15 @@ def _run_local_command(
     stream_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if stream_output:
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # nosec B603
             command,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
         output_parts: List[str] = []
-        assert process.stdout is not None
+        if process.stdout is None:
+            raise RuntimeError("Subprocess stdout pipe was not created")
         while True:
             chunk = process.stdout.read(1)
             if not chunk:
@@ -1198,7 +1202,12 @@ def _run_local_command(
         if check and return_code:
             raise subprocess.CalledProcessError(return_code, command, output=output)
         return subprocess.CompletedProcess(command, return_code, stdout=output, stderr="")
-    return subprocess.run(command, check=check, text=True, capture_output=capture_output)
+    return subprocess.run(  # nosec B603
+        command,
+        check=check,
+        text=True,
+        capture_output=capture_output,
+    )
 
 
 def _run_ssh(
