@@ -70,10 +70,10 @@ def _play_button(parent: QWidget, tooltip: str) -> QToolButton:
 
 
 def _plain_config_editor(parent: QWidget):
-    fixed_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     editor = QPlainTextEdit(parent)
     editor.setFont(fixed_font)
-    editor.setLineWrapMode(QPlainTextEdit.NoWrap)
+    editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
     return editor, None
 
 
@@ -82,7 +82,7 @@ def _yaml_editor(parent: QWidget):
     if QsciScintilla is None or QsciLexerYAML is None:
         return _plain_config_editor(parent)
 
-    fixed_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     editor = QsciScintilla(parent)
     editor.setUtf8(True)
     editor.setFont(fixed_font)
@@ -93,11 +93,11 @@ def _yaml_editor(parent: QWidget):
     editor.setTabWidth(2)
     editor.setAutoIndent(True)
     editor.setIndentationGuides(True)
-    editor.setBraceMatching(QsciScintilla.SloppyBraceMatch)
+    editor.setBraceMatching(QsciScintilla.BraceMatch.SloppyBraceMatch)
 
     palette = editor.palette()
-    background = palette.color(QPalette.Base)
-    foreground = palette.color(QPalette.Text)
+    background = palette.color(QPalette.ColorRole.Base)
+    foreground = palette.color(QPalette.ColorRole.Text)
     dark = background.lightness() < 128
     colors = {
         QsciLexerYAML.Comment: QColor("#7FBA7A" if dark else "#567A55"),
@@ -134,7 +134,9 @@ def _yaml_editor(parent: QWidget):
     lexer.setPaper(QColor("#C42B1C"), QsciLexerYAML.SyntaxErrorMarker)
     editor.setLexer(lexer)
     editor.setCaretForegroundColor(foreground)
-    editor.setMarginsForegroundColor(palette.color(QPalette.Disabled, QPalette.Text))
+    editor.setMarginsForegroundColor(
+        palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+    )
     editor.setMarginsBackgroundColor(background)
     return editor, lexer
 
@@ -158,7 +160,7 @@ class ConfigEditor(QWidget):
         )
         self.editor, self._lexer = editor_factory(self)
         self._set_text(manager.read(filename))
-        self.editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -172,7 +174,7 @@ class ConfigEditor(QWidget):
         if reset_at_right:
             reset = _refresh_button(self, f"Reset {filename} to its default")
             reset.clicked.connect(self.reset)
-            layout.addWidget(reset, 0, Qt.AlignTop)
+            layout.addWidget(reset, 0, Qt.AlignmentFlag.AlignTop)
 
     def flush(self) -> None:
         self._save_timer.stop()
@@ -457,7 +459,7 @@ class VHRHarmonizeDialog(QDialog):
         self.output_log = QPlainTextEdit(page)
         self.output_log.setReadOnly(True)
         self.output_log.setPlaceholderText("The interactive shell will appear here.")
-        self.output_log.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.output_log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
 
         status_row = QHBoxLayout()
         self.terminal_status = QLabel("Starting interactive shell…", page)
@@ -477,7 +479,7 @@ class VHRHarmonizeDialog(QDialog):
         terminal_row = QHBoxLayout()
         terminal_row.addWidget(QLabel("$", page))
         self.terminal_input = TerminalInput(page)
-        self.terminal_input.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.terminal_input.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.terminal_input.setPlaceholderText(
             "Type a command or response; Enter sends it directly to the shell"
         )
@@ -772,7 +774,7 @@ class VHRHarmonizeDialog(QDialog):
 
     def _append_output(self, text: str) -> None:
         cursor = self.output_log.textCursor()
-        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text)
         self.output_log.setTextCursor(cursor)
         self.output_log.ensureCursorVisible()

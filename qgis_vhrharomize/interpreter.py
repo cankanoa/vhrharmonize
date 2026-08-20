@@ -10,7 +10,7 @@ from qgis.core import Qgis, QgsMessageLog
 
 
 def _log(message: str) -> None:
-    QgsMessageLog.logMessage(message, "VHRHarmonize", level=Qgis.Info)
+    QgsMessageLog.logMessage(message, "VHRHarmonize", level=Qgis.MessageLevel.Info)
 
 
 def python_command() -> str:

@@ -39,16 +39,16 @@ class TerminalInput(QLineEdit):
         self.submitted.emit(text)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in {Qt.Key_Return, Qt.Key_Enter}:
+        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
             self.submit()
             event.accept()
             return
-        if event.key() == Qt.Key_Up and self._history:
+        if event.key() == Qt.Key.Key_Up and self._history:
             self._history_index = max(0, self._history_index - 1)
             self.setText(self._history[self._history_index])
             self.end(False)
             return
-        if event.key() == Qt.Key_Down and self._history:
+        if event.key() == Qt.Key.Key_Down and self._history:
             self._history_index = min(len(self._history), self._history_index + 1)
             self.setText(
                 "" if self._history_index == len(self._history) else self._history[self._history_index]
