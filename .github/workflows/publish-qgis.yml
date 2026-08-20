@@ -47,10 +47,10 @@ jobs:
 
       - name: Upload the plugin to the QGIS repository
         env:
-          QGIS_USERNAME: ${{ secrets.QGIS_USERNAME }}
-          QGIS_PASSWORD: ${{ secrets.QGIS_PASSWORD }}
+          QGIS_USER: ${{ secrets.QGIS_USER }}
+          QGIS_PASS: ${{ secrets.QGIS_PASS }}
         run: |
           python qgis_vhrharomize/plugin_upload.py \
-            --username "$QGIS_USERNAME" \
-            --password "$QGIS_PASSWORD" \
+            --username "$QGIS_USER" \
+            --password "$QGIS_PASS" \
             qgis_vhrharomize.zip
