@@ -507,14 +507,14 @@ def _worldview_file_source_upload_inputs(
     *,
     source_step: str,
     state: worldview.SceneWorkflowState | None,
-) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Return upload files for the file_source step."""
     del args, state
     upload_files: List[str] = []
     upload_files.extend(_worldview_image_required_files(scene.mul_image))
     upload_files.extend(_worldview_image_required_files(scene.pan_image))
     input_entries = [(source_step, image.tif_file) for image in scene.iter_images()]
-    return upload_files, input_entries, upload_files
+    return [(source_step, path) for path in upload_files], input_entries
 
 
 def _worldview_raster_step_upload_inputs(
@@ -523,7 +523,7 @@ def _worldview_raster_step_upload_inputs(
     *,
     source_step: str,
     state: worldview.SceneWorkflowState | None,
-) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Return upload files for processed raster steps."""
     if source_step in scene.step_outputs:
         step_files = list(_iter_existing(scene.step_outputs.get(source_step, [])))
@@ -531,7 +531,10 @@ def _worldview_raster_step_upload_inputs(
         step_files = list(_iter_existing(worldview._get_scene_upload_source_files(state, args)))
     else:
         step_files = []
-    return step_files, [(source_step, path) for path in _first_path(step_files)], []
+    return (
+        [(source_step, path) for path in step_files],
+        [(source_step, path) for path in _first_path(step_files)],
+    )
 
 
 WORLDVIEW_UPLOAD_INPUT_COLLECTORS = {
@@ -545,7 +548,7 @@ def _worldview_scene_upload_inputs_for_step(
     *,
     source_step: str,
     state: worldview.SceneWorkflowState | None,
-) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Return upload files and remote discovery inputs for one selected source step."""
     collector = WORLDVIEW_UPLOAD_INPUT_COLLECTORS.get(source_step, _worldview_raster_step_upload_inputs)
     return collector(scene, args, source_step=source_step, state=state)
@@ -554,16 +557,15 @@ def _worldview_scene_upload_inputs_for_step(
 def collect_worldview_upload_input_files(
     scenes: Iterable[WorldViewScene],
     args: argparse.Namespace,
-) -> Tuple[List[str], List[Tuple[str, str]], List[str]]:
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Collect workflow source files and remote discovery TIFF inputs."""
-    paths: List[str] = []
+    paths: List[Tuple[str, str]] = []
     input_entries: List[Tuple[str, str]] = []
-    file_source_files: List[str] = []
     for scene in scenes:
         explicit_source_step = worldview._get_scene_input_start_step(scene)
         state = None if explicit_source_step != "file_source" else _make_planning_state(scene, args)
         source_step = explicit_source_step if state is None else worldview._get_scene_upload_source_step(state, args)
-        step_uploads, step_input_entries, step_file_source_files = _worldview_scene_upload_inputs_for_step(
+        step_uploads, step_input_entries = _worldview_scene_upload_inputs_for_step(
             scene,
             args,
             source_step=source_step,
@@ -571,44 +573,54 @@ def collect_worldview_upload_input_files(
         )
         paths.extend(step_uploads)
         input_entries.extend(step_input_entries)
-        file_source_files.extend(step_file_source_files)
     unique_entries = sorted(set((stage, os.path.abspath(path)) for stage, path in input_entries))
-    return sorted(set(paths)), unique_entries, sorted(set(file_source_files))
+    unique_paths = sorted(set((stage, os.path.abspath(path)) for stage, path in paths))
+    return unique_paths, unique_entries
 
 
-def _common_parent(paths: Iterable[str]) -> str:
-    normalized = [os.path.abspath(path) for path in paths]
-    if not normalized:
-        return os.getcwd()
-    common = os.path.commonpath(normalized)
-    return common if os.path.isdir(common) else os.path.dirname(common)
-
-
-def _remote_file_source_path(local_path: str, *, input_root: str, remote_output_dir: str) -> str:
-    rel_path = os.path.relpath(local_path, input_root)
-    return os.path.join(remote_output_dir, "file_source", rel_path)
+def _remote_step_save_dir(
+    args: argparse.Namespace,
+    step_name: str,
+    *,
+    remote_output_dir: str,
+    remote_temp_dir: str,
+) -> str:
+    """Resolve a raster step's staged save directory on the remote host."""
+    save_key = f"save_{step_name}"
+    remote_save = _remote_save_value(getattr(args, save_key), remote_kind="output")
+    if remote_save == "$output":
+        return remote_output_dir
+    if remote_save.startswith("$output/"):
+        return os.path.join(remote_output_dir, remote_save[len("$output/"):])
+    if remote_save == "$temp":
+        return remote_temp_dir
+    if remote_save.startswith("$temp/"):
+        return os.path.join(remote_temp_dir, remote_save[len("$temp/"):])
+    raise ValueError(f"Could not resolve remote save directory for {save_key}: {remote_save}")
 
 
 def build_input_path_map(
-    input_files: Iterable[str],
+    input_files: Iterable[Tuple[str, str]],
     *,
-    file_source_files: Iterable[str],
+    args: argparse.Namespace,
     remote_output_dir: str,
+    remote_temp_dir: str,
 ) -> Dict[str, str]:
-    """Map local workflow input files to remote output-tree paths."""
-    local_files = sorted({os.path.abspath(path) for path in input_files})
-    file_source_set = {os.path.abspath(path) for path in file_source_files}
-    input_root = _common_parent(local_files)
+    """Map each workflow input into the save directory owned by its source step."""
     output_map: Dict[str, str] = {}
-    for local_path in local_files:
-        if local_path in file_source_set:
-            output_map[local_path] = _remote_file_source_path(
-                local_path,
-                input_root=input_root,
-                remote_output_dir=remote_output_dir,
-            )
-        else:
-            output_map[local_path] = os.path.join(remote_output_dir, os.path.basename(local_path))
+    for step_name, path in sorted(set(input_files)):
+        local_path = os.path.abspath(path)
+        step_dir = _remote_step_save_dir(
+            args,
+            step_name,
+            remote_output_dir=remote_output_dir,
+            remote_temp_dir=remote_temp_dir,
+        )
+        remote_path = os.path.join(step_dir, os.path.basename(local_path))
+        previous = output_map.get(local_path)
+        if previous is not None and previous != remote_path:
+            raise ValueError(f"Input file is assigned to multiple workflow steps: {local_path}")
+        output_map[local_path] = remote_path
     return output_map
 
 
@@ -719,11 +731,7 @@ def _remote_save_value(save_value: Any, *, remote_kind: str) -> Any:
 
 
 def _remote_save_value_for_key(save_key: str, save_value: Any, *, remote_output_dir: str) -> Any:
-    if save_key in {"save_seamline_metadata", "save_radiometric_normalization"} and isinstance(save_value, str):
-        normalized, save_kind = worldview._classify_save_target(save_value, default="$temp")
-        if save_kind in {"temp_root", "temp_child"}:
-            return normalized
-        return os.path.join(remote_output_dir, os.path.basename(normalized))
+    del save_key, remote_output_dir
     return _remote_save_value(save_value, remote_kind="output")
 
 
@@ -747,6 +755,8 @@ def rewrite_worldview_config_for_remote(
     rewritten = copy.deepcopy(dict(provider_config_data))
     if input_file_entries is not None:
         _set_nested_key(rewritten, "shared", "input_file_glob", list(input_file_entries))
+        if any("file_source" in entry for entry in input_file_entries):
+            _set_nested_key(rewritten, "workflow", "run_file_source", True)
     _set_nested_key(rewritten, "shared", "output_dir", remote_output_dir)
     _set_nested_key(rewritten, "shared", "temp_dir", remote_temp_dir)
 
@@ -830,8 +840,15 @@ def _collect_planned_non_temp_outputs(
     output_map: Dict[str, str] = {}
     for scene in scene_list:
         local_state = _make_planning_state(scene, local_args)
+        file_source_outputs = {
+            os.path.abspath(path)
+            for path in worldview._get_expected_scene_step_outputs(local_state, local_args).get("file_source", [])
+        }
         for local_path in worldview._scene_skip_required_outputs(local_state, local_args):
-            output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
+            local_abs = os.path.abspath(local_path)
+            if local_abs in file_source_outputs:
+                continue
+            output_map[local_abs] = _remote_output_file_path(local_path, remote_output_dir)
 
     if local_args.run_seamline_metadata and not worldview._is_temp_save_value(local_args.save_seamline_metadata):
         first_scene = next(iter(scene_list), None)
@@ -1023,15 +1040,12 @@ def prepare_slurm_plan(
     upload_keys = [str(key) for key in (slurm_config.get("provider_upload_keys") or [])]
     input_entries_for_remote: List[Tuple[str, str]] = []
     if "input_file_glob" in upload_keys:
-        (
-            upload_input_files,
-            input_entries_for_remote,
-            file_source_files,
-        ) = collect_worldview_upload_input_files(scenes, local_args)
+        upload_input_files, input_entries_for_remote = collect_worldview_upload_input_files(scenes, local_args)
         input_uploads = build_input_path_map(
             upload_input_files,
-            file_source_files=file_source_files,
+            args=local_args,
             remote_output_dir=paths["remote_output_dir"],
+            remote_temp_dir=paths["remote_temp_dir"],
         )
     else:
         input_uploads = {}

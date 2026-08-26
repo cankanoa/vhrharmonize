@@ -369,6 +369,9 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     from vhrharmonize.slurm import load_yaml_file, prepare_slurm_plan
 
     bundle = make_worldview_bundle()
+    gis_dir = bundle["mul_tif"].parent
+    for extension in ("shp", "shx", "dbf", "prj"):
+        (gis_dir / f"{bundle['basename']}.{extension}").write_text(extension, encoding="utf-8")
     dem_path = tmp_path / "dem.tif"
     with rasterio.open(bundle["mul_tif"]) as src:
         profile = src.profile.copy()
@@ -389,6 +392,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                     "dem_file_path": str(dem_path),
                     "alignment_fixed_image": str(unlisted_path),
                     "output_dir": str(tmp_path / "local_output"),
+                    "save_file_source": "$output/file_source",
                     "run_cloud_mask": True,
                     "save_cloud_mask": str(tmp_path / "local_output"),
                     "run_radiometric_normalization": True,
@@ -457,6 +461,26 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert written_slurm["enable_rsync_checksum"] is True
     assert written_slurm["ssh_private_key"] == "~/.ssh/id_ed25519"
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
+    uploaded_input_names = {Path(local).name for local in plan["uploaded_input_paths"]}
+    assert {
+        f"{bundle['basename']}.TIF",
+        f"{bundle['basename']}.IMD",
+        f"{bundle['basename']}.shp",
+        f"{bundle['basename']}.shx",
+        f"{bundle['basename']}.dbf",
+        f"{bundle['basename']}.prj",
+        f"{bundle['pan_basename']}.TIF",
+        f"{bundle['pan_basename']}.IMD",
+    } == uploaded_input_names
+    assert all(
+        remote.startswith("/remote/runs/RUN123/output/file_source/")
+        for remote in plan["uploaded_input_paths"].values()
+    )
+    assert set(plan["uploaded_input_paths"]).isdisjoint(plan["download_output_paths"])
+    assert not any(
+        Path(local).parent == (tmp_path / "local_output" / "file_source")
+        for local in plan["download_output_paths"]
+    )
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
     assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
@@ -478,15 +502,34 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert all(isinstance(item, dict) and len(item) == 1 for item in staged_inputs)
     assert all(next(iter(item)) == "file_source" for item in staged_inputs)
     assert all(
-        next(iter(item.values())).startswith("/remote/runs/RUN123/output/file_source")
+        next(iter(item.values())).startswith("/remote/runs/RUN123/output/file_source/")
         for item in staged_inputs
     )
+    assert staged["workflow"]["run_file_source"] is True
     assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
     assert (
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
         == "/remote/runs/RUN123/output/grouped.tif"
     )
     assert "dask-scheduler-RUN123.json" in staged_slurm_start_file.read_text(encoding="utf-8")
+
+
+def test_remote_rewrite_keeps_single_outputs_relative_to_remote_roots() -> None:
+    from vhrharmonize.slurm import rewrite_worldview_config_for_remote
+
+    staged = rewrite_worldview_config_for_remote(
+        {
+            "workflow": {
+                "save_radiometric_normalization": "/mnt/c/Users/Lama/Downloads/processed/mosaic_1.tif",
+            },
+        },
+        input_file_entries=None,
+        path_rewrites={},
+        remote_output_dir="~/koa_scratch/vhrharmonize/runs/1/output",
+        remote_temp_dir="~/koa_scratch/vhrharmonize/runs/1/tmp",
+    )
+
+    assert staged["workflow"]["save_radiometric_normalization"] == "$output/mosaic_1.tif"
 
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:

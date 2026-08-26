@@ -21,14 +21,14 @@ ssh_user: username
 
 # Remote directories. Optional, {run_id} will be replaced with the run ID
 enable_rsync_checksum: false # Compare file checksums during uploads instead of only size and modification time
-remote_output_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/output # Non-temp outputs and uploaded workflow inputs
-remote_log_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/logs # Slurm/stdout logs
-remote_temp_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/tmp # $temp outputs
-remote_reference_dir: ~/koa_scratch/vhrharmonize/runs/{run_id}/references # Shared reference files
+remote_output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/output # Non-temp workflow outputs
+remote_log_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/logs # Slurm/stdout logs
+remote_temp_dir: ~/koa_scratch/vhrharmonize/tmp # $temp outputs
+remote_reference_dir: ~/koa_scratch/vhrharmonize/references # Shared reference files
 
 # Provider YAML keys to upload. Only upload keys that are set
 provider_upload_keys:
-  - input_file_glob # Special case: uploads the workflow input step selected by WorldView
+  - input_file_glob # Uploads inputs into the selected step's save_* location; raw bundles use save_file_source
   - group_by_basename # Special case: uploads only literal file: entries
   - dem_file_path
   - existing_flaash_input

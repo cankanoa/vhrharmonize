@@ -127,7 +127,7 @@ all = [
 ]
 
 dask = [
-    "dask"
+    "dask[distributed]"
 ]
 
 [project.urls]

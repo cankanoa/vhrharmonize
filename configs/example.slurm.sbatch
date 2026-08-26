@@ -12,6 +12,9 @@
 #SBATCH --output=../logs/slurm-%j.out
 #SBATCH --error=../logs/slurm-%j.err
 
+# When dask is enabled
+# #SBATCH --nodes=2
+# #SBATCH --ntasks-per-node=1
 
 # Setup conda
 set -eo pipefail
@@ -25,6 +28,7 @@ if [ ! -d "$(conda info --base)/envs/${ENV_NAME}" ]; then
     conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge gdal pytorch torchvision cpuonly imageio python=3.11
 fi
 conda activate "${ENV_NAME}"
+export PYTHONUNBUFFERED=1
 
 
 # Must install via Pypi or from git source:
@@ -47,17 +51,15 @@ python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 
 
 # Run with configs from yml
-export PYTHONUNBUFFERED=1
 vhr-worldview --config-yaml "$1"
 
-
-# Use distributed workers with dask across nodes
-# #SBATCH --nodes=2
-# #SBATCH --ntasks-per-node=1
-# SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/runs/{run_id}/logs/dask-scheduler_{run_id}.json"
+# When dask is enabled (also comment the above section out)
+# SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json"
 # SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
+# mkdir -p "$(dirname "${SCHEDULER_FILE}")"
+# rm -f "${SCHEDULER_FILE}"
 # srun --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
 # sleep 10
 # srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
 # sleep 10
-# vhr-worldview --config-yaml "$1" --dask-scheduler-file "${SCHEDULER_FILE}"
+# vhr-worldview --config-yaml "$1"
