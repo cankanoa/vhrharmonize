@@ -341,10 +341,6 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
     for key in required_keys:
         _require_config_value(config, key)
     _require_config_value(config, "slurm_start_file")
-    for key in ("remote_output_dir", "remote_log_dir", "remote_temp_dir"):
-        value = _require_config_value(config, key)
-        if PATH_TEMPLATE_RUN_ID not in value:
-            raise ValueError(f"{key} must include {{run_id}}.")
     slurm_start_file = _require_config_value(config, "slurm_start_file")
     if not os.path.isfile(slurm_start_file):
         raise ValueError(f"slurm_start_file does not exist: {slurm_start_file}")
