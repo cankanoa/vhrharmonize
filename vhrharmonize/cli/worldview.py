@@ -678,15 +678,17 @@ def _process_scenes(
     """Process scenes independently before aggregate workflow steps."""
     worker_count = _resolve_concurrent_processing(args.concurrent_processing)
     backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
-    if worker_count <= 1 or len(scenes) <= 1:
-        return [_process_scene(scene, args) for scene in scenes]
     if backend == "dask":
+        if worker_count != 1:
+            raise ValueError("concurrent_processing must be 1 when concurrent_processing_backend is 'dask'.")
         log(
             f"Running per-scene processing with Dask tasks={len(scenes)}",
             enabled=args.log_to_console,
             step="workflow",
         )
         return _process_scenes_with_dask(scenes, args)
+    if worker_count <= 1 or len(scenes) <= 1:
+        return [_process_scene(scene, args) for scene in scenes]
     log(
         f"Running per-scene processing with {min(worker_count, len(scenes))} processes",
         enabled=args.log_to_console,
@@ -3383,6 +3385,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--max-cloud-cover-to-process must be in [0, 100].")
     args.concurrent_processing = _resolve_concurrent_processing(args.concurrent_processing)
     args.concurrent_processing_backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
+    if args.concurrent_processing_backend == "dask" and args.concurrent_processing != 1:
+        parser.error("--concurrent-processing must be 1 when --concurrent-processing-backend=dask.")
     if args.concurrent_processing_backend == "dask" and bool(args.dask_scheduler_file) == bool(args.dask_scheduler_address):
         parser.error("--concurrent-processing-backend=dask requires exactly one of --dask-scheduler-file or --dask-scheduler-address.")
     if args.concurrent_processing_backend != "dask" and (args.dask_scheduler_file or args.dask_scheduler_address):

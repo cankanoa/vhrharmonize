@@ -360,7 +360,7 @@ def test_worldview_dask_scene_backend(monkeypatch) -> None:
     monkeypatch.setattr(worldview, "_process_scene", lambda scene, args: f"state:{scene}")
 
     args = SimpleNamespace(
-        concurrent_processing=2,
+        concurrent_processing=1,
         concurrent_processing_backend="dask",
         dask_scheduler_file="/tmp/dask-scheduler.json",
         dask_scheduler_address=None,
@@ -370,6 +370,10 @@ def test_worldview_dask_scene_backend(monkeypatch) -> None:
     assert calls["client_kwargs"] == {"scheduler_file": "/tmp/dask-scheduler.json"}
     assert calls["mapped"] == ["scene-a", "scene-b"]
     assert calls["closed"] is True
+
+    args.concurrent_processing = 2
+    with pytest.raises(ValueError, match="concurrent_processing must be 1"):
+        worldview._process_scenes(["scene-a", "scene-b"], args)
 
 
 def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:

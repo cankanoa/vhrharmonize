@@ -26,7 +26,7 @@ shared:
   epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
   
   concurrent_processing_backend: process_pool # process_pool | dask. Dask uses a running scheduler that can be setup. Search for "When dask is enabled" in the config files for all params to enable dask.
-  concurrent_processing: 1 # Integer worker count or num_cpu to use all available CPUs for per-scene processing. Dask must have more then 1.
+  concurrent_processing: 1 # Local process count or num_cpu for process_pool; must be 1 for dask because the cluster controls concurrency
   # dask_scheduler_file: ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json # Enable for dask connection
   # dask_scheduler_address: tcp://scheduler-host:8786 # Alternative Dask connection
   
