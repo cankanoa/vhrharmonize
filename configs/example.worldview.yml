@@ -228,25 +228,26 @@ seamline_metadata:
 
 radiometric_normalization:
   radiometric_normalization_method: spectralmatch # spectralmatch
-  # SpectralMatch pipeline kwargs:
-  # Pass SpectralMatch arguments (see https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix.
 
-  # Optionally run named SpectralMatch groups. Keys are output filenames; values are nested prefixed inputs or lists of images.
-  # Keys are output names written by filename under the resolved output folder.
-  # Values have two options: "auto:" patterns use wcmatch against finished scene output filenames; "file:" values are literal tif paths.
+  # Optionally, run named SpectralMatch groups. Keys are output file names saved under the resolved output folder. Values have two options: "auto:" patterns use wcmatch against finished scene output filenames; "file:" values are literal tif paths.
   # group_by_basename: {"name.tif": "auto:**/*.tif"}
   # group_by_basename: {"name.tif": ["auto:*893242343*", {"nested.tif": ["file:/path/to/reference.tif", "auto:*222222222*"]}, "auto:*123456789*"]}
 
-  # These are already passed in by vhrharmonize after all non-radiometric scene steps finish:
-  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"]
-  # match_shared_output_image_path: /path/to/image.tif # This is resolved from save_radiometric_normalization or directly set as match_shared_output_image_path; do not set both
-  # match_shared_temp_dir: ./temp/spectralmatch
-  # match_delete_temp_dir: true
-  # match_shared_debug_logs: false
-  # match_shared_output_dtype: int16
+  # Pass SpectralMatch arguments (see https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix, which will be removed before passing to Spectralmatch
+  # These are already passed in by vhrharmonize to spectralmatch automatically, to override them, set them
+  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"] # Resolved from the previous steps output
+  # match_shared_output_image_path: /path/to/image.tif # Resolved from save_radiometric_normalization
+  # match_shared_temp_dir: ./temp/spectralmatch # Resolved from temp_dir
+  # match_delete_temp_dir: true # Resolved from keep_temp_dir
+  # match_shared_debug_logs: false # Resolved from log_to_console
+  # match_shared_output_dtype: int16 # Resolved from dtype
+  # match_shared_concurrent_processing_backend:  # Resolved from concurrent_processing_backend
+  # match_shared_dask_scheduler: null # Resolved from dask_scheduler_file/address, e.g. ["file", "/tmp/spectralmatch-dask-1.json"]
 
   # Other optional SpectralMatch pipeline kwargs, defaults are often sufficient:
+  
   # Shared runtime/output options
+  # match_shared_resume_from_steps: no # no | yes | validate
   # match_shared_cache: auto
   # match_shared_custom_nodata_value: -9999
   # match_shared_window_size: 1024
@@ -254,15 +255,42 @@ radiometric_normalization:
   # match_shared_io_threads: auto
   # match_shared_tile_threads: auto
   # match_shared_calculation_dtype: float32
-  # match_shared_output_dtype: int16
   # match_shared_save_as_cog: false
-  # match_shared_resume_from_steps: no # no | yes | validate
 
-  # Pipeline order. The `match_` prefix is stripped before calling SpectralMatch, so this becomes SpectralMatch's `steps` parameter.
-  # Allowed steps: global_regression, local_block_adjustment, align, voronoi_center_seamline, weighted_seamline, mask, merge
-  # Only one seamline step may be included.
-  # match_steps: [global_regression, local_block_adjustment, align, voronoi_center_seamline, mask, merge] # For a mosaic
-  # match_steps: [global_regression, local_block_adjustment, align] # For a time series
+  # Pipeline order.
+  # Allowed steps: joint_coregistration, align, global_regression, local_block_adjustment, voronoi_center_seamline, weighted_seamline, mask, merge. Only one seamline step may be included.
+  # Below matches SpectralMatch's default pipeline; a separate align step is unnecessary after joint_coregistration.
+  # match_steps: [joint_coregistration, global_regression, local_block_adjustment, voronoi_center_seamline, mask, merge] # For mosaic
+  # match_steps: [joint_coregistration, global_regression, local_block_adjustment, align] # For a time series
+
+  # Joint coregistration
+  # match_joint_coregistration_global_model: translation # none | translation | similarity | affine
+  # match_joint_coregistration_global_image_position_preservation_weights: null # Mapping of image basename to weight
+  # match_joint_coregistration_global_tie_point_alignment_strength: 1.0
+  # match_joint_coregistration_local_model: piecewise_affine # none | bilinear | piecewise_affine
+  # match_joint_coregistration_local_image_position_preservation_weights: null # Mapping of image basename to weight
+  # match_joint_coregistration_local_tie_point_alignment_strength: 1.0
+  # match_joint_coregistration_local_grid_spacing: 500.0
+  # match_joint_coregistration_local_smoothness_weight: 1.0
+  # match_joint_coregistration_local_bending_weight: 1.0
+  # match_joint_coregistration_local_anchor_falloff_distance: 500.0
+  # match_joint_coregistration_feature_method: orb
+  # match_joint_coregistration_maximum_tie_point_displacement: null
+  # match_joint_coregistration_ransac_reprojection_threshold: null
+  # match_joint_coregistration_robust_loss: huber # none | huber | soft_l1 | cauchy
+  # match_joint_coregistration_robust_loss_scale: null
+  # match_joint_coregistration_save_adjustments: /path/to/tie_points.json
+  # match_joint_coregistration_load_adjustments: /path/to/tie_points.json
+  # match_joint_coregistration_resampling_method: bilinear # nearest | bilinear | cubic | lanczos
+  # match_joint_coregistration_tap: true
+  # match_joint_coregistration_resolution: highest
+  # match_joint_coregistration_build_overviews: false
+
+  # Optional standalone alignment. Skip this when joint_coregistration performs the alignment/tap.
+  # match_align_rasters_resampling_method: bilinear
+  # match_align_rasters_tap: true
+  # match_align_rasters_resolution: highest
+
   # Global regression
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
   # match_global_regression_estimate_stats: true
@@ -280,6 +308,7 @@ radiometric_normalization:
   # match_global_regression_pif_max_samples: 100000
   # match_global_regression_pif_min_samples: 32
   # match_global_regression_pif_feature_method: orb
+  # match_global_regression_pif_load_tie_points: /path/to/tie_points.json
   # match_global_regression_pif_save_inz: /path/to/inz_outputs
   # match_global_regression_build_overviews: false
   # Local block adjustment
@@ -291,11 +320,6 @@ radiometric_normalization:
   # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
   # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
-
-  # Alignment
-  # match_align_rasters_resampling_method: bilinear
-  # match_align_rasters_tap: true
-  # match_align_rasters_resolution: highest
 
   # Seamlines
   # Select the seamline algorithm by including either `voronoi_center_seamline` or `weighted_seamline` in match_steps.

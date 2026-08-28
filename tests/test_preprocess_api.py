@@ -295,6 +295,42 @@ def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None
     assert args.match_weighted_seamline_image_field_name == "image"
 
 
+def test_worldview_spectralmatch_runtime_kwargs_follow_scene_backend() -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=None,
+        concurrent_processing_backend="dask",
+        dask_scheduler_file="/tmp/dask-scheduler.json",
+        dask_scheduler_address=None,
+        match_shared_concurrent_processing_backend=None,
+        match_shared_dask_scheduler=None,
+    )
+
+    assert worldview._build_radiometric_kwargs(args) == {
+        "shared_concurrent_processing_backend": "dask",
+        "shared_dask_scheduler": ("file", "/tmp/dask-scheduler.json"),
+        "shared_image_threads": None,
+    }
+
+
+def test_worldview_explicit_spectralmatch_runtime_kwargs_override_defaults() -> None:
+    worldview = importlib.import_module("vhrharmonize.cli.worldview")
+    args = SimpleNamespace(
+        radiometric_normalization_kwargs_json=(
+            '{"shared_concurrent_processing_backend": "process_pool", "shared_dask_scheduler": null}'
+        ),
+        concurrent_processing_backend="dask",
+        dask_scheduler_file=None,
+        dask_scheduler_address="tcp://scheduler:8786",
+        match_shared_concurrent_processing_backend=None,
+        match_shared_dask_scheduler=None,
+    )
+
+    kwargs = worldview._build_radiometric_kwargs(args)
+    assert kwargs["shared_concurrent_processing_backend"] == "process_pool"
+    assert kwargs["shared_dask_scheduler"] is None
+
+
 def test_worldview_dask_scene_backend(monkeypatch) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     calls = {}

@@ -289,7 +289,27 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
     match_kwargs = _collect_prefixed_kwargs(args, "match_")
     radiometric_kwargs.update(match_kwargs)
+    for key, value in _spectralmatch_runtime_kwargs(args).items():
+        radiometric_kwargs.setdefault(key, value)
     return radiometric_kwargs
+
+
+def _spectralmatch_runtime_kwargs(args: argparse.Namespace) -> Dict:
+    """Convert VHRHarmonize concurrency settings to SpectralMatch pipeline kwargs."""
+    backend = getattr(args, "concurrent_processing_backend", "process_pool")
+    if backend != "dask":
+        return {"shared_concurrent_processing_backend": backend, "shared_dask_scheduler": None}
+
+    scheduler_file = getattr(args, "dask_scheduler_file", None)
+    scheduler = ("file", scheduler_file) if scheduler_file else (
+        "address",
+        getattr(args, "dask_scheduler_address", None),
+    )
+    return {
+        "shared_concurrent_processing_backend": backend,
+        "shared_dask_scheduler": scheduler,
+        "shared_image_threads": None,
+    }
 
 
 def _radiometric_steps_include(args: argparse.Namespace, step_name: str) -> bool:

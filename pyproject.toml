@@ -109,7 +109,7 @@ defaults = [
     "Py6S",
     "6s-bin",
     "orthority>=0.5.1",
-    "spectralmatch",
+    "spectralmatch>=1.5,<2",
     "coregix"
 ]
 
