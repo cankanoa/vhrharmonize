@@ -429,6 +429,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                     "alignment_fixed_image": str(unlisted_path),
                     "output_dir": str(tmp_path / "local_output"),
                     "save_file_source": "$output/file_source",
+                    "run_file_source": True,
                     "run_cloud_mask": True,
                     "save_cloud_mask": str(tmp_path / "local_output"),
                     "run_radiometric_normalization": True,
@@ -512,11 +513,12 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         remote.startswith("/remote/runs/RUN123/output/file_source/")
         for remote in plan["uploaded_input_paths"].values()
     )
-    assert set(plan["uploaded_input_paths"]).isdisjoint(plan["download_output_paths"])
-    assert not any(
-        Path(local).parent == (tmp_path / "local_output" / "file_source")
-        for local in plan["download_output_paths"]
-    )
+    file_source_downloads = {
+        local: remote
+        for local, remote in plan["download_output_paths"].items()
+        if Path(local).parent == (tmp_path / "local_output" / "file_source")
+    }
+    assert set(file_source_downloads.values()) == set(plan["uploaded_input_paths"].values())
     assert str(dem_path.resolve()) in plan["uploaded_reference_paths"]
     assert str(unlisted_path.resolve()) not in plan["uploaded_reference_paths"]
     assert str(Path(plan["staged_provider_file"]).resolve()) in plan["uploaded_reference_paths"]
@@ -541,13 +543,38 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         next(iter(item.values())).startswith("/remote/runs/RUN123/output/file_source/")
         for item in staged_inputs
     )
-    assert staged["workflow"]["run_file_source"] is True
+    assert staged["shared"]["run_file_source"] is True
     assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
     assert (
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
         == "/remote/runs/RUN123/output/grouped.tif"
     )
     assert "dask-scheduler-RUN123.json" in staged_slurm_start_file.read_text(encoding="utf-8")
+
+    temp_provider = yaml.safe_load(provider_config.read_text(encoding="utf-8"))
+    temp_provider["shared"]["save_file_source"] = "$temp/file_source"
+    provider_config.write_text(yaml.safe_dump(temp_provider, sort_keys=False), encoding="utf-8")
+    temp_plan = prepare_slurm_plan(str(slurm_config))
+    assert all(
+        remote.startswith("/remote/runs/RUN123/tmp/file_source/")
+        for remote in temp_plan["uploaded_input_paths"].values()
+    )
+    assert not any(
+        Path(local).parent == (tmp_path / "local_output" / "file_source")
+        for local in temp_plan["download_output_paths"]
+    )
+
+    temp_provider["shared"]["run_file_source"] = False
+    temp_provider["shared"].pop("save_file_source")
+    provider_config.write_text(yaml.safe_dump(temp_provider, sort_keys=False), encoding="utf-8")
+    dependency_plan = prepare_slurm_plan(str(slurm_config))
+    dependency_staged = load_yaml_file(dependency_plan["staged_provider_file"])
+    assert dependency_staged["shared"]["input_file_glob"]
+    assert dependency_staged["shared"]["run_file_source"] is False
+    assert all(
+        remote.startswith("/remote/runs/RUN123/tmp/file_source/")
+        for remote in dependency_plan["uploaded_input_paths"].values()
+    )
 
 
 def test_remote_rewrite_keeps_single_outputs_relative_to_remote_roots() -> None:

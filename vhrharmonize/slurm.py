@@ -755,8 +755,6 @@ def rewrite_worldview_config_for_remote(
     rewritten = copy.deepcopy(dict(provider_config_data))
     if input_file_entries is not None:
         _set_nested_key(rewritten, "shared", "input_file_glob", list(input_file_entries))
-        if any("file_source" in entry for entry in input_file_entries):
-            _set_nested_key(rewritten, "workflow", "run_file_source", True)
     _set_nested_key(rewritten, "shared", "output_dir", remote_output_dir)
     _set_nested_key(rewritten, "shared", "temp_dir", remote_temp_dir)
 
@@ -840,15 +838,13 @@ def _collect_planned_non_temp_outputs(
     output_map: Dict[str, str] = {}
     for scene in scene_list:
         local_state = _make_planning_state(scene, local_args)
-        file_source_outputs = {
-            os.path.abspath(path)
-            for path in worldview._get_expected_scene_step_outputs(local_state, local_args).get("file_source", [])
-        }
         for local_path in worldview._scene_skip_required_outputs(local_state, local_args):
             local_abs = os.path.abspath(local_path)
-            if local_abs in file_source_outputs:
-                continue
-            output_map[local_abs] = _remote_output_file_path(local_path, remote_output_dir)
+            output_map[local_abs] = _remote_output_file_path(
+                local_path,
+                remote_output_dir,
+                local_output_root=local_state.step_dirs["output_root"],
+            )
 
     if local_args.run_seamline_metadata and not worldview._is_temp_save_value(local_args.save_seamline_metadata):
         first_scene = next(iter(scene_list), None)
@@ -880,8 +876,17 @@ def _collect_planned_non_temp_outputs(
     return dict(sorted(output_map.items()))
 
 
-def _remote_output_file_path(local_path: str, remote_output_dir: str) -> str:
+def _remote_output_file_path(
+    local_path: str,
+    remote_output_dir: str,
+    *,
+    local_output_root: str | None = None,
+) -> str:
     """Return the remote output file path for a planned local output."""
+    if local_output_root:
+        relative_path = os.path.relpath(os.path.abspath(local_path), os.path.abspath(local_output_root))
+        if relative_path != os.pardir and not relative_path.startswith(f"{os.pardir}{os.sep}"):
+            return os.path.join(remote_output_dir, relative_path)
     return os.path.join(remote_output_dir, os.path.basename(local_path))
 
 
