@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
 #SBATCH --job-name=vhr-worldview
-#SBATCH --output=../logs/slurm-%j.out
-#SBATCH --error=../logs/slurm-%j.err
+#SBATCH --output=../run_{run_id}/logs/slurm-%j.out
+#SBATCH --error=../run_{run_id}/logs/slurm-%j.err
 
 # When dask is enabled
 # #SBATCH --nodes=2
@@ -25,7 +25,7 @@ eval "$(conda shell.bash hook)"
 # Setup conda environment
 ENV_NAME="vhrharmonize"
 if [ ! -d "$(conda info --base)/envs/${ENV_NAME}" ]; then
-    conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge gdal pytorch torchvision cpuonly imageio python=3.11
+    conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge gdal pytorch torchvision cpuonly imageio gfortran_linux-64 python=3.11
 fi
 conda activate "${ENV_NAME}"
 export PYTHONUNBUFFERED=1
