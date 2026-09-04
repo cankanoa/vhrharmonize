@@ -350,18 +350,9 @@ class Py6SCorrector:
                 or shutil.which("sixsV1.1")
             )
         if sixs_executable is None:
-            try:
-                import sixs_bin
-
-                packaged_sixs = sixs_bin.get_path("1.1")
-                if packaged_sixs.is_file():
-                    sixs_executable = str(packaged_sixs)
-            except (ImportError, OSError, ValueError):
-                pass
-        if sixs_executable is None:
             raise RuntimeError(
-                "6S executable not found. Install the `6s-bin` Python package, expose 6S "
-                "in PATH, or pass `sixs_executable` (CLI: --py6s-executable)."
+                "6S executable not found. Install it with `conda install conda-forge::sixs`, "
+                "expose it in PATH, or pass `sixs_executable` (CLI: --py6s-executable)."
             )
 
         s = SixS(path=sixs_executable)

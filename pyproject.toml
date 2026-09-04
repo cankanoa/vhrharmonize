@@ -58,6 +58,7 @@ dependencies = [
 
 system-level = [
     "gdal>=3.11",
+    "sixs",
 ]
 
 cloud = [
@@ -68,7 +69,6 @@ cloud = [
 
 py6s = [
     "Py6S",
-    "6s-bin",
 ]
 
 flaash = [
@@ -107,7 +107,6 @@ defaults = [
     "imageio",
     "requests>=2.32.3",
     "Py6S",
-    "6s-bin",
     "orthority>=0.5.1",
     "spectralmatch>=1.5,<2",
     "coregix"
@@ -119,7 +118,6 @@ all = [
     "imageio",
     "requests>=2.32.3",
     "Py6S",
-    "6s-bin",
     "envipyengine>=1.0.9",
     "orthority>=0.5.1",
     "spectralmatch",

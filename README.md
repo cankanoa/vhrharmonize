@@ -31,7 +31,7 @@ vhrharmonize is an open-source Python library, CLI, and QGIS plugin suite for pr
 See the [installation docs](https://vhrharmonize.sefa.ai/getting-started/installation/) for detailed installation instructions or simply install like this: 
 
 ```bash
-conda create -n vhrharmonize -c conda-forge gdal python=3.11
+conda create -n vhrharmonize -c conda-forge gdal sixs python=3.11
 conda activate vhrharmonize
 pip install "vhrharmonize[defaults]"
 ```
