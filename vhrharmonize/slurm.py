@@ -31,6 +31,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "staged_hpc_file",
     "debug_logs",
     "enable_rsync_checksum",
+    "override_download_conflict",
     "ssh_host",
     "ssh_user",
     "ssh_private_key",
@@ -326,6 +327,15 @@ def _parse_bool(value: Any, *, key: str) -> bool:
     raise ValueError(f"{key} must be true or false.")
 
 
+def _download_conflict_mode(value: Any = "validate") -> str:
+    """Normalize the download policy, including YAML's unquoted yes/no booleans."""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, str) and value.strip().lower() in {"no", "yes", "validate"}:
+        return value.strip().lower()
+    raise ValueError("override_download_conflict must be no, yes, or validate.")
+
+
 def validate_slurm_config(config: Mapping[str, Any]) -> None:
     """Validate orchestration-level Slurm config values."""
     required_keys = (
@@ -371,6 +381,7 @@ def validate_slurm_config(config: Mapping[str, Any]) -> None:
         _parse_bool(config["debug_logs"], key="debug_logs")
     if "enable_rsync_checksum" in config:
         _parse_bool(config["enable_rsync_checksum"], key="enable_rsync_checksum")
+    _download_conflict_mode(config.get("override_download_conflict", "validate"))
     for key in ("ssh_private_key",):
         value = config.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):
@@ -1128,6 +1139,9 @@ def prepare_slurm_plan(
         "enable_rsync_checksum": _parse_bool(
             slurm_config.get("enable_rsync_checksum", False), key="enable_rsync_checksum"
         ),
+        "override_download_conflict": _download_conflict_mode(
+            slurm_config.get("override_download_conflict", "validate")
+        ),
         "ssh_host": _require_config_value(slurm_config, "ssh_host"),
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
         **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
@@ -1561,12 +1575,29 @@ def close_hpc_connection(config_path: str) -> subprocess.CompletedProcess[str]:
 def download_slurm_outputs(config_path: str) -> None:
     """Download files listed in download sections of the staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
+    mode = _download_conflict_mode(slurm_data.get("override_download_conflict", "validate"))
     for section in ("download_output_paths", "download_log_paths"):
         mapping = slurm_data.get(section) or {}
         if not isinstance(mapping, dict):
             print(f"{section} is not a mapping")
             continue
         for local_path, remote_path in mapping.items():
+            if mode != "yes":
+                try:
+                    reusable = worldview._existing_outputs_are_reusable(
+                        [str(local_path)],
+                        check_validity=mode == "validate",
+                        validity_check_grid_size=0,
+                        log_to_console=True,
+                        step="download",
+                    )
+                except Exception as exc:
+                    # GDAL can raise on corrupt local files before opening a dataset.
+                    print(f"local validation failed {local_path}: {exc}")
+                    reusable = False
+                if reusable:
+                    print(f"skipping existing local file {local_path}")
+                    continue
             print(f"downloading {remote_path} -> {local_path}")
             try:
                 _scp_download(slurm_data, str(remote_path), str(local_path))

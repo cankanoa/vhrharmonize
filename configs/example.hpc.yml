@@ -14,6 +14,9 @@ staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch
 staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
 debug_logs: true # Print debug logs
 
+# Download settings
+override_download_conflict: validate # no | yes | validate. Skip existing | overwrite | skip valid local files
+
 # SSH login
 ssh_host: koa.its.hawaii.edu
 ssh_user: username

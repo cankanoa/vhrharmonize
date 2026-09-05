@@ -6,6 +6,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
+import pytest
 import rasterio
 import yaml
 
@@ -376,6 +377,48 @@ def test_worldview_dask_scene_backend(monkeypatch) -> None:
         worldview._process_scenes(["scene-a", "scene-b"], args)
 
 
+@pytest.mark.parametrize("mode, expected", [
+    ("no", {"missing.tif"}),
+    ("yes", {"missing.tif", "valid.tif", "broken.tif", "run.log"}),
+    ("validate", {"missing.tif", "broken.tif"}),
+    (None, {"missing.tif", "broken.tif"}),
+])
+def test_slurm_download_conflicts(tmp_path: Path, monkeypatch, mode, expected) -> None:
+    slurm_mod = importlib.import_module("vhrharmonize.slurm")
+    valid = tmp_path / "valid.tif"
+    with rasterio.open(
+        valid, "w", driver="GTiff", width=4, height=4, count=1, dtype="uint8",
+        transform=rasterio.transform.from_origin(0, 4, 1, 1), crs="EPSG:4326",
+    ) as dst:
+        dst.write(np.ones((1, 4, 4), dtype=np.uint8))
+    (tmp_path / "broken.tif").write_text("incomplete raster")
+    (tmp_path / "run.log").write_text("existing log")
+    config = {
+        "download_output_paths": {
+            str(tmp_path / name): f"/remote/{name}"
+            for name in ("missing.tif", "valid.tif", "broken.tif")
+        },
+        "download_log_paths": {str(tmp_path / "run.log"): "/remote/run.log"},
+    }
+    config_path = tmp_path / "staged.hpc.yml"
+    # Write literal yes/no to cover YAML boolean normalization.
+    config_path.write_text(yaml.safe_dump(config) + (
+        f"override_download_conflict: {mode}\n" if mode is not None else ""
+    ))
+    downloaded = []
+    monkeypatch.setattr(slurm_mod, "_scp_download", lambda data, remote, local: downloaded.append(Path(local).name))
+    slurm_mod.download_slurm_outputs(str(config_path))
+    assert set(downloaded) == expected
+
+
+def test_slurm_download_rejects_invalid_conflict_policy(tmp_path: Path, monkeypatch) -> None:
+    slurm_mod = importlib.import_module("vhrharmonize.slurm")
+    config_path = tmp_path / "staged.hpc.yml"
+    config_path.write_text("override_download_conflict: invalid\n")
+    with pytest.raises(ValueError, match="override_download_conflict"):
+        slurm_mod.download_slurm_outputs(str(config_path))
+
+
 def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     nan_path = tmp_path / "all_nan.tif"
@@ -500,6 +543,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert written_slurm["status"] == "prepared"
     assert written_slurm["debug_logs"] is True
     assert written_slurm["enable_rsync_checksum"] is True
+    assert written_slurm["override_download_conflict"] == "validate"
     assert written_slurm["ssh_private_key"] == "~/.ssh/id_ed25519"
     assert all(Path(local).is_file() for local in plan["uploaded_input_paths"])
     uploaded_input_names = {Path(local).name for local in plan["uploaded_input_paths"]}

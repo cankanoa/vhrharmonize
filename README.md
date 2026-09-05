@@ -88,6 +88,8 @@ gdal raster resize --size 1%,1% -r average --co TILED=YES --co COMPRESS=DEFLATE 
 rsync -avP user@ip:preview.tif .preview.tif
 ```
 
+In the HPC YAML, `override_download_conflict: validate` (the default) skips existing local files that pass the workflow's output validation and downloads missing or invalid files. Use `no` to skip all existing files, or `yes` to always overwrite. Raster validation uses the same GDAL readability checks as processing steps; non-raster files, including logs, are checked only for existence. The setting is copied into the staged HPC YAML used by `download`; edit that staged file to change the policy for an already prepared run.
+
 ## Contributing
 
 We welcome all contributions! We appreciate any feedback, suggestions, or pull requests to improve this project. See the [contributing docs](https://vhrharmonize.sefa.ai/getting-started/contributing/).
