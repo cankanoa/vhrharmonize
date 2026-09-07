@@ -10,10 +10,13 @@ import sys
 from typing import Dict, List, Optional
 
 from vhrharmonize.preprocess.fetch_external_data import (
-    fetch_modis_water_vapor_for_bbox,
-    init_ee_client,
-)
-from vhrharmonize.providers.worldview import find_files, parse_worldview_basename
+    fetch_modis_water_vapor_for_bbox, _init_ee_client)
+from vhrharmonize.preprocess.helpers import (_log, _log_image_completed,
+                                             _log_image_start, _log_step_start)
+from vhrharmonize.providers.standardized import materialize_scene_bounds
+from vhrharmonize.providers.worldview import (find_files,
+                                              load_worldview_metadata,
+                                              parse_worldview_basename)
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(MODULE_DIR))
@@ -49,25 +52,6 @@ def _parse_scene_datetime_utc(photo_basename: str) -> object:
     if parts is None:
         raise ValueError(f"Could not parse acquisition datetime from: {photo_basename}")
     return parts.acquisition_datetime_utc
-
-
-def _load_scene_bbox_wgs84(shp_path: str) -> tuple[float, float, float, float]:
-    """Load a scene footprint bounding box in WGS84.
-    Args:
-        shp_path: Path to the footprint shapefile.
-    Returns:
-        Bounding box as min lon, min lat, max lon, max lat.
-    """
-    import geopandas as gpd
-
-    gdf = gpd.read_file(shp_path)
-    if gdf.empty:
-        raise ValueError(f"Empty scene footprint: {shp_path}")
-    if gdf.crs is None:
-        raise ValueError(f"Scene footprint has no CRS: {shp_path}")
-    gdf = gdf.to_crs(epsg=4326)
-    minx, miny, maxx, maxy = gdf.total_bounds
-    return float(minx), float(miny), float(maxx), float(maxy)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -122,7 +106,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         Process exit code.
     """
     args = _build_parser().parse_args(argv)
-    ee = init_ee_client(
+    ee = _init_ee_client(
         ee_project=args.ee_project,
         authenticate=args.authenticate,
         env_file=args.env_file,
@@ -130,25 +114,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     aod_band_candidates = [value.strip() for value in args.aod_band_candidates.split(",") if value.strip()]
 
-    from vhrharmonize.preprocess.helpers import log, log_step_start, log_image_start, log_image_completed
 
     rows: List[Dict[str, object]] = []
-    log_step_start("glob_matches", enabled=True, uppercase=False)
+    _log_step_start("glob_matches", enabled=True, uppercase=False)
     scene_inputs = []
     for input_folder in args.input_dir:
         found = find_files(input_folder, filter_basenames)
         scene_inputs.extend((input_folder, scene) for scene in found.values())
-    log_step_start("fetch_atmosphere", enabled=True)
+    _log_step_start("fetch_atmosphere", enabled=True)
     for index, (input_folder, scene) in enumerate(scene_inputs, start=1):
         mul_photo_basename = scene.get("mul_photo_basename")
-        mul_shp = scene.get("mul_shp_file")
-        if not mul_photo_basename or not mul_shp:
+        mul_imd = scene.get("mul_imd_file")
+        if not mul_photo_basename or not mul_imd:
             continue
 
-        log_image_start(mul_photo_basename, [mul_shp], [args.output_json, args.output_csv], enabled=True)
+        _log_image_start(mul_photo_basename, [mul_imd], [args.output_json, args.output_csv], enabled=True)
         try:
             scene_dt = _parse_scene_datetime_utc(mul_photo_basename)
-            min_lon, min_lat, max_lon, max_lat = _load_scene_bbox_wgs84(mul_shp)
+            min_lon, min_lat, max_lon, max_lat = materialize_scene_bounds(load_worldview_metadata(mul_imd).raw_metadata).bounds
             estimate = fetch_modis_water_vapor_for_bbox(
                 scene_datetime_utc=scene_dt,
                 min_lon=min_lon,
@@ -173,9 +156,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 **estimate.to_dict(),
             }
             rows.append(row)
-            log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
         except Exception as exc:
-            log(f"Failed: {exc}", enabled=True, scene_basename=mul_photo_basename)
+            _log(f"Failed: {exc}", enabled=True, scene_basename=mul_photo_basename)
             rows.append(
                 {
                     "input_folder": input_folder,
@@ -231,7 +214,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
-__all__ = ["main"]
+__all__ = [
+    "main",
+]
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
+from vhrharmonize.preprocess.cloudmasking import cloudmask_raster
+
 
 def _parse_json_dict(raw_json: Optional[str]) -> Dict[str, Any]:
     """Parse optional JSON keyword arguments.
@@ -77,7 +79,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     output_raster = args.output_raster or _build_output_path(args.input_raster, "_cloudmasked")
     output_mask = args.output_mask or _build_output_path(args.input_raster, "_cloudmask")
 
-    from vhrharmonize.preprocess.cloudmasking import cloudmask_raster
 
     cloudmask_raster(
         input_image_path=args.input_raster,
@@ -95,7 +96,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
-__all__ = ["main"]
+__all__ = [
+    "main",
+]
 
 
 if __name__ == "__main__":

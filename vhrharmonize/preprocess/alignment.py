@@ -8,7 +8,7 @@ from typing import Any
 
 from coregix import align_image_pair as coregix_align_image_pair
 
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
 
 
 @dataclass
@@ -32,7 +32,7 @@ def _extract_output_path(result: Any) -> str:
     raise ValueError("coregix align_image_pair result did not include an output image path.")
 
 
-@logged_operation('alignment', inputs=('moving_image_path', 'fixed_image_path'), outputs=('output_image_path',))
+@_logged_operation('alignment', inputs=('moving_image_path', 'fixed_image_path'), outputs=('output_image_path',))
 def align_image_pair(
     moving_image_path: str,
     fixed_image_path: str,
@@ -108,7 +108,7 @@ def align_image_pair(
     if solve_resolution is not None and solve_resolution <= 0:
         raise ValueError("solve_resolution must be > 0 when provided.")
 
-    log(
+    _log(
         f"Running alignment moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",
         enabled=log_to_console,
         step="alignment",
@@ -141,7 +141,7 @@ def align_image_pair(
         log_to_console=log_to_console,
     )
     output_path = _extract_output_path(result)
-    log(
+    _log(
         f"Wrote output {os.path.basename(output_path)}",
         enabled=log_to_console,
         step="alignment",
@@ -150,4 +150,7 @@ def align_image_pair(
     return AlignmentResult(output_image_path=output_path)
 
 
-__all__ = ["AlignmentResult", "align_image_pair"]
+__all__ = [
+    "AlignmentResult",
+    "align_image_pair",
+]

@@ -6,6 +6,8 @@ import os
 import sys
 from typing import Optional
 
+from vhrharmonize.preprocess.pansharpening import pansharpen_image
+
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Run the standalone pansharpen CLI.
@@ -34,7 +36,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error(f"--pan-ortho does not exist: {args.pan_ortho}")
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-    from vhrharmonize.preprocess.pansharpening import pansharpen_image
 
     pansharpen_image(
         args.mul_ortho,
@@ -46,7 +47,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
-__all__ = ["main"]
+__all__ = [
+    "main",
+]
 
 
 if __name__ == "__main__":

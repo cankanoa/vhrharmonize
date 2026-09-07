@@ -5,7 +5,6 @@ from typing import Any
 
 _EXPORTS = {
     "calculate_raster_overviews": (".geospatial", "calculate_raster_overviews"),
-    "shp_to_gpkg": (".geospatial", "shp_to_gpkg"),
     "get_image_percentile_value": (".geospatial", "get_image_percentile_value"),
     "StepOutputPlan": (".workflow_utils", "StepOutputPlan"),
     "build_output_path_from_input": (".workflow_utils", "build_output_path_from_input"),

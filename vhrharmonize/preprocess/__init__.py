@@ -4,7 +4,6 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
-    "log": (".helpers", "log"),
     "atmospheric_correction": (".atmospheric_correction", "atmospheric_correction"),
     "run_py6s": (".atmospheric_correction", "run_py6s"),
     "run_flaash": (".atmospheric_correction", "run_flaash"),

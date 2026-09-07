@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple, Union
 import orthority as oty
 import pyproj
 
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
 
 
 def resolve_output_resolution_for_crs(
@@ -29,7 +29,7 @@ def resolve_output_resolution_for_crs(
     return product_resolution
 
 
-@logged_operation('orthorectification', inputs=('input_image_path', 'dem_image_path'), outputs=('output_image_path',))
+@_logged_operation('orthorectification', inputs=('input_image_path', 'dem_image_path'), outputs=('output_image_path',))
 def gcp_refined_rpc_orthorectification(
     input_image_path: str,
     output_image_path: str,
@@ -57,7 +57,7 @@ def gcp_refined_rpc_orthorectification(
     Returns:
         None.
     """
-    log(
+    _log(
         f"Running orthorectification input={os.path.basename(input_image_path)} dem={os.path.basename(dem_image_path)} epsg={output_epsg}",
         enabled=log_to_console,
         step="orthorectification",
@@ -180,7 +180,7 @@ def gcp_refined_rpc_orthorectification(
 
     # Clean up the temporary file
     os.remove(temp_image_path)
-    log(
+    _log(
         f"Wrote output {os.path.basename(output_image_path)}",
         enabled=log_to_console,
         step="orthorectification",
@@ -188,7 +188,7 @@ def gcp_refined_rpc_orthorectification(
     )
 
 
-@logged_operation("qgis_gcps_to_csv", inputs=("input_gcp_path",))
+@_logged_operation("qgis_gcps_to_csv", inputs=("input_gcp_path",))
 def qgis_gcps_to_csv(
     input_gcp_path: str,
     output_epsg: Optional[int] = None,
@@ -253,7 +253,7 @@ def qgis_gcps_to_csv(
             else:
                 continue
 
-    log(
+    _log(
         "Converted QGIS GCP text to CSV",
         enabled=log_to_console,
         step="orthorectification",
@@ -287,7 +287,7 @@ def geo_to_image_coords(
     return success, (px, py, pz)
 
 
-@logged_operation("qgis_gcps_to_geojson", inputs=("input_image_path", "qgis_gcp_file_path"), outputs=("output_geojson_path",))
+@_logged_operation("qgis_gcps_to_geojson", inputs=("input_image_path", "qgis_gcp_file_path"), outputs=("output_geojson_path",))
 def qgis_gcps_to_geojson(
     input_image_path: str,
     qgis_gcp_file_path: str,
@@ -324,7 +324,7 @@ def qgis_gcps_to_geojson(
     dem_band = dem_dataset.GetRasterBand(1)
     dem_transform = dem_dataset.GetGeoTransform()
 
-    def get_elevation(lon: float, lat: float) -> float:
+    def _get_elevation(lon: float, lat: float) -> float:
         """Sample DEM elevation at a lon-lat point.
         Args:
             lon: Longitude coordinate.
@@ -371,7 +371,7 @@ def qgis_gcps_to_geojson(
         pixel_x = float(values[2])
         pixel_y = float(values[3])
 
-        elevation = get_elevation(map_x, map_y)
+        elevation = _get_elevation(map_x, map_y)
 
         success, (px, py, pz) = geo_to_image_coords(image_dataset, pixel_x, pixel_y)
         if not success:
@@ -399,7 +399,7 @@ def qgis_gcps_to_geojson(
 
     with open(output_geojson_path, "w") as f:
         json.dump(geojson, f, indent=4)
-    log(
+    _log(
         "Wrote GCP GeoJSON",
         enabled=log_to_console,
         step="orthorectification",

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
-import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
+
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT = "https://portal.opentopography.org/A
 DEFAULT_OPENTOPOGRAPHY_DEMTYPE = "SRTMGL1_Ellip"
 
 
-@logged_operation('fetch_dem', inputs=(), outputs=('output_tif_path',))
+@_logged_operation('fetch_dem', inputs=(), outputs=('output_tif_path',))
 def download_opentopography_dem_for_bbox(
     *,
     min_lon: float,
@@ -56,7 +57,7 @@ def download_opentopography_dem_for_bbox(
         "outputFormat": "GTiff",
         "API_Key": api_key,
     }
-    log(
+    _log(
         f"Downloading {demtype} DEM to {os.path.basename(output_tif_path)}",
         enabled=log_to_console,
         step="dem",
@@ -73,7 +74,7 @@ def download_opentopography_dem_for_bbox(
 
     with open(output_tif_path, "wb") as handle:
         handle.write(response.content)
-    log(
+    _log(
         f"Wrote DEM {os.path.basename(output_tif_path)}",
         enabled=log_to_console,
         step="dem",
@@ -197,7 +198,7 @@ def _fetch_power_daily_point(
     }
 
 
-@logged_operation('fetch_atmosphere', inputs=(), outputs=())
+@_logged_operation('fetch_atmosphere', inputs=(), outputs=())
 def fetch_power_atmosphere_for_bbox(
     *,
     day_utc: date,
@@ -247,7 +248,7 @@ def fetch_power_atmosphere_for_bbox(
                 oz_vals.append(float(item["ozone_cm_atm"]))
 
         if aod_vals or wv_vals or oz_vals:
-            log(
+            _log(
                 f"Using NASA POWER values from {query_day.isoformat()}",
                 enabled=log_to_console,
                 step="fetch_atmosphere",
@@ -262,7 +263,7 @@ def fetch_power_atmosphere_for_bbox(
                 date_used=query_day.isoformat(),
             )
 
-    log(
+    _log(
         "No external atmosphere values found",
         enabled=log_to_console,
         step="fetch_atmosphere",
@@ -349,13 +350,14 @@ def _resolve_ee_project(cli_value: Optional[str], env_values: Dict[str, str]) ->
     return None
 
 
-def init_ee_client(
+def _init_ee_client(
     *,
     ee_project: Optional[str] = None,
     authenticate: bool = False,
     env_file: Optional[str] = None,
  ) -> Any:
     """Initialize and return an Earth Engine client."""
+
     import ee
 
     env_values = _load_env_file(env_file)
@@ -604,7 +606,7 @@ def _visibility_from_aod(aod: float) -> float:
     return 5.0
 
 
-@logged_operation('fetch_atmosphere', inputs=(), outputs=())
+@_logged_operation('fetch_atmosphere', inputs=(), outputs=())
 def fetch_modis_water_vapor_for_bbox(
     *,
     scene_datetime_utc: datetime,
@@ -653,14 +655,14 @@ def fetch_modis_water_vapor_for_bbox(
     Returns:
         MODIS atmosphere lookup result.
     """
-    log(
+    _log(
         "Querying MODIS atmosphere data",
         enabled=log_to_console,
         step="fetch_atmosphere",
         scene_basename=scene_basename,
     )
     if ee is None:
-        ee = init_ee_client(ee_project=ee_project, authenticate=authenticate, env_file=env_file)
+        ee = _init_ee_client(ee_project=ee_project, authenticate=authenticate, env_file=env_file)
     if scene_datetime_utc.tzinfo is None:
         scene_datetime_utc = scene_datetime_utc.replace(tzinfo=timezone.utc)
     else:
@@ -699,7 +701,7 @@ def fetch_modis_water_vapor_for_bbox(
     )
     best = _choose_best_candidate([terra, aqua])
     if best is None:
-        log(
+        _log(
             "No MODIS match found",
             enabled=log_to_console,
             step="fetch_atmosphere",
@@ -765,7 +767,7 @@ def fetch_modis_water_vapor_for_bbox(
         image_time_utc=best["image_time_utc"],
         abs_time_diff_hours=best["abs_time_diff_hours"],
     )
-    log(
+    _log(
         "Fetched MODIS atmosphere values",
         enabled=log_to_console,
         step="fetch_atmosphere",
@@ -782,5 +784,4 @@ __all__ = [
     "download_opentopography_dem_for_bbox",
     "fetch_modis_water_vapor_for_bbox",
     "fetch_power_atmosphere_for_bbox",
-    "init_ee_client",
 ]

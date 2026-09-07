@@ -10,7 +10,16 @@ import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from vhrharmonize.cli.cli_helpers import load_yaml_config
+from vhrharmonize.cli.cli_helpers import _load_yaml_config
+from vhrharmonize.preprocess.atmospheric_correction import run_py6s
+from vhrharmonize.preprocess.helpers import (_log, _log_image_completed,
+                                             _log_image_start, _log_step_start)
+from vhrharmonize.preprocess.orthorectification import (
+    gcp_refined_rpc_orthorectification, resolve_output_resolution_for_crs)
+from vhrharmonize.providers.standardized import (StandardizedMetadata,
+                                                 materialize_scene_bounds)
+from vhrharmonize.providers.worldview import (find_files,
+                                              load_worldview_metadata)
 
 
 def _parse_filter_basenames(raw_values: Optional[List[str]]) -> List[str]:
@@ -45,25 +54,6 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
     return normalized
 
 
-def _scene_bbox_wgs84_from_shp(shp_path: str) -> tuple[float, float, float, float]:
-    """Load a scene footprint bounding box in WGS84.
-    Args:
-        shp_path: Path to the scene footprint shapefile.
-    Returns:
-        Bounding box as min lon, min lat, max lon, max lat.
-    """
-    import geopandas as gpd
-
-    gdf = gpd.read_file(shp_path)
-    if gdf.empty:
-        raise ValueError(f"Empty scene footprint shapefile: {shp_path}")
-    if gdf.crs is None:
-        raise ValueError(f"Scene footprint shapefile has no CRS: {shp_path}")
-    gdf = gdf.to_crs(epsg=4326)
-    minx, miny, maxx, maxy = gdf.total_bounds
-    return float(minx), float(miny), float(maxx), float(maxy)
-
-
 def _write_json(path: str, payload: Dict) -> None:
     """Write a JSON file.
     Args:
@@ -84,41 +74,30 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
-    from vhrharmonize.preprocess.atmospheric_correction import (
-        run_py6s,
-    )
-    from vhrharmonize.preprocess.orthorectification import (
-        gcp_refined_rpc_orthorectification,
-        resolve_output_resolution_for_crs,
-    )
-    from vhrharmonize.providers.worldview import find_files, load_worldview_metadata
-    from vhrharmonize.providers.standardized import StandardizedMetadata
 
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    from vhrharmonize.preprocess.helpers import log, log_step_start, log_image_start, log_image_completed
 
-    log_step_start("glob_matches", enabled=True, uppercase=False)
+    _log_step_start("glob_matches", enabled=True, uppercase=False)
     scene_inputs = []
     for input_folder in args.input_dir:
         found_default_files = find_files(input_folder, filter_basenames)
         scene_inputs.extend((input_folder, scene) for scene in found_default_files.values())
-    log_step_start("py6s", enabled=True)
+    _log_step_start("py6s", enabled=True)
     for index, (input_folder, found_default_file) in enumerate(scene_inputs, start=1):
         root_folder_path = found_default_file.get("root_folder_path")
         mul_photo_basename = found_default_file.get("mul_photo_basename")
         py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
         report_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}_metadata.json")
-        log_image_start(mul_photo_basename, [found_default_file.get("mul_tif_file") or "missing"], [py6s_output_path, report_path], enabled=True)
-        required = ("mul_imd_file", "mul_tif_file", "mul_shp_file")
+        _log_image_start(mul_photo_basename, [found_default_file.get("mul_tif_file") or "missing"], [py6s_output_path, report_path], enabled=True)
+        required = ("mul_imd_file", "mul_tif_file")
         if not all(found_default_file.get(k) for k in required):
-            log("Skipped: required files missing", enabled=True, scene_basename=mul_photo_basename)
+            _log("Skipped: required files missing", enabled=True, scene_basename=mul_photo_basename)
             continue
 
         mul_imd_file = found_default_file["mul_imd_file"]
         mul_tif_file = found_default_file["mul_tif_file"]
-        mul_shp_path = found_default_file["mul_shp_file"]
         mul_worldview_metadata = load_worldview_metadata(
             mul_imd_file,
             photo_basename=mul_photo_basename,
@@ -126,7 +105,8 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
         mul_metadata = StandardizedMetadata.from_worldview_metadata(mul_worldview_metadata)
 
         py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
-        scene_bbox = _scene_bbox_wgs84_from_shp(mul_shp_path)
+        scene_bbox = (materialize_scene_bounds(mul_metadata.source_metadata).bounds
+                      if args.py6s_auto_atmos_source == "nasa_power" else None)
         py6s_result = run_py6s(
             input_raster=mul_tif_file,
             output_raster=py6s_output_path,
@@ -160,8 +140,8 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
                 args.output_dir,
                 f"{mul_photo_basename}{args.output_suffix}_ortho.tif",
             )
-            log_step_start("orthorectification", enabled=True)
-            log_image_start(mul_photo_basename, [py6s_output_path], [ortho_output_path], enabled=True)
+            _log_step_start("orthorectification", enabled=True)
+            _log_image_start(mul_photo_basename, [py6s_output_path], [ortho_output_path], enabled=True)
             gcp_refined_rpc_orthorectification(
                 py6s_output_path,
                 ortho_output_path,
@@ -174,13 +154,13 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
                     mul_metadata.product_resolution,
                 ),
             )
-            log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
             if args.keep_intermediate_py6s:
                 final_output_path = ortho_output_path
             else:
                 os.replace(ortho_output_path, py6s_output_path)
                 final_output_path = py6s_output_path
-        log(f"Wrote {final_output_path}", enabled=True, scene_basename=mul_photo_basename)
+        _log(f"Wrote {final_output_path}", enabled=True, scene_basename=mul_photo_basename)
 
         report_path = os.path.join(
             args.output_dir,
@@ -196,7 +176,6 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
             "inputs": {
                 "mul_imd_file": mul_imd_file,
                 "mul_tif_file": mul_tif_file,
-                "mul_shp_file": mul_shp_path,
             },
             "standardized_metadata": mul_metadata.to_dict(),
             "py6s": {
@@ -231,7 +210,7 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
             },
         }
         _write_json(report_path, report)
-        log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+        _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
 
     print("All processing complete")
     return 0
@@ -322,7 +301,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config_defaults: Dict = {}
     if config_args.config_yaml:
-        config_defaults = _normalize_config_defaults(load_yaml_config(config_args.config_yaml))
+        config_defaults = _normalize_config_defaults(_load_yaml_config(config_args.config_yaml))
 
     parser = _build_parser()
     if config_defaults:

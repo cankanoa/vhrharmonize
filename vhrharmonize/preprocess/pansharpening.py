@@ -5,10 +5,10 @@ import numpy as np
 import orthority as oty
 import rasterio
 
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
 
 
-@logged_operation('pansharpen', inputs=('input_low_resolution_path', 'input_high_resolution_path'), outputs=('output_image_path',))
+@_logged_operation('pansharpen', inputs=('input_low_resolution_path', 'input_high_resolution_path'), outputs=('output_image_path',))
 def pansharpen_image(
     input_low_resolution_path: str,
     input_high_resolution_path: str,
@@ -28,7 +28,7 @@ def pansharpen_image(
     Returns:
         None.
     """
-    log(
+    _log(
         f"Running pansharpen mul={os.path.basename(input_low_resolution_path)} pan={os.path.basename(input_high_resolution_path)}",
         enabled=log_to_console,
         step="pansharpen",
@@ -45,7 +45,7 @@ def pansharpen_image(
             log_to_console=log_to_console,
             scene_basename=scene_basename,
         )
-    log(
+    _log(
         f"Wrote output {os.path.basename(output_image_path)}",
         enabled=log_to_console,
         step="pansharpen",
@@ -89,7 +89,7 @@ def _change_nodata_value(
         src.nodata = new_nodata_value
 
     if replaced_any:
-        log(
+        _log(
             "Updated nodata values",
             enabled=log_to_console,
             step="pansharpen",

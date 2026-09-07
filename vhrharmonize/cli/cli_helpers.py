@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 
-def load_yaml_config(path: str) -> Dict[str, Any]:
+def _load_yaml_config(path: str) -> Dict[str, Any]:
     """Load and normalize a YAML config file.
     Args:
         path: YAML config file path.
@@ -25,4 +25,4 @@ def load_yaml_config(path: str) -> Dict[str, Any]:
     return normalized
 
 
-__all__ = ["load_yaml_config"]
+__all__ = []

@@ -223,7 +223,7 @@ alignment:
 seamline_metadata:
   seamline_metadata_layer: footprints
   seamline_metadata_image_field_name: image
-  seamline_metadata_footprint_source: package_bounds # package_bounds | calculate_bounds. package_bounds uses the WorldView footprint shapefile; calculate_bounds polygonizes the processed raster valid-data mask
+  seamline_metadata_footprint_source: package_bounds # package_bounds | calculate_bounds. package_bounds uses the IMD scene corner coordinates; calculate_bounds polygonizes the processed raster valid-data mask
   seamline_metadata_calculate_bounds_eight_connected: true # Use 8-connectedness when footprint_source is calculate_bounds
 
 radiometric_normalization:

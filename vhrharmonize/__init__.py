@@ -2,8 +2,8 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
+    "materialize_scene_bounds": (".providers.standardized", "materialize_scene_bounds"),
     "find_files": (".providers.worldview", "find_files"),
-    "shp_to_gpkg": (".io.geospatial", "shp_to_gpkg"),
     "get_image_percentile_value": (".io.geospatial", "get_image_percentile_value"),
     "qgis_gcps_to_geojson": (
         ".preprocess.orthorectification",

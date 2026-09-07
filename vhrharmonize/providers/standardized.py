@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
-from vhrharmonize.providers.worldview import WorldViewMetadata, parse_worldview_basename
+from pyproj import Transformer
+from shapely.geometry import Polygon
+from shapely.ops import transform
+
+import vhrharmonize.providers.worldview.core as worldview_core
 
 _WV_BAND_ORDER = [
     "BAND_C",
@@ -73,6 +78,39 @@ def _collect_band_groups(data: Mapping[str, Any]) -> List[Tuple[str, Mapping[str
     return groups
 
 
+def materialize_scene_bounds(source_metadata: Mapping[str, Any], *, epsg: int = 4326) -> Polygon:
+    """Create a Shapely polygon from stored IMD UL, UR, LR, LL corners.
+
+    Coordinates remain in source_metadata until requested. Band footprints must
+    agree; incomplete or invalid corners raise only when bounds are needed.
+    The returned polygon uses EPSG:4326 unless a target EPSG is requested.
+    """
+
+    corners = None
+    keys = tuple(f"{corner}{axis}" for corner in ("UL", "UR", "LR", "LL") for axis in ("Lon", "Lat"))
+    for band_name, group in _collect_band_groups(source_metadata):
+        if not any(key in group for key in keys):
+            continue
+        try:
+            values = tuple(float(group[key]) for key in keys)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Incomplete IMD scene bounds in {band_name}") from exc
+        if not all(math.isfinite(value) and abs(value) <= (180 if i % 2 == 0 else 90)
+                   for i, value in enumerate(values)):
+            raise ValueError(f"Invalid IMD scene bounds in {band_name}")
+        if corners is not None and any(abs(a - b) > 1e-8 for a, b in zip(corners, values)):
+            raise ValueError(f"IMD band bounds disagree in {band_name}")
+        corners = values
+    if corners is None:
+        raise ValueError("IMD metadata has no scene corner coordinates")
+    polygon = Polygon(list(zip(corners[::2], corners[1::2])))
+    if polygon.is_empty or not polygon.is_valid or polygon.area == 0:
+        raise ValueError("IMD scene corners do not form a valid polygon")
+    if epsg != 4326:
+        polygon = transform(Transformer.from_crs(4326, epsg, always_xy=True).transform, polygon)
+    return polygon
+
+
 @dataclass(frozen=True)
 class StandardizedMetadata:
     """Provider-neutral metadata fields used by preprocessing workflows."""
@@ -102,7 +140,7 @@ class StandardizedMetadata:
     source_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_worldview_metadata(cls: type["StandardizedMetadata"], worldview_metadata: WorldViewMetadata) -> "StandardizedMetadata":
+    def from_worldview_metadata(cls: type["StandardizedMetadata"], worldview_metadata: worldview_core.WorldViewMetadata) -> "StandardizedMetadata":
         """Build standardized metadata from WorldView metadata.
         Args:
             cls: Dataclass type being constructed.
@@ -201,7 +239,7 @@ class StandardizedMetadata:
             return self.acquisition_datetime_utc
         if not self.photo_basename:
             raise ValueError("No acquisition datetime or photo basename available.")
-        parts = parse_worldview_basename(self.photo_basename)
+        parts = worldview_core.parse_worldview_basename(self.photo_basename)
         if parts is None:
             raise ValueError(f"Could not parse acquisition datetime from basename: {self.photo_basename}")
         return parts.acquisition_datetime_utc
@@ -219,4 +257,7 @@ class StandardizedMetadata:
         return payload
 
 
-__all__ = ["StandardizedMetadata"]
+__all__ = [
+    "StandardizedMetadata",
+    "materialize_scene_bounds",
+]

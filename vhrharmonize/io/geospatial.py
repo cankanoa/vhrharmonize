@@ -1,19 +1,19 @@
-import os
 import warnings
 from typing import Iterable, Optional
 import rasterio
 import rasterio.mask
-import geopandas as gpd
 import numpy as np
 
-from osgeo import ogr, osr
+from pyproj import Transformer
+from shapely.ops import transform
+from shapely.geometry.base import BaseGeometry
 from shapely.geometry import mapping
 
 
-from vhrharmonize.preprocess.helpers import logged_operation
+from vhrharmonize.preprocess.helpers import _logged_operation
 
 
-@logged_operation("overviews", inputs=("input_image_path",), outputs=("input_image_path",), allow_nested=True)
+@_logged_operation("overviews", inputs=("input_image_path",), outputs=("input_image_path",), allow_nested=True)
 def calculate_raster_overviews(
     input_image_path: str,
     overview_scales: Optional[Iterable[int]],
@@ -50,106 +50,18 @@ def calculate_raster_overviews(
     return input_image_path
 
 
-def shp_to_gpkg(
-    input_shp_path: str,
-    output_gpkg_path: str,
-    override_projection_epsg: Optional[int] = None
-    ) -> None:
-    """Convert a shapefile to a GeoPackage.
-    Args:
-        input_shp_path: Input shapefile path.
-        output_gpkg_path: Output GeoPackage path.
-        override_projection_epsg: Optional CRS EPSG override to assign without reprojection.
-    Returns:
-        None.
-    """
-
-    # Open the input shapefile (read-only)
-    shp_driver = ogr.GetDriverByName("ESRI Shapefile")
-    in_ds = shp_driver.Open(input_shp_path, 0)  # 0 = read-only
-    if not in_ds:
-        raise FileNotFoundError(f"Could not open Shapefile: {input_shp_path}")
-
-    in_layer = in_ds.GetLayer()
-    if not in_layer:
-        raise RuntimeError("Could not get layer from Shapefile.")
-
-    # Determine the layer's current spatial reference
-    in_srs = in_layer.GetSpatialRef()
-
-    # If user wants to override the CRS, just assign that EPSG
-    if override_projection_epsg is not None:
-        out_srs = osr.SpatialReference()
-        out_srs.ImportFromEPSG(override_projection_epsg)
-    else:
-        out_srs = in_srs  # keep the original (which could be None)
-
-    # Prepare output: if the GPKG already exists, remove it
-    gpkg_driver = ogr.GetDriverByName("GPKG")
-    if os.path.exists(output_gpkg_path):
-        os.remove(output_gpkg_path)
-
-    if not os.path.exists(os.path.dirname(output_gpkg_path)):
-        os.makedirs(os.path.dirname(output_gpkg_path))
-
-    out_ds = gpkg_driver.CreateDataSource(output_gpkg_path)
-
-    # Create the output layer with the (possibly overridden) CRS
-    # Note: if out_srs is None, it will simply have "unknown" CRS in the GeoPackage
-    out_layer = out_ds.CreateLayer(
-        name="layer",
-        srs=out_srs,
-        geom_type=in_layer.GetGeomType()
-    )
-
-    # Copy fields from the input layer
-    in_layer_defn = in_layer.GetLayerDefn()
-    for i in range(in_layer_defn.GetFieldCount()):
-        field_defn = in_layer_defn.GetFieldDefn(i)
-        out_layer.CreateField(field_defn)
-
-    # Copy features from input to output
-    in_layer.ResetReading()
-    for in_feature in in_layer:
-        out_feature = ogr.Feature(out_layer.GetLayerDefn())
-
-        # Copy geometry by cloning (no reprojection)
-        geom = in_feature.GetGeometryRef()
-        if geom is not None:
-            out_feature.SetGeometry(geom.Clone())
-
-        # Copy field attributes
-        for i in range(in_layer_defn.GetFieldCount()):
-            out_feature.SetField(
-                in_layer_defn.GetFieldDefn(i).GetNameRef(),
-                in_feature.GetField(i)
-            )
-
-        out_layer.CreateFeature(out_feature)
-        out_feature = None
-
-    # Cleanup
-    out_ds = None
-    in_ds = None
-
-    if override_projection_epsg:
-        print(f"Assigned EPSG:{override_projection_epsg} to output layer {output_gpkg_path}")
-    else:
-        print(f"No CRS override. Output saved to '{output_gpkg_path}'.")
-
-
 def get_image_percentile_value(
     input_image_path: str,
     percentile: float = 50.0,
-    mask: Optional[str] = None,
-    override_mask_crs_epsg: Optional[int] = None,
+    mask: Optional[BaseGeometry] = None,
+    mask_crs: object = 4326,
     ) -> float:
     """Compute a raster percentile value.
     Args:
         input_image_path: Input raster path.
         percentile: Requested percentile in the inclusive range 0 to 100.
-        mask: Optional vector mask path used to limit sampled pixels.
-        override_mask_crs_epsg: Optional CRS EPSG override for the mask.
+        mask: Optional Shapely geometry used to limit sampled pixels.
+        mask_crs: CRS of the mask geometry; defaults to EPSG:4326.
     Returns:
         Percentile value from valid raster pixels.
     """
@@ -160,20 +72,11 @@ def get_image_percentile_value(
         nodata = src.nodata
         collected = []
 
-        if mask:
-            mask_gdf = gpd.read_file(mask)
-
-            if mask_gdf.crs is None:
-                if override_mask_crs_epsg:
-                    mask_gdf.set_crs(epsg=override_mask_crs_epsg, inplace=True)
-                else:
-                    raise ValueError(
-                        f"Mask file '{mask}' has no CRS. You must specify 'override_mask_crs_epsg'."
-                    )
-            elif override_mask_crs_epsg:
-                mask_gdf = mask_gdf.to_crs(epsg=override_mask_crs_epsg)
-
-            geometries = [mapping(geom) for geom in mask_gdf.geometry]
+        if mask is not None:
+            if src.crs is None:
+                raise ValueError("Raster CRS is required to sample using a mask geometry")
+            geometry = transform(Transformer.from_crs(mask_crs, src.crs, always_xy=True).transform, mask)
+            geometries = [mapping(geometry)]
         else:
             geometries = None
 

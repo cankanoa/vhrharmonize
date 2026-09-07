@@ -8,10 +8,14 @@ The workflow expects:
 
 - A multispectral TIF
 - A panchromatic TIF
-- The matching IMD metadata files
-- The matching footprint files such as SHP
+- Matching IMD metadata files containing the scene corner coordinates
+- RPC companions (such as RPB) when the raster needs them for orthorectification
 
 Scene discovery groups files by basename and product identifiers so the MUL and PAN files for the same acquisition are processed together.
+
+Bounds remain as IMD corner values in `standardized_metadata.source_metadata`. `materialize_scene_bounds(source_metadata, epsg=4326)` constructs a Shapely polygon on demand, connecting UL, UR, LR, and LL. DEM sampling reprojects that geometry into the DEM CRS. `package_bounds` uses the same polygon, while `calculate_bounds` continues to polygonize the processed raster mask. Missing or inconsistent IMD corners raise an error only when bounds are requested.
+
+Local staging and HPC uploads share the same file selection from each image directory: the raster, IMD, RPC and other supported image metadata/sidecars. No separate footprint directory is needed.
 
 ## File Handling
 

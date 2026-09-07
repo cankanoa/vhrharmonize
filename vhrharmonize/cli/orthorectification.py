@@ -118,7 +118,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     raise ValueError(f"Unsupported orthorectification command: {args.command}")
 
 
-__all__ = ["main"]
+__all__ = [
+    "main",
+]
 
 
 if __name__ == "__main__":

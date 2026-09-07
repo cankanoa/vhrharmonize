@@ -6,7 +6,10 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
+from typing import (Any, Dict, Iterable, Iterator, List, Mapping, Optional,
+                    Tuple)
+
+import vhrharmonize.providers.standardized as standardized
 
 
 @dataclass(frozen=True)
@@ -76,13 +79,10 @@ class WorldViewImage:
     """WorldView image files and metadata for a single basename."""
 
     filename_parts: WorldViewFilenameParts
-    root_folder_path: str
     tif_file: str
     imd_file: Optional[str]
-    shp_file: Optional[str]
     til_file: Optional[str]
-    worldview_metadata: Optional[object] = None
-    standardized_metadata: Optional[object] = None
+    standardized_metadata: Optional[standardized.StandardizedMetadata] = None
     step_file_paths: Dict[str, str] = field(default_factory=dict)
 
     @property
@@ -208,7 +208,6 @@ class WorldViewScene:
                     "mul_photo_basename": mul_image.basename,
                     "mul_imd_file": mul_image.imd_file,
                     "mul_tif_file": mul_image.tif_file,
-                    "mul_shp_file": mul_image.shp_file,
                     "mul_til_file": mul_image.til_file,
                 }
             )
@@ -218,7 +217,6 @@ class WorldViewScene:
                     "pan_photo_basename": pan_image.basename,
                     "pan_imd_file": pan_image.imd_file,
                     "pan_tif_file": pan_image.tif_file,
-                    "pan_shp_file": pan_image.shp_file,
                     "pan_til_file": pan_image.til_file,
                 }
             )
@@ -260,60 +258,33 @@ def _scene_root_for_path(path: str) -> str:
     return directory
 
 
-def _find_worldview_shp_file(
-    image_directory: str,
-    scene_root: str,
-    basename: str,
-) -> Optional[str]:
-    """Find a scene shapefile for a basename.
-    Args:
-        image_directory: Directory containing the image bundle.
-        scene_root: Root scene directory.
-        basename: Image basename to match.
-    Returns:
-        Matching shapefile path or None.
-    """
-    for candidate in sorted(os.listdir(image_directory)):
-        candidate_path = os.path.join(image_directory, candidate)
-        if not os.path.isfile(candidate_path):
-            continue
-        if os.path.splitext(candidate)[1].lower() != ".shp":
-            continue
-        if basename in os.path.splitext(candidate)[0]:
-            return candidate_path
-
-    gis_files_directory = None
-    for candidate in sorted(os.listdir(scene_root)):
-        candidate_path = os.path.join(scene_root, candidate)
-        if os.path.isdir(candidate_path) and candidate.upper() == "GIS_FILES":
-            gis_files_directory = candidate_path
-            break
-
-    if gis_files_directory is None:
-        return None
-
-    for candidate in sorted(os.listdir(gis_files_directory)):
-        candidate_path = os.path.join(gis_files_directory, candidate)
-        if not os.path.isfile(candidate_path):
-            continue
-        if os.path.splitext(candidate)[1].lower() != ".shp":
-            continue
-        if basename in os.path.splitext(candidate)[0]:
-            return candidate_path
-
-    return None
+def _worldview_image_source_files(image: Optional[WorldViewImage]) -> List[str]:
+    """Return image and metadata companions from the image's directory."""
+    if image is None:
+        return []
+    suffixes = {
+        ".tif", ".imd", ".til", ".rpb", ".xml", ".att", ".eph", ".geo", ".ste",
+        ".rpc", ".rpc.txt", ".tif.aux.xml", ".tif.ovr", ".tif.msk",
+    }
+    directory = os.path.dirname(image.tif_file)
+    return sorted(
+        os.path.abspath(os.path.join(directory, name))
+        for name in os.listdir(directory)
+        if name.startswith(image.basename + ".")
+        and name[len(image.basename):].lower() in suffixes
+        and os.path.isfile(os.path.join(directory, name))
+    )
 
 
-def _companion_files_for_stem(directory: str, scene_root: str, basename: str) -> Dict[str, Optional[str]]:
+def _companion_files_for_stem(directory: str, basename: str) -> Dict[str, Optional[str]]:
     """Collect companion files for an image basename.
     Args:
         directory: Directory containing image bundle files.
-        scene_root: Root scene directory.
         basename: Image basename to match.
     Returns:
         Mapping of discovered companion file paths.
     """
-    companions = {"imd_file": None, "tif_file": None, "shp_file": None, "til_file": None}
+    companions = {"imd_file": None, "til_file": None}
     for candidate in os.listdir(directory):
         candidate_path = os.path.join(directory, candidate)
         if not os.path.isfile(candidate_path):
@@ -324,11 +295,8 @@ def _companion_files_for_stem(directory: str, scene_root: str, basename: str) ->
         ext = extension.lower()
         if ext == ".imd":
             companions["imd_file"] = candidate_path
-        elif ext == ".tif":
-            companions["tif_file"] = candidate_path
         elif ext == ".til":
             companions["til_file"] = candidate_path
-    companions["shp_file"] = _find_worldview_shp_file(directory, scene_root, basename)
     return companions
 
 
@@ -350,7 +318,6 @@ def discover_worldview_scene_tree_from_tif_files(
         scene_root = _scene_root_for_path(tif_file)
         companions = _companion_files_for_stem(
             os.path.dirname(tif_file),
-            scene_root,
             filename_parts.basename,
         )
         scene_bucket = scene_tree.setdefault(filename_parts.scene_id, {})
@@ -364,10 +331,8 @@ def discover_worldview_scene_tree_from_tif_files(
         )
         image = WorldViewImage(
             filename_parts=filename_parts,
-            root_folder_path=scene_root,
             tif_file=tif_file,
             imd_file=companions["imd_file"],
-            shp_file=companions["shp_file"],
             til_file=companions["til_file"],
         )
         scene.set_image(image)
@@ -637,8 +602,7 @@ def load_worldview_metadata(imd_file: str, *, photo_basename: Optional[str] = No
 
 
 def enrich_worldview_scenes_with_metadata(scenes: Iterable[WorldViewScene]) -> List[WorldViewScene]:
-    """Attach provider-specific and standardized metadata to discovered scenes."""
-    from vhrharmonize.providers.standardized import StandardizedMetadata
+    """Attach standardized metadata, including the original IMD fields, to scenes."""
 
     enriched: List[WorldViewScene] = []
     for scene in scenes:
@@ -646,8 +610,7 @@ def enrich_worldview_scenes_with_metadata(scenes: Iterable[WorldViewScene]) -> L
             if image.imd_file is None:
                 continue
             worldview_metadata = load_worldview_metadata(image.imd_file, photo_basename=image.basename)
-            image.worldview_metadata = worldview_metadata
-            image.standardized_metadata = StandardizedMetadata.from_worldview_metadata(worldview_metadata)
+            image.standardized_metadata = standardized.StandardizedMetadata.from_worldview_metadata(worldview_metadata)
         enriched.append(scene)
     return enriched
 

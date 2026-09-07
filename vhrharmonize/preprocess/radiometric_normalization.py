@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from spectralmatch.chain import pipeline as spectralmatch_pipeline
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
 
 
 def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
@@ -22,7 +22,7 @@ def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
     return normalized
 
 
-@logged_operation("radiometric_normalization", outputs=("shared_output_image_path",))
+@_logged_operation("radiometric_normalization", outputs=("shared_output_image_path",))
 def radiometric_normalization(
     shared_input_images: Iterable[str],
     shared_output_image_path: str,
@@ -72,7 +72,7 @@ def radiometric_normalization(
     output_path = Path(shared_output_image_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     input_images = _normalize_input_images(shared_input_images)
-    log(
+    _log(
         f"Running radiometric normalization inputs={len(input_images)} output={output_path.name}",
         enabled=log_to_console,
         step="radiometric",
@@ -113,7 +113,7 @@ def radiometric_normalization(
     result = spectralmatch_pipeline(**pipeline_kwargs)
 
     if output_path.exists():
-        log(f"Wrote output {output_path.name}", enabled=log_to_console, step="radiometric")
+        _log(f"Wrote output {output_path.name}", enabled=log_to_console, step="radiometric")
         return str(output_path)
     if isinstance(result, str) and result:
         return result
@@ -129,4 +129,6 @@ def radiometric_normalization(
     raise RuntimeError("spectralmatch pipeline did not produce the requested output image.")
 
 
-__all__ = ["radiometric_normalization"]
+__all__ = [
+    "radiometric_normalization",
+]

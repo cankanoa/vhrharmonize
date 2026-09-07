@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 import os
 import re
 import shutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import numpy as np
-from Py6S import AeroProfile, AtmosCorr, AtmosProfile, Geometry, SixS, Wavelength
 import rasterio
+from Py6S import (AeroProfile, AtmosCorr, AtmosProfile, Geometry, SixS,
+                  Wavelength)
+from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 
-from vhrharmonize.preprocess.fetch_external_data import fetch_power_atmosphere_for_bbox
-from vhrharmonize.preprocess.helpers import log, logged_operation
+from vhrharmonize.io.geospatial import get_image_percentile_value
+from vhrharmonize.preprocess.fetch_external_data import\
+    fetch_power_atmosphere_for_bbox
+from vhrharmonize.preprocess.helpers import _log, _logged_operation
+
 
 
 @dataclass(frozen=True)
@@ -93,7 +98,7 @@ def _py6s_aerosol_profile(AeroProfile: Any, value: str) -> Any:
     return AeroProfile.PredefinedType(mapping[key])
 
 
-def build_py6s_kwargs_from_standardized_metadata(
+def _build_py6s_kwargs_from_standardized_metadata(
     metadata: Any,
     *,
     ground_elevation_km: float,
@@ -164,7 +169,7 @@ def build_py6s_kwargs_from_standardized_metadata(
     return py6s_kwargs
 
 
-@logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
+@_logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
 def run_py6s(
     input_raster: str,
     output_raster: str,
@@ -257,7 +262,7 @@ def run_py6s(
             "ozone_cm_atm": estimate.ozone_cm_atm,
         }
 
-    py6s_kwargs = build_py6s_kwargs_from_standardized_metadata(
+    py6s_kwargs = _build_py6s_kwargs_from_standardized_metadata(
         metadata,
         ground_elevation_km=ground_elevation_km,
         atmosphere_profile=atmosphere_profile,
@@ -272,14 +277,14 @@ def run_py6s(
         use_imd_radiance_calibration=use_imd_radiance_calibration,
         use_worldview_gain_offset_adjustment=use_worldview_gain_offset_adjustment,
     )
-    log(
+    _log(
         f"Running Py6S input={os.path.basename(input_raster)} output={os.path.basename(output_raster)} profile={atmosphere_profile}",
         enabled=log_to_console,
         step="py6s",
         scene_basename=scene_basename,
     )
     Py6SCorrector().run(input_raster=input_raster, output_raster=output_raster, **py6s_kwargs)
-    log(
+    _log(
         f"Wrote output {os.path.basename(output_raster)}",
         enabled=log_to_console,
         step="py6s",
@@ -509,8 +514,9 @@ FLAASH_ALLOWED_PARAMS = {
 }
 
 
-def init_envi_engine(envi_engine_path: str) -> Any:
+def _init_envi_engine(envi_engine_path: str) -> Any:
     """Initialize the ENVI task engine used by FLAASH."""
+
     import envipyengine.config
     from envipyengine import Engine
 
@@ -520,7 +526,7 @@ def init_envi_engine(envi_engine_path: str) -> Any:
     return envi_engine
 
 
-def validate_flaash_params(flaash_params: Dict[str, Any]) -> Dict[str, Any]:
+def _validate_flaash_params(flaash_params: Dict[str, Any]) -> Dict[str, Any]:
     """Validate FLAASH params against the supported parameter list."""
     unknown_params = sorted(set(flaash_params) - FLAASH_ALLOWED_PARAMS)
     if unknown_params:
@@ -531,10 +537,10 @@ def validate_flaash_params(flaash_params: Dict[str, Any]) -> Dict[str, Any]:
     return flaash_params
 
 
-def build_flaash_kwargs_from_standardized_metadata(
+def _build_flaash_kwargs_from_standardized_metadata(
     input_raster: str,
     dem_file_path: str,
-    footprint_vector_path: str,
+    footprint_geometry: BaseGeometry,
     metadata: Any,
     output_raster: str,
     *,
@@ -549,7 +555,7 @@ def build_flaash_kwargs_from_standardized_metadata(
     Args:
         input_raster: Input raster path.
         dem_file_path: DEM raster path.
-        footprint_vector_path: Footprint vector path for DEM sampling.
+        footprint_geometry: Shapely footprint in EPSG:4326 for DEM sampling.
         metadata: Standardized metadata object.
         output_raster: Output raster path.
         dem_ground_percentile: DEM percentile used for ground elevation estimation.
@@ -561,12 +567,11 @@ def build_flaash_kwargs_from_standardized_metadata(
     Returns:
         Validated FLAASH parameter dictionary.
     """
-    from vhrharmonize.io.geospatial import get_image_percentile_value
 
     ground_elevation_m = get_image_percentile_value(
         dem_file_path,
         percentile=dem_ground_percentile,
-        mask=footprint_vector_path,
+        mask=footprint_geometry,
     )
     flaash_params = {
         "INPUT_RASTER": {"url": input_raster, "factory": "URLRaster"},
@@ -590,10 +595,10 @@ def build_flaash_kwargs_from_standardized_metadata(
     if custom_params:
         flaash_params.update(custom_params)
     flaash_params = {key: value for key, value in flaash_params.items() if value is not None}
-    return validate_flaash_params(flaash_params)
+    return _validate_flaash_params(flaash_params)
 
 
-def wsl_path_to_windows_for_envi(path: str) -> str:
+def _wsl_path_to_windows_for_envi(path: str) -> str:
     """Convert `/mnt/<drive>/...` WSL paths into Windows drive paths for ENVI."""
     match = re.match(r"^/mnt/([a-zA-Z])/(.*)$", path)
     if not match:
@@ -603,18 +608,18 @@ def wsl_path_to_windows_for_envi(path: str) -> str:
     return f"{drive}:\\{rest}"
 
 
-def convert_flaash_params_paths_for_windows(flaash_params: Dict[str, Any]) -> Dict[str, Any]:
+def _convert_flaash_params_paths_for_windows(flaash_params: Dict[str, Any]) -> Dict[str, Any]:
     """Convert FLAASH path params to Windows form for ENVI-on-Windows execution."""
     converted = dict(flaash_params)
     input_raster = converted.get("INPUT_RASTER")
     if isinstance(input_raster, dict) and "url" in input_raster:
         updated_input = dict(input_raster)
-        updated_input["url"] = wsl_path_to_windows_for_envi(updated_input["url"])
+        updated_input["url"] = _wsl_path_to_windows_for_envi(updated_input["url"])
         converted["INPUT_RASTER"] = updated_input
 
     for key in ("OUTPUT_RASTER_URI", "CLOUD_RASTER_URI", "WATER_RASTER_URI"):
         if converted.get(key):
-            converted[key] = wsl_path_to_windows_for_envi(converted[key])
+            converted[key] = _wsl_path_to_windows_for_envi(converted[key])
     return converted
 
 
@@ -627,7 +632,7 @@ def _execute_flaash_task(
     log_to_console: bool = False,
  ) -> None:
     """Execute ENVI FLAASH with the provided parameter dictionary."""
-    log("Running FLAASH", enabled=log_to_console, step="flaash")
+    _log("Running FLAASH", enabled=log_to_console, step="flaash")
     if output_image_path_to_delete:
         if os.path.exists(output_image_path_to_delete):
             os.remove(output_image_path_to_delete)
@@ -635,10 +640,10 @@ def _execute_flaash_task(
     task.execute(flaash_params)
     with open(output_params_path, "w", encoding="utf-8") as file:
         file.write(str(flaash_params))
-    log("Wrote output", enabled=log_to_console, step="flaash")
+    _log("Wrote output", enabled=log_to_console, step="flaash")
 
 
-def run_flaash_wrapper(args: tuple[Dict[str, Any], str, Any]) -> str:
+def _run_flaash_wrapper(args: tuple[Dict[str, Any], str, Any]) -> str:
     """Executor wrapper for FLAASH grid runs."""
     test_params, test_output_params_path, envi_engine = args
     _execute_flaash_task(test_params, test_output_params_path, envi_engine)
@@ -654,7 +659,7 @@ def parallel_flaash(test_flaash_params_array: List[tuple[Dict[str, Any], str]], 
     ]
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(run_flaash_wrapper, task) for task in tasks]
+        futures = [executor.submit(_run_flaash_wrapper, task) for task in tasks]
         for future in tqdm(as_completed(futures), total=len(futures), desc="FLAASH"):
             output_uri = future.result()
             all_output_paths.append(output_uri)
@@ -686,14 +691,14 @@ class FLAASHCorrector:
         return output_raster
 
 
-@logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
+@_logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
 def run_flaash(
     input_raster: str,
     output_raster: str,
     *,
     metadata: Any = None,
     dem_file_path: Optional[str] = None,
-    footprint_vector_path: Optional[str] = None,
+    footprint_geometry: Optional[BaseGeometry] = None,
     envi_engine_path: Optional[str] = None,
     envi_engine: Any = None,
     output_params_path: Optional[str] = None,
@@ -714,7 +719,7 @@ def run_flaash(
         output_raster: Output raster path.
         metadata: Optional standardized metadata object.
         dem_file_path: Optional DEM raster path.
-        footprint_vector_path: Optional footprint vector path.
+        footprint_geometry: Optional Shapely footprint in EPSG:4326.
         envi_engine_path: Optional ENVI engine executable path.
         envi_engine: Optional initialized ENVI engine.
         output_params_path: Optional executed-params output path.
@@ -732,14 +737,14 @@ def run_flaash(
         FLAASH run summary.
     """
     if params is None:
-        if metadata is None or dem_file_path is None or footprint_vector_path is None:
+        if metadata is None or dem_file_path is None or footprint_geometry is None:
             raise ValueError(
-                "metadata, dem_file_path, and footprint_vector_path are required when params is not provided."
+                "metadata, dem_file_path, and footprint_geometry are required when params is not provided."
             )
-        params = build_flaash_kwargs_from_standardized_metadata(
+        params = _build_flaash_kwargs_from_standardized_metadata(
             input_raster=input_raster,
             dem_file_path=dem_file_path,
-            footprint_vector_path=footprint_vector_path,
+            footprint_geometry=footprint_geometry,
             metadata=metadata,
             output_raster=output_raster,
             dem_ground_percentile=dem_ground_percentile,
@@ -750,18 +755,18 @@ def run_flaash(
             custom_params=custom_params,
         )
     else:
-        params = validate_flaash_params(dict(params))
+        params = _validate_flaash_params(dict(params))
         params.setdefault("INPUT_RASTER", {"url": input_raster, "factory": "URLRaster"})
         params.setdefault("OUTPUT_RASTER_URI", output_raster)
 
     params_output_path = output_params_path or f"{output_raster}.flaash_params.txt"
-    params_to_run = convert_flaash_params_paths_for_windows(params) if convert_paths_for_windows else params
+    params_to_run = _convert_flaash_params_paths_for_windows(params) if convert_paths_for_windows else params
 
     resolved_engine = envi_engine
     if resolved_engine is None:
         if not envi_engine_path:
             raise ValueError("envi_engine or envi_engine_path is required for FLAASH.")
-        resolved_engine = init_envi_engine(envi_engine_path)
+        resolved_engine = _init_envi_engine(envi_engine_path)
 
     _execute_flaash_task(
         params_to_run,
@@ -805,15 +810,8 @@ __all__ = [
     "AtmosphericCorrector",
     "Py6SCorrector",
     "run_py6s",
-    "build_py6s_kwargs_from_standardized_metadata",
-    "init_envi_engine",
     "FLAASH_ALLOWED_PARAMS",
-    "validate_flaash_params",
-    "build_flaash_kwargs_from_standardized_metadata",
-    "wsl_path_to_windows_for_envi",
-    "convert_flaash_params_paths_for_windows",
     "run_flaash",
-    "run_flaash_wrapper",
     "parallel_flaash",
     "FLAASHCorrector",
     "atmospheric_correction",

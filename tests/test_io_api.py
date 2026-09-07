@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from vhrharmonize.cli.cli_helpers import load_yaml_config
+from vhrharmonize.cli.cli_helpers import _load_yaml_config
 from vhrharmonize.io.workflow_utils import (
     build_output_path_from_input,
     plan_step_outputs,
@@ -15,7 +15,7 @@ from vhrharmonize.io.workflow_utils import (
 def test_load_yaml_config_normalizes_keys(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     config_path.write_text("input-dir: abc\nlog-to-console: true\n", encoding="utf-8")
-    loaded = load_yaml_config(str(config_path))
+    loaded = _load_yaml_config(str(config_path))
     assert loaded == {"input_dir": "abc", "log_to_console": True}
 
 

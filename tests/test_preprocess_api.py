@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 import numpy as np
 import pytest
 import rasterio
+from shapely.geometry import box
 import yaml
 
 import vhrharmonize.preprocess.atmospheric_correction as atmos_mod
@@ -16,16 +17,16 @@ import vhrharmonize.preprocess.radiometric_normalization as rad_mod
 from vhrharmonize.preprocess.alignment import align_image_pair
 from vhrharmonize.preprocess.atmospheric_correction import (
     atmospheric_correction,
-    build_flaash_kwargs_from_standardized_metadata,
-    build_py6s_kwargs_from_standardized_metadata,
-    convert_flaash_params_paths_for_windows,
-    init_envi_engine,
+    _build_flaash_kwargs_from_standardized_metadata,
+    _build_py6s_kwargs_from_standardized_metadata,
+    _convert_flaash_params_paths_for_windows,
+    _init_envi_engine,
     parallel_flaash,
     run_flaash,
-    run_flaash_wrapper,
+    _run_flaash_wrapper,
     run_py6s,
-    validate_flaash_params,
-    wsl_path_to_windows_for_envi,
+    _validate_flaash_params,
+    _wsl_path_to_windows_for_envi,
 )
 from vhrharmonize.preprocess.cloudmasking import (
     apply_binary_cloud_mask_to_image,
@@ -36,7 +37,7 @@ from vhrharmonize.preprocess.fetch_external_data import (
     download_opentopography_dem_for_bbox,
     fetch_modis_water_vapor_for_bbox,
     fetch_power_atmosphere_for_bbox,
-    init_ee_client,
+    _init_ee_client,
 )
 from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
 
@@ -62,7 +63,7 @@ def test_align_image_pair(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_py6s_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
-    kwargs = build_py6s_kwargs_from_standardized_metadata(_metadata(), ground_elevation_km=1.0, atmosphere_profile="user", aerosol_profile="maritime", aot550=0.2, visibility_km=None, water_vapor=2.5, ozone=0.3, sixs_executable=None, output_scale_factor=10000.0, output_dtype="int16", use_imd_radiance_calibration=True, use_worldview_gain_offset_adjustment=True)
+    kwargs = _build_py6s_kwargs_from_standardized_metadata(_metadata(), ground_elevation_km=1.0, atmosphere_profile="user", aerosol_profile="maritime", aot550=0.2, visibility_km=None, water_vapor=2.5, ozone=0.3, sixs_executable=None, output_scale_factor=10000.0, output_dtype="int16", use_imd_radiance_calibration=True, use_worldview_gain_offset_adjustment=True)
     assert kwargs["dn_to_radiance_factors"] == [1.0, 3.0]
     monkeypatch.setattr(atmos_mod.Py6SCorrector, "run", lambda self, input_raster, output_raster, **kw: output_raster)
     result = run_py6s("in.tif", str(tmp_path / "out.tif"), _metadata(), ground_elevation_km=1.0, atmosphere_profile="user", aerosol_profile="maritime", aot550=0.2, visibility_km=None, water_vapor=2.5, ozone=0.3, sixs_executable=None, output_scale_factor=1.0, output_dtype="int16", use_imd_radiance_calibration=False, use_worldview_gain_offset_adjustment=False)
@@ -72,12 +73,12 @@ def test_py6s_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
 def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
     fake_geospatial = ModuleType("vhrharmonize.io.geospatial")
     fake_geospatial.get_image_percentile_value = lambda *args, **kwargs: 100.0
-    monkeypatch.setitem(sys.modules, "vhrharmonize.io.geospatial", fake_geospatial)
-    kwargs = build_flaash_kwargs_from_standardized_metadata("in.tif", "dem.tif", "footprint.gpkg", _metadata(), "out.tif", dem_ground_percentile=50.0, modtran_atm="Mid-Latitude Summer", modtran_aer="Rural", use_aerosol="AUTO", default_visibility=10.0)
+    monkeypatch.setattr(atmos_mod, "get_image_percentile_value", fake_geospatial.get_image_percentile_value)
+    kwargs = _build_flaash_kwargs_from_standardized_metadata("in.tif", "dem.tif", box(0, 0, 1, 1), _metadata(), "out.tif", dem_ground_percentile=50.0, modtran_atm="Mid-Latitude Summer", modtran_aer="Rural", use_aerosol="AUTO", default_visibility=10.0)
     assert kwargs["GROUND_ELEVATION"] == 0.1
-    assert validate_flaash_params({"MODTRAN_ATM": "x"})["MODTRAN_ATM"] == "x"
-    assert wsl_path_to_windows_for_envi("/mnt/c/test/file") == "C:\\test\\file"
-    assert convert_flaash_params_paths_for_windows({"INPUT_RASTER": {"url": "/mnt/c/x", "factory": "URLRaster"}, "OUTPUT_RASTER_URI": "/mnt/c/y"})["OUTPUT_RASTER_URI"] == "C:\\y"
+    assert _validate_flaash_params({"MODTRAN_ATM": "x"})["MODTRAN_ATM"] == "x"
+    assert _wsl_path_to_windows_for_envi("/mnt/c/test/file") == "C:\\test\\file"
+    assert _convert_flaash_params_paths_for_windows({"INPUT_RASTER": {"url": "/mnt/c/x", "factory": "URLRaster"}, "OUTPUT_RASTER_URI": "/mnt/c/y"})["OUTPUT_RASTER_URI"] == "C:\\y"
     fake_envipyengine = ModuleType("envipyengine")
     fake_envipyengine.Engine = lambda *_: SimpleNamespace(tasks=lambda: None)
     fake_envipyengine_config = ModuleType("envipyengine.config")
@@ -85,13 +86,13 @@ def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
     fake_envipyengine.config = fake_envipyengine_config
     monkeypatch.setitem(sys.modules, "envipyengine", fake_envipyengine)
     monkeypatch.setitem(sys.modules, "envipyengine.config", fake_envipyengine_config)
-    assert init_envi_engine("engine").tasks() is None
+    assert _init_envi_engine("engine").tasks() is None
     monkeypatch.setattr(atmos_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
-    assert run_flaash_wrapper(({"OUTPUT_RASTER_URI": "out.tif"}, "params.txt", object())) == "out.tif"
+    assert _run_flaash_wrapper(({"OUTPUT_RASTER_URI": "out.tif"}, "params.txt", object())) == "out.tif"
     monkeypatch.setattr(atmos_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
     result = run_flaash("in.tif", str(tmp_path / "out.tif"), params={"INPUT_RASTER": {"url": "in.tif", "factory": "URLRaster"}, "OUTPUT_RASTER_URI": str(tmp_path / "out.tif")}, envi_engine=object())
     assert result.output_raster.endswith("out.tif")
-    monkeypatch.setattr(atmos_mod, "run_flaash_wrapper", lambda task: task[0]["OUTPUT_RASTER_URI"])
+    monkeypatch.setattr(atmos_mod, "_run_flaash_wrapper", lambda task: task[0]["OUTPUT_RASTER_URI"])
     class _Future:
         def __init__(self, value): self._value = value
         def result(self): return self._value
@@ -137,7 +138,7 @@ def test_fetch_functions(monkeypatch, tmp_path: Path) -> None:
         Initialize=lambda **kwargs: None,
     )
     monkeypatch.setitem(sys.modules, "ee", fake_ee)
-    assert init_ee_client(env_file=None) is fake_ee
+    assert _init_ee_client(env_file=None) is fake_ee
     monkeypatch.setattr(fetch_mod, "_fetch_collection_value", lambda *args, **kwargs: {"collection": "terra", "band_found": True, "raw_value": 2000.0, "abs_time_diff_hours": 1.0, "image_time_utc": "2020-01-01T00:00:00+00:00"})
     monkeypatch.setattr(fetch_mod, "_fetch_first_available_band_value", lambda *args, **kwargs: {"collection": "terra", "band_found": True, "raw_value": 100.0, "abs_time_diff_hours": 1.0, "image_time_utc": "2020-01-01T00:00:00+00:00"})
     modis = fetch_modis_water_vapor_for_bbox(scene_datetime_utc=__import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc), min_lon=0, min_lat=0, max_lon=1, max_lat=1, ee=object())
@@ -444,12 +445,10 @@ def test_worldview_gdal_raster_validity_sampling_rejects_all_nan(tmp_path: Path)
 
 
 def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle) -> None:
-    from vhrharmonize.slurm import load_yaml_file, prepare_slurm_plan
+    from vhrharmonize.slurm import _load_yaml_file, prepare_slurm_plan
 
     bundle = make_worldview_bundle()
-    gis_dir = bundle["mul_tif"].parent
-    for extension in ("shp", "shx", "dbf", "prj"):
-        (gis_dir / f"{bundle['basename']}.{extension}").write_text(extension, encoding="utf-8")
+    bundle["mul_tif"].with_suffix(".RPB").write_text("RPC metadata", encoding="utf-8")
     dem_path = tmp_path / "dem.tif"
     with rasterio.open(bundle["mul_tif"]) as src:
         profile = src.profile.copy()
@@ -532,7 +531,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     )
 
     plan = prepare_slurm_plan(str(slurm_config))
-    written_slurm = load_yaml_file(str(staged_hpc_file))
+    written_slurm = _load_yaml_file(str(staged_hpc_file))
 
     assert plan["remote_output_dir"] == "/remote/runs/RUN123/output"
     assert written_slurm["status"] == "prepared"
@@ -545,10 +544,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert {
         f"{bundle['basename']}.TIF",
         f"{bundle['basename']}.IMD",
-        f"{bundle['basename']}.shp",
-        f"{bundle['basename']}.shx",
-        f"{bundle['basename']}.dbf",
-        f"{bundle['basename']}.prj",
+        f"{bundle['basename']}.RPB",
         f"{bundle['pan_basename']}.TIF",
         f"{bundle['pan_basename']}.IMD",
     } == uploaded_input_names
@@ -575,7 +571,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     assert all(not Path(remote).suffix == "" for remote in plan["uploaded_reference_paths"].values())
     assert any(remote.startswith("/remote/runs/RUN123/output") for remote in plan["download_output_paths"].values())
 
-    staged = load_yaml_file(plan["staged_provider_file"])
+    staged = _load_yaml_file(plan["staged_provider_file"])
     assert staged["shared"]["temp_dir"] == "/remote/runs/RUN123/tmp"
     assert staged["shared"]["output_dir"] == "/remote/runs/RUN123/output"
     assert staged["shared"]["dem_file_path"] == "/remote/references/dem.tif"
@@ -611,7 +607,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
     temp_provider["shared"].pop("save_file_source")
     provider_config.write_text(yaml.safe_dump(temp_provider, sort_keys=False), encoding="utf-8")
     dependency_plan = prepare_slurm_plan(str(slurm_config))
-    dependency_staged = load_yaml_file(dependency_plan["staged_provider_file"])
+    dependency_staged = _load_yaml_file(dependency_plan["staged_provider_file"])
     assert dependency_staged["shared"]["input_file_glob"]
     assert dependency_staged["shared"]["run_file_source"] is False
     assert all(
@@ -621,9 +617,9 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
 
 
 def test_remote_rewrite_keeps_single_outputs_relative_to_remote_roots() -> None:
-    from vhrharmonize.slurm import rewrite_worldview_config_for_remote
+    from vhrharmonize.slurm import _rewrite_worldview_config_for_remote
 
-    staged = rewrite_worldview_config_for_remote(
+    staged = _rewrite_worldview_config_for_remote(
         {
             "workflow": {
                 "save_radiometric_normalization": "/mnt/c/Users/Lama/Downloads/processed/mosaic_1.tif",
@@ -646,15 +642,15 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
         _resolve_remote_sbatch_log_templates,
         _status_command,
         _status_from_text,
-        resolve_staged_hpc_file,
-        resolve_staged_provider_file,
-        resolve_staged_slurm_start_file,
-        write_sectioned_yaml_file,
+        _resolve_staged_hpc_file,
+        _resolve_staged_provider_file,
+        _resolve_staged_slurm_start_file,
+        _write_sectioned_yaml_file,
     )
 
     output_path = tmp_path / "RUN123.staged.hpc.yml"
     long_path = "/" + "/".join(["very_long_path_segment"] * 12) + "/image.tif"
-    write_sectioned_yaml_file(
+    _write_sectioned_yaml_file(
         str(output_path),
         {"uploaded_input_paths": {long_path: "~/koa_scratch/run/output/image.tif"}},
         header_by_key={"uploaded_input_paths": "# All mappings are local file: remote file."},
@@ -664,16 +660,16 @@ def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:
     assert "? " not in text
     assert f"{long_path}: ~/koa_scratch/run/output/image.tif" in text
     assert _remote_quote("~/koa_scratch/run/output") == "~/koa_scratch/run/output"
-    assert resolve_staged_hpc_file({}, config_path=str(tmp_path / "example.hpc.yml"), run_id="RUN123") == str(
+    assert _resolve_staged_hpc_file({}, config_path=str(tmp_path / "example.hpc.yml"), run_id="RUN123") == str(
         tmp_path / "RUN123.staged.hpc.yml"
     )
-    assert resolve_staged_provider_file(
+    assert _resolve_staged_provider_file(
         {},
         config_path=str(tmp_path / "example.hpc.yml"),
         provider_config=str(tmp_path / "example.worldview.yml"),
         run_id="RUN123",
     ) == str(tmp_path / "RUN123.staged.worldview.yml")
-    assert resolve_staged_slurm_start_file(
+    assert _resolve_staged_slurm_start_file(
         {},
         slurm_start_file=str(tmp_path / "example.slurm.sbatch"),
         run_id="RUN123",
@@ -845,7 +841,7 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
     )
     uploaded = slurm_mod.upload_slurm_files(str(staged_slurm))
     assert uploaded["status"] == "uploaded"
-    assert slurm_mod.load_yaml_file(str(staged_slurm))["upload_results"][str(local_path)]["status"] == "synced"
+    assert slurm_mod._load_yaml_file(str(staged_slurm))["upload_results"][str(local_path)]["status"] == "synced"
 
     def fail_upload(_slurm_data):
         raise AssertionError("start should not upload files")
@@ -862,7 +858,7 @@ def test_slurm_upload_and_start_are_separate(tmp_path: Path, monkeypatch) -> Non
             returncode=0,
         )
 
-    monkeypatch.setattr(slurm_mod, "upload_required_files", fail_upload)
+    monkeypatch.setattr(slurm_mod, '_upload_required_files', fail_upload)
     monkeypatch.setattr(slurm_mod, "_run_ssh", fake_run_ssh)
     started = slurm_mod.start_slurm_job(str(staged_slurm))
     assert started["submitted_job_id"] == "123"
@@ -942,9 +938,9 @@ def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> No
         "  temp_dir: local_temp\n",
         encoding="utf-8",
     )
-    original = slurm_mod.load_yaml_file(str(source))
+    original = slurm_mod._load_yaml_file(str(source))
 
-    slurm_mod.write_staged_worldview_config_for_remote(
+    slurm_mod._write_staged_worldview_config_for_remote(
         str(source),
         str(staged),
         original,
@@ -955,7 +951,7 @@ def test_staged_worldview_writer_replaces_multiline_values(tmp_path: Path) -> No
     )
 
     staged_text = staged.read_text(encoding="utf-8")
-    staged_data = slurm_mod.load_yaml_file(str(staged))
+    staged_data = slurm_mod._load_yaml_file(str(staged))
     assert staged_data["shared"]["input_file_glob"] == [{"cloud_mask": "/remote/image.tif"}]
     assert staged_data["shared"]["output_dir"] == "/remote/output"
     assert "A*|" not in staged_text
