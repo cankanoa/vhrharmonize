@@ -1893,7 +1893,7 @@ def _run_seamline_metadata_workflow(
         return None
 
     output_path = reference_state.step_dirs["seamline_metadata"]
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if args.run_from_existing and not args.run_from_existing_check_validity and _existing_outputs_are_reusable(
         [output_path],
         check_validity=False,
         validity_check_grid_size=args.validity_check_grid_size,
@@ -1923,6 +1923,9 @@ def _run_seamline_metadata_workflow(
         footprint_source=args.seamline_metadata_footprint_source,
         calculate_bounds_eight_connected=args.seamline_metadata_calculate_bounds_eight_connected,
         epsg=args.epsg,
+        run_from_existing_check_validity=(
+            args.run_from_existing and args.run_from_existing_check_validity
+        ),
     )
 
 

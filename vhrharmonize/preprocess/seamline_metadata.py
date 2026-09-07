@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, List
 
 import geopandas as gpd
+import pandas as pd
 from osgeo import gdal, ogr
 from shapely.affinity import affine_transform
 from shapely.wkt import loads as wkt_loads
@@ -95,11 +96,32 @@ def write_seamline_metadata_gpkg(
     footprint_source: str,
     calculate_bounds_eight_connected: bool,
     epsg: int,
+    run_from_existing_check_validity: bool = False,
 ) -> str:
-    """Write seamline footprint and IMD metadata polygons."""
+    """Write seamline footprint and IMD metadata polygons.
+
+    When validating an existing output, preserve its records and calculate only
+    incoming image_basename values that are missing from the requested layer.
+    """
+    existing_gdf = None
+    image_basenames = set()
+    if run_from_existing_check_validity and os.path.exists(output_path):
+        existing_gdf = gpd.read_file(output_path, layer=layer)
+        if "image_basename" not in existing_gdf.columns:
+            raise ValueError("Existing seamline metadata is missing image_basename.")
+        if image_field_name not in existing_gdf.columns:
+            raise ValueError(f"Existing seamline metadata is missing {image_field_name}.")
+        if existing_gdf.crs is None or existing_gdf.crs.to_epsg() != epsg:
+            raise ValueError("Existing seamline metadata CRS does not match epsg.")
+        image_basenames.update(existing_gdf["image_basename"].dropna())
+
     records: List[Dict[str, Any]] = []
     for state in states:
         if not state.current_files:
+            continue
+        image_path = state.current_files[0]
+        image_basename = os.path.basename(image_path)
+        if image_basename in image_basenames:
             continue
         mul_image = state.scene.mul_image
         if mul_image is None or mul_image.shp_file is None:
@@ -107,7 +129,6 @@ def write_seamline_metadata_gpkg(
         if mul_image.standardized_metadata is None:
             raise ValueError(f"WorldView scene is missing standardized metadata: {state.scene.primary_basename}")
 
-        image_path = state.current_files[0]
         if footprint_source == "calculate_bounds":
             geometry = _valid_data_polygon_from_image(
                 image_path,
@@ -119,7 +140,7 @@ def write_seamline_metadata_gpkg(
             raise ValueError(f"Unsupported seamline metadata footprint source: {footprint_source}")
         record: Dict[str, Any] = {
             image_field_name: image_path,
-            "image_basename": os.path.basename(image_path),
+            "image_basename": image_basename,
             "scene_basename": state.scene.primary_basename,
             "scene_id": state.scene.scene_id,
             "catalog_id": state.scene.catalog_id,
@@ -130,14 +151,22 @@ def write_seamline_metadata_gpkg(
         }
         record.update(_standardized_metadata_fields(mul_image.standardized_metadata))
         records.append(record)
+        image_basenames.add(image_basename)
 
     if not records:
+        if existing_gdf is not None:
+            return output_path
         raise ValueError("No scene outputs were available for seamline metadata.")
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    if os.path.exists(output_path):
+    if existing_gdf is None and os.path.exists(output_path):
         os.remove(output_path)
     gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=f"EPSG:{epsg}")
+    if existing_gdf is not None:
+        gdf = gpd.GeoDataFrame(
+            pd.concat([existing_gdf, gdf], ignore_index=True),
+            geometry="geometry", crs=existing_gdf.crs,
+        )
     gdf.to_file(output_path, layer=layer, driver="GPKG")
     return output_path
 
