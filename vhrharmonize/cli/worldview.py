@@ -17,6 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional
 
 import geopandas as gpd
@@ -42,7 +43,9 @@ from vhrharmonize.preprocess.fetch_external_data import (
     fetch_modis_water_vapor_for_bbox,
     fetch_power_atmosphere_for_bbox,
 )
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import (
+    log, log_step_start, log_image_start, log_image_completed, processing_step,
+)
 from vhrharmonize.preprocess.orthorectification import (
     gcp_refined_rpc_orthorectification,
     resolve_output_resolution_for_crs,
@@ -684,6 +687,11 @@ def _process_scenes(
     args: argparse.Namespace,
 ) -> List[SceneWorkflowState]:
     """Process scenes independently before aggregate workflow steps."""
+    args.scene_indices = {
+        getattr(scene, "primary_basename", str(scene)): index
+        for index, scene in enumerate(scenes, start=1)
+    }
+    args.scene_total = len(scenes)
     worker_count = _resolve_concurrent_processing(args.concurrent_processing)
     backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
     if backend == "dask":
@@ -753,6 +761,38 @@ def _log_step_plan(
     if outputs:
         parts.append(f"out={_short_paths(outputs)}")
     log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
+
+
+def _logged_scene_step(step):
+    """Give each scene step a consistent lifecycle, including reused outputs."""
+    def decorate(function):
+        @wraps(function)
+        def wrapped(state, args):
+            if not args.log_to_console or not getattr(args, f"run_{step}", False):
+                return function(state, args)
+            if step == "file_source" and state.current_step != "file_source":
+                return function(state, args)
+            log_step_start(step, enabled=args.log_to_console)
+            expected_outputs = _get_expected_scene_step_outputs(state, args)
+            inputs = list(state.current_files)
+            if step == "pansharpen" and state.pan_ortho_path:
+                inputs.append(state.pan_ortho_path)
+            elif step == "orthorectification" and args.run_pansharpen and state.scene.pan_image:
+                inputs.append(state.scene.pan_image.tif_file)
+            elif step == "alignment":
+                inputs.append(args.alignment_fixed_image)
+            scene_basename = state.scene.primary_basename
+            with processing_step(
+                step, scene_basename, inputs,
+                _scene_step_expected_outputs(expected_outputs, step),
+                enabled=args.log_to_console,
+                index=getattr(args, "scene_indices", {}).get(scene_basename, 1),
+                total=getattr(args, "scene_total", 1),
+                announce_step=False,
+            ):
+                return function(state, args)
+        return wrapped
+    return decorate
 
 
 def _classify_save_target(save_value: Optional[str], *, default: str) -> tuple[str, str]:
@@ -1761,7 +1801,7 @@ def _run_named_radiometric_group(
     )
     if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(group_output_path, args.overview_scales)
+        calculate_raster_overviews(group_output_path, args.overview_scales, log_to_console=args.log_to_console)
     return group_output_path
 
 
@@ -1833,7 +1873,7 @@ def _run_default_radiometric_normalization(
     )
     if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(group_output_path, args.overview_scales)
+        calculate_raster_overviews(group_output_path, args.overview_scales, log_to_console=args.log_to_console)
     return group_output_path
 
 
@@ -1900,21 +1940,15 @@ def _run_seamline_metadata_workflow(
         log_to_console=args.log_to_console,
         step="seamline_metadata",
     ):
-        _log_step_plan(
-            "seamline_metadata",
-            outputs=[output_path],
-            message="Skipping because output exists",
-            enabled=args.log_to_console,
-        )
+        log_step_start("seamline_metadata", enabled=args.log_to_console)
+        states_with_images = [state for state in states if state.current_files]
+        for index, state in enumerate(states_with_images, start=1):
+            scene_basename = state.scene.primary_basename
+            log_image_start(scene_basename, state.current_files, [output_path], enabled=args.log_to_console)
+            log("Reusing existing metadata without validity checking", enabled=args.log_to_console, scene_basename=scene_basename)
+            log_image_completed(scene_basename, index, len(states_with_images), enabled=args.log_to_console)
         return output_path
 
-    _log_step_plan(
-        "seamline_metadata",
-        inputs=[state.current_files[0] for state in states if state.current_files],
-        outputs=[output_path],
-        message="Writing footprint metadata GeoPackage",
-        enabled=args.log_to_console,
-    )
     return write_seamline_metadata_gpkg(
         states,
         output_path,
@@ -1926,6 +1960,7 @@ def _run_seamline_metadata_workflow(
         run_from_existing_check_validity=(
             args.run_from_existing and args.run_from_existing_check_validity
         ),
+        log_to_console=args.log_to_console,
     )
 
 
@@ -2018,6 +2053,7 @@ def _copy_file_source_bundle(path_map: Mapping[str, str]) -> None:
         shutil.copy2(source_path, output_path)
 
 
+@_logged_scene_step("file_source")
 def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the file_source staging step."""
     if not args.run_file_source or state.current_step != "file_source":
@@ -2081,10 +2117,17 @@ def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -
         for output_path in [mul_output, pan_output]:
             if not output_path:
                 continue
-            calculate_raster_overviews(output_path, args.overview_scales)
+            calculate_raster_overviews(
+                output_path, args.overview_scales,
+                log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+                scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                scene_total=getattr(args, "scene_total", 1),
+            )
     return state.current_files
 
 
+@_logged_scene_step("fetch_atmosphere")
 def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespace) -> None:
     """Run the fetch-atmosphere step.
     Args:
@@ -2187,6 +2230,7 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
     _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
 
 
+@_logged_scene_step("atmospheric_correction")
 def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the atmospheric correction step.
     Args:
@@ -2330,11 +2374,18 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
             scene_basename=state.scene.primary_basename,
         )
         for output_path in plan.output_paths:
-            calculate_raster_overviews(output_path, args.overview_scales)
+            calculate_raster_overviews(
+                output_path, args.overview_scales,
+                log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+                scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                scene_total=getattr(args, "scene_total", 1),
+            )
     state.current_step = "atmospheric_correction"
     return state.current_files
 
 
+@_logged_scene_step("orthorectification")
 def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the orthorectification step.
     Args:
@@ -2411,7 +2462,13 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 scene_basename=state.scene.primary_basename,
             )
             for output_path in plan.output_paths:
-                calculate_raster_overviews(output_path, args.overview_scales)
+                calculate_raster_overviews(
+                    output_path, args.overview_scales,
+                    log_to_console=args.log_to_console,
+                    scene_basename=state.scene.primary_basename,
+                    scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                    scene_total=getattr(args, "scene_total", 1),
+                )
 
     if args.run_pansharpen:
         if args.existing_pan_ortho_input:
@@ -2473,12 +2530,19 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     scene_basename=state.scene.primary_basename,
                 )
                 for output_path in pan_plan.output_paths:
-                    calculate_raster_overviews(output_path, args.overview_scales)
+                    calculate_raster_overviews(
+                        output_path, args.overview_scales,
+                        log_to_console=args.log_to_console,
+                        scene_basename=state.scene.primary_basename,
+                        scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                        scene_total=getattr(args, "scene_total", 1),
+                    )
 
     state.current_step = "orthorectification"
     return state.current_files
 
 
+@_logged_scene_step("pansharpen")
 def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the pansharpen step.
     Args:
@@ -2539,11 +2603,18 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             scene_basename=state.scene.primary_basename,
         )
         for output_path in plan.output_paths:
-            calculate_raster_overviews(output_path, args.overview_scales)
+            calculate_raster_overviews(
+                output_path, args.overview_scales,
+                log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+                scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                scene_total=getattr(args, "scene_total", 1),
+            )
     state.current_step = "pansharpen"
     return state.current_files
 
 
+@_logged_scene_step("cloud_mask")
 def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the cloud mask step.
     Args:
@@ -2650,7 +2721,13 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             scene_basename=state.scene.primary_basename,
         )
         for output_path in output_plan.output_paths:
-            calculate_raster_overviews(output_path, args.overview_scales)
+            calculate_raster_overviews(
+                output_path, args.overview_scales,
+                log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+                scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                scene_total=getattr(args, "scene_total", 1),
+            )
     if mask_plan.output_paths:
         _register_step_outputs(state, "cloud_mask_mask", mask_plan.output_paths)
         state.cloud_mask_path = mask_plan.output_paths[0]
@@ -2658,6 +2735,7 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
     return state.current_files
 
 
+@_logged_scene_step("alignment")
 def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
     """Run the alignment step.
     Args:
@@ -2735,7 +2813,13 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
             scene_basename=state.scene.primary_basename,
         )
         for output_path in plan.output_paths:
-            calculate_raster_overviews(output_path, args.overview_scales)
+            calculate_raster_overviews(
+                output_path, args.overview_scales,
+                log_to_console=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+                scene_index=getattr(args, "scene_indices", {}).get(state.scene.primary_basename, 1),
+                scene_total=getattr(args, "scene_total", 1),
+            )
     state.current_step = "alignment"
     return state.current_files
 
@@ -3104,12 +3188,14 @@ def _run_workflow(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
+    log_step_start("glob_matches", enabled=args.log_to_console, uppercase=False)
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     input_files_by_stage = _collect_input_files_by_stage(args.input_file_glob)
     input_files = sorted({path for paths in input_files_by_stage.values() for path in paths})
     if not input_files:
         raise ValueError("No files matched --input-file-glob.")
 
+    log_step_start("load_worldview_scenes", enabled=args.log_to_console, uppercase=False)
     scenes = _load_worldview_scenes_from_stage_paths(input_files_by_stage, filter_basenames=filter_basenames)
     log(
         f"Discovered {len(input_files)} input files across {len(scenes)} scenes",

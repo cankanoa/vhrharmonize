@@ -130,63 +130,71 @@ def main(argv: Optional[List[str]] = None) -> int:
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     aod_band_candidates = [value.strip() for value in args.aod_band_candidates.split(",") if value.strip()]
 
+    from vhrharmonize.preprocess.helpers import log, log_step_start, log_image_start, log_image_completed
+
     rows: List[Dict[str, object]] = []
+    log_step_start("glob_matches", enabled=True, uppercase=False)
+    scene_inputs = []
     for input_folder in args.input_dir:
         found = find_files(input_folder, filter_basenames)
-        for _, scene in found.items():
-            mul_photo_basename = scene.get("mul_photo_basename")
-            mul_shp = scene.get("mul_shp_file")
-            if not mul_photo_basename or not mul_shp:
-                continue
+        scene_inputs.extend((input_folder, scene) for scene in found.values())
+    log_step_start("fetch_atmosphere", enabled=True)
+    for index, (input_folder, scene) in enumerate(scene_inputs, start=1):
+        mul_photo_basename = scene.get("mul_photo_basename")
+        mul_shp = scene.get("mul_shp_file")
+        if not mul_photo_basename or not mul_shp:
+            continue
 
-            print(f"Fetching MODIS water vapor for {mul_photo_basename}")
-            try:
-                scene_dt = _parse_scene_datetime_utc(mul_photo_basename)
-                min_lon, min_lat, max_lon, max_lat = _load_scene_bbox_wgs84(mul_shp)
-                estimate = fetch_modis_water_vapor_for_bbox(
-                    scene_datetime_utc=scene_dt,
-                    min_lon=min_lon,
-                    min_lat=min_lat,
-                    max_lon=max_lon,
-                    max_lat=max_lat,
-                    ee=ee,
-                    hours_window=args.hours_window,
-                    terra_collection=args.terra_collection,
-                    aqua_collection=args.aqua_collection,
-                    band_name=args.band_name,
-                    aod_band_candidates=aod_band_candidates,
-                    aod_scale_factor=args.aod_scale_factor,
-                    modis_scale_factor=args.modis_scale_factor,
-                    modtran_baseline_water_vapor=args.modtran_baseline_water_vapor,
-                    reduce_scale_m=args.reduce_scale_m,
-                )
-                row = {
+        log_image_start(mul_photo_basename, [mul_shp], [args.output_json, args.output_csv], enabled=True)
+        try:
+            scene_dt = _parse_scene_datetime_utc(mul_photo_basename)
+            min_lon, min_lat, max_lon, max_lat = _load_scene_bbox_wgs84(mul_shp)
+            estimate = fetch_modis_water_vapor_for_bbox(
+                scene_datetime_utc=scene_dt,
+                min_lon=min_lon,
+                min_lat=min_lat,
+                max_lon=max_lon,
+                max_lat=max_lat,
+                ee=ee,
+                hours_window=args.hours_window,
+                terra_collection=args.terra_collection,
+                aqua_collection=args.aqua_collection,
+                band_name=args.band_name,
+                aod_band_candidates=aod_band_candidates,
+                aod_scale_factor=args.aod_scale_factor,
+                modis_scale_factor=args.modis_scale_factor,
+                modtran_baseline_water_vapor=args.modtran_baseline_water_vapor,
+                reduce_scale_m=args.reduce_scale_m,
+            )
+            row = {
+                "input_folder": input_folder,
+                "photo_basename": mul_photo_basename,
+                "scene_time_utc": scene_dt.isoformat(),
+                **estimate.to_dict(),
+            }
+            rows.append(row)
+            log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+        except Exception as exc:
+            log(f"Failed: {exc}", enabled=True, scene_basename=mul_photo_basename)
+            rows.append(
+                {
                     "input_folder": input_folder,
                     "photo_basename": mul_photo_basename,
-                    "scene_time_utc": scene_dt.isoformat(),
-                    **estimate.to_dict(),
+                    "scene_time_utc": None,
+                    "status": "error",
+                    "selected_collection": None,
+                    "modis_raw_value": None,
+                    "modis_scaled_g_cm2": None,
+                    "water_vapor_preset": None,
+                    "aod_raw": None,
+                    "aod_scaled": None,
+                    "default_visibility": None,
+                    "modtran_atm": None,
+                    "image_time_utc": None,
+                    "abs_time_diff_hours": None,
+                    "error": str(exc),
                 }
-                rows.append(row)
-            except Exception as exc:
-                rows.append(
-                    {
-                        "input_folder": input_folder,
-                        "photo_basename": mul_photo_basename,
-                        "scene_time_utc": None,
-                        "status": "error",
-                        "selected_collection": None,
-                        "modis_raw_value": None,
-                        "modis_scaled_g_cm2": None,
-                        "water_vapor_preset": None,
-                        "aod_raw": None,
-                        "aod_scaled": None,
-                        "default_visibility": None,
-                        "modtran_atm": None,
-                        "image_time_utc": None,
-                        "abs_time_diff_hours": None,
-                        "error": str(exc),
-                    }
-                )
+            )
 
     os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
     with open(args.output_json, "w", encoding="utf-8") as handle:

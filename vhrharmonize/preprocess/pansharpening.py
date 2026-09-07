@@ -5,9 +5,10 @@ import numpy as np
 import orthority as oty
 import rasterio
 
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
+@logged_operation('pansharpen', inputs=('input_low_resolution_path', 'input_high_resolution_path'), outputs=('output_image_path',))
 def pansharpen_image(
     input_low_resolution_path: str,
     input_high_resolution_path: str,

@@ -79,8 +79,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     from vhrharmonize.preprocess.cloudmasking import cloudmask_raster
 
-    print(f"Running OmniCloudMask on: {args.input_raster}")
-    result = cloudmask_raster(
+    cloudmask_raster(
         input_image_path=args.input_raster,
         output_raster_path=output_raster,
         output_mask_path=output_mask,
@@ -91,9 +90,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         buffer_pixels=args.buffer_pixels,
         omnicloud_kwargs=omnicloud_kwargs,
         output_nodata_value=args.nodata_value,
+        log_to_console=True,
     )
-    print(f"Wrote mask: {result.output_mask_path}")
-    print(f"Wrote masked raster: {result.output_raster_path}")
     return 0
 
 

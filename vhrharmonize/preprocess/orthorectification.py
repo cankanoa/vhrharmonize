@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple, Union
 import orthority as oty
 import pyproj
 
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 def resolve_output_resolution_for_crs(
@@ -29,6 +29,7 @@ def resolve_output_resolution_for_crs(
     return product_resolution
 
 
+@logged_operation('orthorectification', inputs=('input_image_path', 'dem_image_path'), outputs=('output_image_path',))
 def gcp_refined_rpc_orthorectification(
     input_image_path: str,
     output_image_path: str,
@@ -187,6 +188,7 @@ def gcp_refined_rpc_orthorectification(
     )
 
 
+@logged_operation("qgis_gcps_to_csv", inputs=("input_gcp_path",))
 def qgis_gcps_to_csv(
     input_gcp_path: str,
     output_epsg: Optional[int] = None,
@@ -285,6 +287,7 @@ def geo_to_image_coords(
     return success, (px, py, pz)
 
 
+@logged_operation("qgis_gcps_to_geojson", inputs=("input_image_path", "qgis_gcp_file_path"), outputs=("output_geojson_path",))
 def qgis_gcps_to_geojson(
     input_image_path: str,
     qgis_gcp_file_path: str,

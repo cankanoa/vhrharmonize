@@ -15,7 +15,7 @@ import rasterio
 from tqdm import tqdm
 
 from vhrharmonize.preprocess.fetch_external_data import fetch_power_atmosphere_for_bbox
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,7 @@ def build_py6s_kwargs_from_standardized_metadata(
     return py6s_kwargs
 
 
+@logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
 def run_py6s(
     input_raster: str,
     output_raster: str,
@@ -685,6 +686,7 @@ class FLAASHCorrector:
         return output_raster
 
 
+@logged_operation('atmospheric_correction', inputs=('input_raster',), outputs=('output_raster',))
 def run_flaash(
     input_raster: str,
     output_raster: str,

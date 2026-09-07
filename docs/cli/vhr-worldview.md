@@ -44,3 +44,13 @@ vhr-worldview \
 - Alignment controls: `--alignment-fixed-image`, `--alignment-band-index`, `--alignment-moving-band-index`, `--alignment-fixed-band-index`, `--alignment-moving-nodata`, `--alignment-fixed-nodata`, `--alignment-output-nodata`, `--alignment-min-valid-fraction`, `--alignment-split-factor`, `--alignment-clip-fixed-to-moving/--no-alignment-clip-fixed-to-moving`, `--alignment-output-on-moving-grid/--no-alignment-output-on-moving-grid`, `--alignment-trim-edge-invalid/--no-alignment-trim-edge-invalid`, `--alignment-edge-trim-depth`, `--alignment-edge-trim-detection-band-index`, `--alignment-edge-trim-invalid-below`, `--alignment-edge-trim-invalid-above`, `--alignment-enforce-mutual-valid-mask/--no-alignment-enforce-mutual-valid-mask`, `--alignment-use-edge-proxies/--no-alignment-use-edge-proxies`, `--alignment-solve-resolution`
 - Seamline metadata controls: `--seamline-metadata-layer`, `--seamline-metadata-image-field-name`, `--seamline-metadata-footprint-source`, `--seamline-metadata-calculate-bounds-eight-connected/--no-seamline-metadata-calculate-bounds-eight-connected`
 - Radiometric normalization controls: `--radiometric-normalization-method`, `--radiometric-normalization-kwargs-json`, `--group-by-basename`, plus current `--match-*` SpectralMatch passthrough arguments such as `--match-steps`
+
+When `log_to_console` is enabled, processing uses this progress format:
+
+```text
+START CLOUD_MASK:
+[17DEC08211836-M1BS-016445318010_01_P012] Start | in=image.tif | out=image_cloudmasked.tif, image_cloudmask.tif
+[17DEC08211836-M1BS-016445318010_01_P012] Completed 3/123
+```
+
+Glob discovery announces `start glob_matches:` before searching; scene discovery uses `start load_worldview_scenes:`. Only processing-step headings are uppercase. Each scene step announces its start before processing, and footprint metadata reports each image as it is calculated or reused. `Completed X/Y` uses the scene's position in the input list and total scene count; parallel workers can finish out of order. Scene steps run within each worker, so step headings can repeat and interleave. An exception does not emit a successful completion message. Standalone preprocessing calls use the same format with `1/1`; SpectralMatch controls its own internal progress messages. Footprint completion means that image's record is ready; the aggregate GeoPackage is written after the footprint loop.

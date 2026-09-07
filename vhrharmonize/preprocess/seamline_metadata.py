@@ -10,6 +10,7 @@ import pandas as pd
 from osgeo import gdal, ogr
 from shapely.affinity import affine_transform
 from shapely.wkt import loads as wkt_loads
+from vhrharmonize.preprocess.helpers import log, log_step_start, log_image_start, log_image_completed
 
 
 def _standardized_metadata_fields(metadata: object) -> Dict[str, Any]:
@@ -97,12 +98,14 @@ def write_seamline_metadata_gpkg(
     calculate_bounds_eight_connected: bool,
     epsg: int,
     run_from_existing_check_validity: bool = False,
+    log_to_console: bool = False,
 ) -> str:
     """Write seamline footprint and IMD metadata polygons.
 
     When validating an existing output, preserve its records and calculate only
     incoming image_basename values that are missing from the requested layer.
     """
+    log_step_start("seamline_metadata", enabled=log_to_console)
     existing_gdf = None
     image_basenames = set()
     if run_from_existing_check_validity and os.path.exists(output_path):
@@ -116,12 +119,15 @@ def write_seamline_metadata_gpkg(
         image_basenames.update(existing_gdf["image_basename"].dropna())
 
     records: List[Dict[str, Any]] = []
-    for state in states:
-        if not state.current_files:
-            continue
+    states = [state for state in states if state.current_files]
+    for index, state in enumerate(states, start=1):
         image_path = state.current_files[0]
         image_basename = os.path.basename(image_path)
+        scene_basename = state.scene.primary_basename
+        log_image_start(scene_basename, [image_path], [output_path], enabled=log_to_console)
         if image_basename in image_basenames:
+            log("Reusing existing footprint", enabled=log_to_console, scene_basename=scene_basename)
+            log_image_completed(scene_basename, index, len(states), enabled=log_to_console)
             continue
         mul_image = state.scene.mul_image
         if mul_image is None or mul_image.shp_file is None:
@@ -152,6 +158,7 @@ def write_seamline_metadata_gpkg(
         record.update(_standardized_metadata_fields(mul_image.standardized_metadata))
         records.append(record)
         image_basenames.add(image_basename)
+        log_image_completed(scene_basename, index, len(states), enabled=log_to_console)
 
     if not records:
         if existing_gdf is not None:

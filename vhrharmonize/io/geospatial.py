@@ -10,11 +10,19 @@ from osgeo import ogr, osr
 from shapely.geometry import mapping
 
 
+from vhrharmonize.preprocess.helpers import logged_operation
+
+
+@logged_operation("overviews", inputs=("input_image_path",), outputs=("input_image_path",), allow_nested=True)
 def calculate_raster_overviews(
     input_image_path: str,
     overview_scales: Optional[Iterable[int]],
     *,
     resampling: str = "nearest",
+    log_to_console: bool = False,
+    scene_basename: str | None = None,
+    scene_index: int = 1,
+    scene_total: int = 1,
     ) -> str:
     """Build internal raster overviews.
     Args:

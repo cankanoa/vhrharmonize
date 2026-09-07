@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from spectralmatch.chain import pipeline as spectralmatch_pipeline
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
@@ -22,6 +22,7 @@ def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
     return normalized
 
 
+@logged_operation("radiometric_normalization", outputs=("shared_output_image_path",))
 def radiometric_normalization(
     shared_input_images: Iterable[str],
     shared_output_image_path: str,

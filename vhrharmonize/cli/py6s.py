@@ -97,132 +97,141 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     os.makedirs(args.output_dir, exist_ok=True)
 
+    from vhrharmonize.preprocess.helpers import log, log_step_start, log_image_start, log_image_completed
+
+    log_step_start("glob_matches", enabled=True, uppercase=False)
+    scene_inputs = []
     for input_folder in args.input_dir:
-        print(f"Scanning input folder: {input_folder}")
         found_default_files = find_files(input_folder, filter_basenames)
-        for _, found_default_file in found_default_files.items():
-                root_folder_path = found_default_file.get("root_folder_path")
-                mul_photo_basename = found_default_file.get("mul_photo_basename")
-                print(f"Processing: {mul_photo_basename}")
-                required = ("mul_imd_file", "mul_tif_file", "mul_shp_file")
-                if not all(found_default_file.get(k) for k in required):
-                    print("Skipping scene: required files missing for Py6S-only workflow.")
-                    continue
+        scene_inputs.extend((input_folder, scene) for scene in found_default_files.values())
+    log_step_start("py6s", enabled=True)
+    for index, (input_folder, found_default_file) in enumerate(scene_inputs, start=1):
+        root_folder_path = found_default_file.get("root_folder_path")
+        mul_photo_basename = found_default_file.get("mul_photo_basename")
+        py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
+        report_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}_metadata.json")
+        log_image_start(mul_photo_basename, [found_default_file.get("mul_tif_file") or "missing"], [py6s_output_path, report_path], enabled=True)
+        required = ("mul_imd_file", "mul_tif_file", "mul_shp_file")
+        if not all(found_default_file.get(k) for k in required):
+            log("Skipped: required files missing", enabled=True, scene_basename=mul_photo_basename)
+            continue
 
-                mul_imd_file = found_default_file["mul_imd_file"]
-                mul_tif_file = found_default_file["mul_tif_file"]
-                mul_shp_path = found_default_file["mul_shp_file"]
-                mul_worldview_metadata = load_worldview_metadata(
-                    mul_imd_file,
-                    photo_basename=mul_photo_basename,
-                )
-                mul_metadata = StandardizedMetadata.from_worldview_metadata(mul_worldview_metadata)
+        mul_imd_file = found_default_file["mul_imd_file"]
+        mul_tif_file = found_default_file["mul_tif_file"]
+        mul_shp_path = found_default_file["mul_shp_file"]
+        mul_worldview_metadata = load_worldview_metadata(
+            mul_imd_file,
+            photo_basename=mul_photo_basename,
+        )
+        mul_metadata = StandardizedMetadata.from_worldview_metadata(mul_worldview_metadata)
 
-                py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
-                scene_bbox = _scene_bbox_wgs84_from_shp(mul_shp_path)
-                py6s_result = run_py6s(
-                    input_raster=mul_tif_file,
-                    output_raster=py6s_output_path,
-                    metadata=mul_metadata,
-                    ground_elevation_km=0.0,
-                    atmosphere_profile=args.py6s_atmosphere_profile,
-                    aerosol_profile=args.py6s_aerosol_profile,
-                    aot550=args.py6s_aot550,
-                    visibility_km=args.py6s_visibility,
-                    water_vapor=args.py6s_water_vapor,
-                    ozone=args.py6s_ozone,
-                    sixs_executable=args.py6s_executable,
-                    output_scale_factor=args.py6s_output_scale_factor,
-                    output_dtype=args.py6s_output_dtype,
-                    use_imd_radiance_calibration=args.py6s_use_imd_radiance_calibration,
-                    use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
-                    auto_atmos_source=args.py6s_auto_atmos_source,
-                    bbox_wgs84=scene_bbox,
-                    auto_atmos_grid_size=args.py6s_auto_atmos_grid_size,
-                    auto_atmos_search_days=args.py6s_auto_atmos_search_days,
-                    auto_atmos_timeout_s=args.py6s_auto_atmos_timeout_s,
-                    auto_atmos_power_endpoint=args.py6s_auto_atmos_power_endpoint,
+        py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
+        scene_bbox = _scene_bbox_wgs84_from_shp(mul_shp_path)
+        py6s_result = run_py6s(
+            input_raster=mul_tif_file,
+            output_raster=py6s_output_path,
+            metadata=mul_metadata,
+            ground_elevation_km=0.0,
+            atmosphere_profile=args.py6s_atmosphere_profile,
+            aerosol_profile=args.py6s_aerosol_profile,
+            aot550=args.py6s_aot550,
+            visibility_km=args.py6s_visibility,
+            water_vapor=args.py6s_water_vapor,
+            ozone=args.py6s_ozone,
+            sixs_executable=args.py6s_executable,
+            output_scale_factor=args.py6s_output_scale_factor,
+            output_dtype=args.py6s_output_dtype,
+            use_imd_radiance_calibration=args.py6s_use_imd_radiance_calibration,
+            use_worldview_gain_offset_adjustment=args.py6s_use_worldview_gain_offset_adjustment,
+            auto_atmos_source=args.py6s_auto_atmos_source,
+            bbox_wgs84=scene_bbox,
+            auto_atmos_grid_size=args.py6s_auto_atmos_grid_size,
+            auto_atmos_search_days=args.py6s_auto_atmos_search_days,
+            auto_atmos_timeout_s=args.py6s_auto_atmos_timeout_s,
+            auto_atmos_power_endpoint=args.py6s_auto_atmos_power_endpoint,
+        )
+        final_output_path = py6s_output_path
+        if args.epsg is not None:
+            if not args.dem_file_path:
+                raise ValueError(
+                    "--dem-file-path is required when --epsg is set for vhr-py6s output orthorectification."
                 )
+            ortho_output_path = os.path.join(
+                args.output_dir,
+                f"{mul_photo_basename}{args.output_suffix}_ortho.tif",
+            )
+            log_step_start("orthorectification", enabled=True)
+            log_image_start(mul_photo_basename, [py6s_output_path], [ortho_output_path], enabled=True)
+            gcp_refined_rpc_orthorectification(
+                py6s_output_path,
+                ortho_output_path,
+                args.dem_file_path,
+                args.epsg,
+                output_nodata_value=None,
+                dtype=args.py6s_output_dtype,
+                output_resolution=resolve_output_resolution_for_crs(
+                    args.epsg,
+                    mul_metadata.product_resolution,
+                ),
+            )
+            log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+            if args.keep_intermediate_py6s:
+                final_output_path = ortho_output_path
+            else:
+                os.replace(ortho_output_path, py6s_output_path)
                 final_output_path = py6s_output_path
-                if args.epsg is not None:
-                    if not args.dem_file_path:
-                        raise ValueError(
-                            "--dem-file-path is required when --epsg is set for vhr-py6s output orthorectification."
-                        )
-                    ortho_output_path = os.path.join(
-                        args.output_dir,
-                        f"{mul_photo_basename}{args.output_suffix}_ortho.tif",
-                    )
-                    print(f"Orthorectifying Py6S output to EPSG:{args.epsg}")
-                    gcp_refined_rpc_orthorectification(
-                        py6s_output_path,
-                        ortho_output_path,
-                        args.dem_file_path,
-                        args.epsg,
-                        output_nodata_value=None,
-                        dtype=args.py6s_output_dtype,
-                        output_resolution=resolve_output_resolution_for_crs(
-                            args.epsg,
-                            mul_metadata.product_resolution,
-                        ),
-                    )
-                    if args.keep_intermediate_py6s:
-                        final_output_path = ortho_output_path
-                    else:
-                        os.replace(ortho_output_path, py6s_output_path)
-                        final_output_path = py6s_output_path
-                print(f"Wrote: {final_output_path}")
+        log(f"Wrote {final_output_path}", enabled=True, scene_basename=mul_photo_basename)
 
-                report_path = os.path.join(
-                    args.output_dir,
-                    f"{mul_photo_basename}{args.output_suffix}_metadata.json",
-                )
-                report = {
-                    "scene": {
-                        "input_dir": input_folder,
-                        "scene_root": root_folder_path,
-                        "mul_photo_basename": mul_photo_basename,
-                        "completed_utc": datetime.utcnow().isoformat() + "Z",
-                    },
-                    "inputs": {
-                        "mul_imd_file": mul_imd_file,
-                        "mul_tif_file": mul_tif_file,
-                        "mul_shp_file": mul_shp_path,
-                    },
-                    "standardized_metadata": mul_metadata.to_dict(),
-                    "py6s": {
-                        "configured": {
-                            "atmosphere_profile": args.py6s_atmosphere_profile,
-                            "aerosol_profile": args.py6s_aerosol_profile,
-                            "aot550": args.py6s_aot550,
-                            "visibility_km": args.py6s_visibility,
-                            "water_vapor": args.py6s_water_vapor,
-                            "ozone": args.py6s_ozone,
-                            "output_scale_factor": args.py6s_output_scale_factor,
-                            "output_dtype": args.py6s_output_dtype,
-                            "use_imd_radiance_calibration": args.py6s_use_imd_radiance_calibration,
-                            "use_worldview_gain_offset_adjustment": args.py6s_use_worldview_gain_offset_adjustment,
-                            "auto_atmos_source": args.py6s_auto_atmos_source,
-                        },
-                        "effective": {
-                            **py6s_result.effective_params,
-                        },
-                        "auto_atmos_estimate": py6s_result.auto_atmos_estimate,
-                    },
-                    "orthorectification": {
-                        "enabled": args.epsg is not None,
-                        "output_epsg": args.epsg,
-                        "dem_file_path": args.dem_file_path,
-                        "keep_intermediate_py6s": args.keep_intermediate_py6s,
-                    },
-                    "outputs": {
-                        "py6s_output_path": py6s_output_path,
-                        "final_output_path": final_output_path,
-                        "metadata_report_path": report_path,
-                    },
-                }
-                _write_json(report_path, report)
-                print(f"Wrote metadata: {report_path}")
+        report_path = os.path.join(
+            args.output_dir,
+            f"{mul_photo_basename}{args.output_suffix}_metadata.json",
+        )
+        report = {
+            "scene": {
+                "input_dir": input_folder,
+                "scene_root": root_folder_path,
+                "mul_photo_basename": mul_photo_basename,
+                "completed_utc": datetime.utcnow().isoformat() + "Z",
+            },
+            "inputs": {
+                "mul_imd_file": mul_imd_file,
+                "mul_tif_file": mul_tif_file,
+                "mul_shp_file": mul_shp_path,
+            },
+            "standardized_metadata": mul_metadata.to_dict(),
+            "py6s": {
+                "configured": {
+                    "atmosphere_profile": args.py6s_atmosphere_profile,
+                    "aerosol_profile": args.py6s_aerosol_profile,
+                    "aot550": args.py6s_aot550,
+                    "visibility_km": args.py6s_visibility,
+                    "water_vapor": args.py6s_water_vapor,
+                    "ozone": args.py6s_ozone,
+                    "output_scale_factor": args.py6s_output_scale_factor,
+                    "output_dtype": args.py6s_output_dtype,
+                    "use_imd_radiance_calibration": args.py6s_use_imd_radiance_calibration,
+                    "use_worldview_gain_offset_adjustment": args.py6s_use_worldview_gain_offset_adjustment,
+                    "auto_atmos_source": args.py6s_auto_atmos_source,
+                },
+                "effective": {
+                    **py6s_result.effective_params,
+                },
+                "auto_atmos_estimate": py6s_result.auto_atmos_estimate,
+            },
+            "orthorectification": {
+                "enabled": args.epsg is not None,
+                "output_epsg": args.epsg,
+                "dem_file_path": args.dem_file_path,
+                "keep_intermediate_py6s": args.keep_intermediate_py6s,
+            },
+            "outputs": {
+                "py6s_output_path": py6s_output_path,
+                "final_output_path": final_output_path,
+                "metadata_report_path": report_path,
+            },
+        }
+        _write_json(report_path, report)
+        log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
 
     print("All processing complete")
     return 0

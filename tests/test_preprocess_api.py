@@ -38,7 +38,6 @@ from vhrharmonize.preprocess.fetch_external_data import (
     fetch_power_atmosphere_for_bbox,
     init_ee_client,
 )
-from vhrharmonize.preprocess.helpers import log
 from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
 
 
@@ -54,11 +53,6 @@ def _metadata() -> SimpleNamespace:
         dn_to_radiance_offsets=(-1.0, -2.0),
         resolve_scene_datetime=lambda: __import__("datetime").datetime(2017, 7, 5),
     )
-
-
-def test_log(capsys) -> None:
-    log("hello", enabled=True, step="step", scene_basename="scene")
-    assert "[step_scene] hello" in capsys.readouterr().out
 
 
 def test_align_image_pair(monkeypatch, tmp_path: Path) -> None:

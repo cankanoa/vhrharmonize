@@ -8,7 +8,7 @@ from typing import Any
 
 from coregix import align_image_pair as coregix_align_image_pair
 
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 @dataclass
@@ -32,6 +32,7 @@ def _extract_output_path(result: Any) -> str:
     raise ValueError("coregix align_image_pair result did not include an output image path.")
 
 
+@logged_operation('alignment', inputs=('moving_image_path', 'fixed_image_path'), outputs=('output_image_path',))
 def align_image_pair(
     moving_image_path: str,
     fixed_image_path: str,

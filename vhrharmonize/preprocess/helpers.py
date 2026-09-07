@@ -2,6 +2,78 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+from inspect import signature
+
+
+_active_scene = ContextVar("processing_scene", default=None)
+
+
+def log_step_start(step: str, *, enabled: bool = False, uppercase: bool = True) -> None:
+    if enabled:
+        heading = f"start {step}:"
+        print(heading.upper() if uppercase else heading, flush=True)
+
+
+def log_image_start(scene_basename: str, inputs, outputs, *, enabled: bool = False) -> None:
+    parts = ["Start"]
+    for label, paths in (("in", inputs), ("out", outputs)):
+        if paths:
+            parts.append(f"{label}=" + ", ".join(os.path.basename(str(path)) for path in paths))
+    log(" | ".join(parts), enabled=enabled, scene_basename=scene_basename)
+
+
+def log_image_completed(scene_basename: str, index: int, total: int, *, enabled: bool = False) -> None:
+    log(f"Completed {index}/{total}", enabled=enabled, scene_basename=scene_basename)
+
+
+@contextmanager
+def processing_step(step, scene_basename, inputs, outputs, *, enabled=False, index=1, total=1, announce_step=True, allow_nested=False):
+    """Log successful completion only; nested operations share the scene context."""
+    if _active_scene.get() is not None and not allow_nested:
+        yield
+        return
+    if announce_step:
+        log_step_start(step, enabled=enabled)
+    log_image_start(scene_basename, inputs, outputs, enabled=enabled)
+    token = _active_scene.set(scene_basename)
+    try:
+        yield
+    except BaseException:
+        log("Failed", enabled=enabled, scene_basename=scene_basename)
+        raise
+    else:
+        log_image_completed(scene_basename, index, total, enabled=enabled)
+    finally:
+        _active_scene.reset(token)
+
+
+def logged_operation(step: str, *, inputs=(), outputs=(), allow_nested=False):
+    """Give standalone preprocessing calls the same lifecycle as workflow steps."""
+    def decorate(function):
+        parameters = signature(function)
+
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            bound = parameters.bind(*args, **kwargs)
+            bound.apply_defaults()
+            values = bound.arguments
+            input_paths = [values[name] for name in inputs if values.get(name) is not None]
+            output_paths = [values[name] for name in outputs if values.get(name) is not None]
+            scene_basename = values.get("scene_basename") or os.path.splitext(os.path.basename(str((input_paths or output_paths or [step])[0])))[0]
+            with processing_step(
+                step, scene_basename, input_paths, output_paths,
+                enabled=values.get("log_to_console", False),
+                index=values.get("scene_index", 1), total=values.get("scene_total", 1),
+                allow_nested=allow_nested,
+            ):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
+
 
 def log(
     message: str,
@@ -21,9 +93,9 @@ def log(
     """
     if not enabled:
         return
-    scene_basename = (scene_basename or "").strip()
-    if step and scene_basename:
-        prefix = f"[{step}_{scene_basename}] "
+    scene_basename = (scene_basename or _active_scene.get() or "").strip()
+    if scene_basename:
+        prefix = f"[{scene_basename}] "
     elif step:
         prefix = f"[{step}] "
     else:
@@ -31,4 +103,4 @@ def log(
     print(f"{prefix}{message}", flush=True)
 
 
-__all__ = ["log"]
+__all__ = ["log", "log_step_start", "log_image_start", "log_image_completed", "processing_step", "logged_operation"]

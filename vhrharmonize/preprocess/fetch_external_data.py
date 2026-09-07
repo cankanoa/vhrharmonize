@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 # ---------------------------------------------------------------------------
@@ -21,6 +21,7 @@ DEFAULT_OPENTOPOGRAPHY_GLOBALDEM_ENDPOINT = "https://portal.opentopography.org/A
 DEFAULT_OPENTOPOGRAPHY_DEMTYPE = "SRTMGL1_Ellip"
 
 
+@logged_operation('fetch_dem', inputs=(), outputs=('output_tif_path',))
 def download_opentopography_dem_for_bbox(
     *,
     min_lon: float,
@@ -196,6 +197,7 @@ def _fetch_power_daily_point(
     }
 
 
+@logged_operation('fetch_atmosphere', inputs=(), outputs=())
 def fetch_power_atmosphere_for_bbox(
     *,
     day_utc: date,
@@ -602,6 +604,7 @@ def _visibility_from_aod(aod: float) -> float:
     return 5.0
 
 
+@logged_operation('fetch_atmosphere', inputs=(), outputs=())
 def fetch_modis_water_vapor_for_bbox(
     *,
     scene_datetime_utc: datetime,

@@ -9,7 +9,7 @@ from scipy.ndimage import binary_dilation
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
 
-from vhrharmonize.preprocess.helpers import log
+from vhrharmonize.preprocess.helpers import log, logged_operation
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class CloudMaskResult:
     mask_pixel_count: int
 
 
+@logged_operation('cloud_mask', inputs=('input_image_path',), outputs=('output_raster_path', 'output_mask_path'))
 def cloudmask_raster(
     input_image_path: str,
     output_raster_path: str,
@@ -153,6 +154,7 @@ def _build_cloud_binary_mask(
     return binary_mask.astype(np.uint8)
 
 
+@logged_operation('cloud_mask', inputs=('input_image_path',), outputs=('output_mask_path',))
 def create_cloud_mask_with_omnicloudmask(
     input_image_path: str,
     output_mask_path: str,
@@ -297,6 +299,7 @@ def create_cloud_mask_with_omnicloudmask(
     return output_mask_path
 
 
+@logged_operation('apply_cloud_mask', inputs=('input_image_path', 'cloud_mask_path'), outputs=('output_image_path',))
 def apply_binary_cloud_mask_to_image(
     input_image_path: str,
     cloud_mask_path: str,

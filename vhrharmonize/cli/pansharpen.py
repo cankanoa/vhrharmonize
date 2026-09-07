@@ -41,8 +41,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.pan_ortho,
         args.output,
         change_nodata_value=args.nodata_value,
+        log_to_console=True,
     )
-    print(f"Wrote pansharpened raster: {args.output}")
     return 0
 
 

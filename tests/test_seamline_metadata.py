@@ -83,5 +83,6 @@ class SeamlineMetadataTests(unittest.TestCase):
         self.assertEqual(list(self.read().image_basename), ["a.tif"])
 
 
+
 if __name__ == "__main__":
     unittest.main()
