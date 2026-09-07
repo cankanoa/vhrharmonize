@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import math
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
@@ -288,7 +289,14 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
     """
     radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
     match_kwargs = _collect_prefixed_kwargs(args, "match_")
+    # Explicit null disables these upstream defaults instead of omitting the option.
+    for key in ("shared_window_scales", "global_regression_pif_max_samples", "global_regression_pif_min_samples"):
+        if hasattr(args, "match_" + key):
+            match_kwargs[key] = getattr(args, "match_" + key)
     radiometric_kwargs.update(match_kwargs)
+    overview_scales = getattr(args, "overview_scales", None)
+    if overview_scales is not None:
+        radiometric_kwargs.setdefault("shared_window_scales", tuple(overview_scales))
     for key, value in _spectralmatch_runtime_kwargs(args).items():
         radiometric_kwargs.setdefault(key, value)
     return radiometric_kwargs
@@ -1699,7 +1707,17 @@ def _run_named_radiometric_group(
     else:
         raise ValueError("Radiometric group values must be strings or lists.")
 
-    child_inputs = _dedupe_paths(child_inputs)
+    # Only full-resolution tiles feed parent groups; pyramid subfolders are excluded.
+    expanded_inputs = []
+    for path in child_inputs:
+        if os.path.isdir(path):
+            expanded_inputs.extend(sorted(
+                str(tile) for tile in Path(path).iterdir()
+                if tile.is_file() and tile.suffix.lower() in {".tif", ".tiff"}
+            ))
+        else:
+            expanded_inputs.append(path)
+    child_inputs = _dedupe_paths(expanded_inputs)
     radiometric_kwargs = _build_radiometric_kwargs(args)
     radiometric_kwargs.pop("shared_output_image_path", None)
     group_output_path = _resolve_radiometric_group_output_path(
@@ -1707,7 +1725,9 @@ def _run_named_radiometric_group(
         temp_root=temp_root,
         output_root=output_root,
     )
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
+    reuse_single_output = args.run_from_existing and not radiometric_kwargs.get("merge_rasters_output_tiles", False)
+    if reuse_single_output and _existing_outputs_are_reusable(
         [group_output_path],
         check_validity=args.run_from_existing_check_validity,
         validity_check_grid_size=args.validity_check_grid_size,
@@ -1739,7 +1759,7 @@ def _run_named_radiometric_group(
         log_to_console=args.log_to_console,
         **radiometric_kwargs,
     )
-    if args.calculate_overviews_radiometric_normalization:
+    if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
         calculate_raster_overviews(group_output_path, args.overview_scales)
     return group_output_path
@@ -1777,7 +1797,9 @@ def _run_default_radiometric_normalization(
     """Run one default radiometric normalization over all scene outputs."""
     radiometric_kwargs = _build_radiometric_kwargs(args)
     group_output_path = str(radiometric_kwargs.get("shared_output_image_path") or output_path)
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
+    reuse_single_output = args.run_from_existing and not radiometric_kwargs.get("merge_rasters_output_tiles", False)
+    if reuse_single_output and _existing_outputs_are_reusable(
         [group_output_path],
         check_validity=args.run_from_existing_check_validity,
         validity_check_grid_size=args.validity_check_grid_size,
@@ -1809,7 +1831,7 @@ def _run_default_radiometric_normalization(
         log_to_console=args.log_to_console,
         **radiometric_kwargs,
     )
-    if args.calculate_overviews_radiometric_normalization:
+    if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
         calculate_raster_overviews(group_output_path, args.overview_scales)
     return group_output_path

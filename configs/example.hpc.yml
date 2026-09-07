@@ -15,6 +15,7 @@ staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
 debug_logs: true # Print debug logs
 
 # Download settings
+# Declared output folders are downloaded recursively as one rsync group. Conflict policies apply per file within folders; missing tiles are downloaded on every run.
 override_download_conflict: validate # no | yes | validate. Skip existing | overwrite | skip valid local files
 
 # SSH login

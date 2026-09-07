@@ -45,7 +45,7 @@ def radiometric_normalization(
     """Run radiometric normalization with SpectralMatch.
     Args:
         shared_input_images: Input raster paths for normalization.
-        shared_output_image_path: Output normalized raster path.
+        shared_output_image_path: Output raster path, or folder for a tiled merge.
         method: Requested radiometric normalization method.
         shared_temp_dir: Optional SpectralMatch temp directory.
         delete_temp_dir: Whether SpectralMatch should delete its temp directory.
@@ -62,7 +62,7 @@ def radiometric_normalization(
         log_to_console: Whether to emit console logs.
         kwargs: Additional SpectralMatch keyword arguments.
     Returns:
-        Output normalized raster path.
+        Output raster path or tile folder.
     """
     method_norm = method.strip().lower()
     if method_norm != "spectralmatch":
@@ -97,9 +97,17 @@ def radiometric_normalization(
     if shared_output_dtype is not None:
         pipeline_kwargs["shared_output_dtype"] = shared_output_dtype
 
+    # YAML/JSON sequences arrive as lists; these pipeline options require tuples.
+    tuple_options = {
+        "shared_window_scales", "shared_dask_scheduler",
+        "global_regression_vector_mask", "global_regression_specify_model_images",
+        "local_block_adjustment_vector_mask", "local_block_adjustment_number_of_blocks",
+        "local_block_adjustment_save_block_maps", "local_block_adjustment_load_block_maps",
+        "local_block_adjustment_override_bounds_canvas_coords",
+        "voronoi_center_seamline_vector_mask", "mask_rasters_vector_mask",
+    }
     for key, value in kwargs.items():
-        if value is not None:
-            pipeline_kwargs[key] = value
+        pipeline_kwargs[key] = tuple(value) if key in tuple_options and isinstance(value, list) else value
 
     result = spectralmatch_pipeline(**pipeline_kwargs)
 

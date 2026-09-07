@@ -1278,6 +1278,54 @@ def _scp_download(slurm_data: Mapping[str, Any], remote_path: str, local_path: s
     _run_local_command(command)
 
 
+def _remote_is_directory(slurm_data: Mapping[str, Any], remote_path: str) -> bool:
+    result = _run_ssh(
+        slurm_data, f"test -d {_remote_quote(remote_path)}", check=False, capture_output=True
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError(f"Unable to inspect remote output: {remote_path}")
+    return result.returncode == 0
+
+
+def _rsync_download_tree(
+    slurm_data: Mapping[str, Any], remote_path: str, local_path: str, mode: str
+) -> None:
+    """Download a complete directory, preserving relative tile and VRT paths."""
+    os.makedirs(local_path, exist_ok=True)
+    command = ["rsync", "-a", "--itemize-changes"]
+    if _ssh_option_args(slurm_data):
+        command.extend(["-e", _ssh_command_string(slurm_data)])
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as exclusions:
+        if mode == "no":
+            command.append("--ignore-existing")
+        else:
+            # Invalid files must be replaced even if size and mtime still match.
+            command.append("--ignore-times")
+            if mode == "validate":
+                for root, _, files in os.walk(local_path):
+                    for name in files:
+                        path = os.path.join(root, name)
+                        try:
+                            valid = worldview._existing_outputs_are_reusable(
+                                [path], check_validity=True, validity_check_grid_size=0,
+                                log_to_console=True, step="download",
+                            )
+                        except Exception:
+                            valid = False
+                        if valid:
+                            relative = os.path.relpath(path, local_path)
+                            # Anchor literal file names, including rsync pattern characters.
+                            pattern = re.sub(r"([\\*?\[\]])", r"\\\1", relative)
+                            exclusions.write("/" + pattern + "\0")
+                exclusions.flush()
+                command.extend(["--from0", "--exclude-from", exclusions.name])
+        command.extend([
+            f"{_ssh_target(slurm_data)}:{_remote_quote(remote_path.rstrip('/') + '/')}",
+            os.path.abspath(local_path).rstrip('/') + '/',
+        ])
+        _run_local_command(command)
+
+
 def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str, str]]:
     for section in ("uploaded_input_paths", "uploaded_reference_paths"):
         mapping = slurm_data.get(section) or {}
@@ -1573,7 +1621,7 @@ def close_hpc_connection(config_path: str) -> subprocess.CompletedProcess[str]:
 
 
 def download_slurm_outputs(config_path: str) -> None:
-    """Download files listed in download sections of the staged HPC YAML."""
+    """Download files or complete directories declared in the staged HPC YAML."""
     slurm_data = load_yaml_file(config_path)
     mode = _download_conflict_mode(slurm_data.get("override_download_conflict", "validate"))
     for section in ("download_output_paths", "download_log_paths"):
@@ -1582,6 +1630,14 @@ def download_slurm_outputs(config_path: str) -> None:
             print(f"{section} is not a mapping")
             continue
         for local_path, remote_path in mapping.items():
+            try:
+                if _remote_is_directory(slurm_data, str(remote_path)):
+                    _rsync_download_tree(slurm_data, str(remote_path), str(local_path), mode)
+                    print(f"downloaded directory {local_path}")
+                    continue
+            except Exception as exc:
+                print(f"download error {remote_path} -> {local_path}: {exc}")
+                continue
             if mode != "yes":
                 try:
                     reusable = worldview._existing_outputs_are_reusable(
@@ -1645,7 +1701,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     close_parser = subparsers.add_parser("close", help="Close the SSH multiplex connection.")
     close_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
 
-    download_parser = subparsers.add_parser("download", help="Download files listed in the staged HPC YAML.")
+    download_parser = subparsers.add_parser("download", help="Download files or directories listed in the staged HPC YAML.")
     download_parser.add_argument("--config", required=True, help="Path to staged HPC YAML.")
     return parser
 

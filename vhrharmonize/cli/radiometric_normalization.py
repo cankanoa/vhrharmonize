@@ -76,9 +76,13 @@ def _collect_prefixed_kwargs(namespace: argparse.Namespace, prefix: str) -> dict
     """
     collected: dict[str, Any] = {}
     for key, value in vars(namespace).items():
-        if not key.startswith(prefix) or value is None:
+        if not key.startswith(prefix):
             continue
         stripped_key = key[len(prefix):]
+        if value is None and stripped_key not in {
+            "shared_window_scales", "global_regression_pif_max_samples", "global_regression_pif_min_samples",
+        }:
+            continue
         if stripped_key:
             collected[stripped_key] = value
     return collected

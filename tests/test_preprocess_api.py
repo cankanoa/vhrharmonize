@@ -405,6 +405,7 @@ def test_slurm_download_conflicts(tmp_path: Path, monkeypatch, mode, expected) -
     config_path.write_text(yaml.safe_dump(config) + (
         f"override_download_conflict: {mode}\n" if mode is not None else ""
     ))
+    monkeypatch.setattr(slurm_mod, "_remote_is_directory", lambda *args: False)
     downloaded = []
     monkeypatch.setattr(slurm_mod, "_scp_download", lambda data, remote, local: downloaded.append(Path(local).name))
     slurm_mod.download_slurm_outputs(str(config_path))

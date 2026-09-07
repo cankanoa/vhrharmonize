@@ -96,8 +96,8 @@ workflow:
 
   # Radiometrically match images to each other, align pixel grids, mask, and merge images
   run_radiometric_normalization: false
-  save_radiometric_normalization: $temp/radiometric_root.tif # $temp/file.tif | /custom/absolute.tif | relative/to/pwd.tif
-  calculate_overviews_radiometric_normalization: true
+  save_radiometric_normalization: $temp/radiometric_root.tif # File path for single output; use output/merged_tiles for tiled output (non-temp outputs are downloaded)
+  calculate_overviews_radiometric_normalization: false # Optional final single-file overview pass; use per-step match_*_build_overviews below for SpectralMatch
 
 # STEP SPECIFIC SETTINGS HEREAFTER (defaults are often okay)
 atmospheric_correction:
@@ -241,21 +241,25 @@ radiometric_normalization:
   # match_delete_temp_dir: true # Resolved from keep_temp_dir
   # match_shared_debug_logs: false # Resolved from log_to_console
   # match_shared_output_dtype: int16 # Resolved from dtype
+  # match_shared_window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Resolved from overview_scales; consecutive powers of 2 for tile pyramids
   # match_shared_concurrent_processing_backend:  # Resolved from concurrent_processing_backend
   # match_shared_dask_scheduler: null # Resolved from dask_scheduler_file/address, e.g. ["file", "/tmp/spectralmatch-dask-1.json"]
 
   # Other optional SpectralMatch pipeline kwargs, defaults are often sufficient:
+  # Each step exposes its own build_overviews flag below; all use shared_window_scales.
   
   # Shared runtime/output options
-  # match_shared_resume_from_steps: no # no | yes | validate
+  # match_shared_resume_from_steps: "no" # "no" | "yes" | "validate"; tiled merge resumes individual tiles
   # match_shared_cache: auto
   # match_shared_custom_nodata_value: -9999
-  # match_shared_window_size: 1024
-  # match_shared_image_threads: auto
+  # match_shared_window_size: 1024 # Processing window size and tiled merge tile width/height in pixels
+  # match_shared_image_threads: auto # Workers across images and merge output tiles
   # match_shared_io_threads: auto
   # match_shared_tile_threads: auto
   # match_shared_calculation_dtype: float32
   # match_shared_save_as_cog: false
+
+  # match_delete_previous_step: false # Delete inactive intermediate step outputs
 
   # Pipeline order.
   # Allowed steps: joint_coregistration, align, global_regression, local_block_adjustment, voronoi_center_seamline, weighted_seamline, mask, merge. Only one seamline step may be included.
@@ -282,14 +286,14 @@ radiometric_normalization:
   # match_joint_coregistration_save_adjustments: /path/to/tie_points.json
   # match_joint_coregistration_load_adjustments: /path/to/tie_points.json
   # match_joint_coregistration_resampling_method: bilinear # nearest | bilinear | cubic | lanczos
-  # match_joint_coregistration_tap: true
-  # match_joint_coregistration_resolution: highest
+  # match_joint_coregistration_tap: false
+  # match_joint_coregistration_resolution: null # Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units
   # match_joint_coregistration_build_overviews: false
 
   # Optional standalone alignment. Skip this when joint_coregistration performs the alignment/tap.
   # match_align_rasters_resampling_method: bilinear
-  # match_align_rasters_tap: true
-  # match_align_rasters_resolution: highest
+  # match_align_rasters_tap: false
+  # match_align_rasters_resolution: null # Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units
 
   # Global regression
   # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
@@ -299,25 +303,25 @@ radiometric_normalization:
   # match_global_regression_custom_std_factor: 1.0
   # match_global_regression_save_adjustments: /path/to/adjustments.json
   # match_global_regression_load_adjustments: /path/to/adjustments.json
-  # match_global_regression_pif_method: entire
-  # match_global_regression_pif_red_band_index: 2
-  # match_global_regression_pif_nir_band_index: 6
+  # match_global_regression_pif_method: flood_from_match_points # flood_from_match_points | entire
+  # match_global_regression_pif_red_band_index: null # Optional red band index for vegetation filtering
+  # match_global_regression_pif_nir_band_index: null # Optional NIR band index for vegetation filtering
   # match_global_regression_pif_vegetation_threshold: 0.2
   # match_global_regression_pif_inz_threshold: 0.25
   # match_global_regression_pif_region_radius: 5
-  # match_global_regression_pif_max_samples: 100000
-  # match_global_regression_pif_min_samples: 32
+  # match_global_regression_pif_max_samples: 10000 # null disables the cap
+  # match_global_regression_pif_min_samples: 10
   # match_global_regression_pif_feature_method: orb
   # match_global_regression_pif_load_tie_points: /path/to/tie_points.json
   # match_global_regression_pif_save_inz: /path/to/inz_outputs
   # match_global_regression_build_overviews: false
   # Local block adjustment
   # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
-  # match_local_block_adjustment_number_of_blocks: 100
+  # match_local_block_adjustment_number_of_blocks: 100 # Integer, [rows, columns], or coefficient_of_variation
   # match_local_block_adjustment_alpha: 1.0
-  # match_local_block_adjustment_correction_method: offset
+  # match_local_block_adjustment_correction_method: offset # gamma | linear | offset
   # match_local_block_adjustment_save_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps/$.tif]
-  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps]
+  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, [/path/to/local_block_map.tif]] # Either entry may be null
   # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
 
@@ -343,5 +347,12 @@ radiometric_normalization:
   # match_mask_rasters_include_touched_pixels: false
 
   # Merge
-  # match_merge_rasters_resolution: highest
-  # match_merge_rasters_build_overviews: true
+  # match_merge_rasters_resolution: highest # highest | average | lowest | positive pixel size in CRS units
+  # match_merge_rasters_build_overviews: false # Internal overviews for a file; pyramid tiles for a folder
+
+  # For tiled output, enable output_tiles and set save_radiometric_normalization to a folder (e.g. output/merged_tiles). Named group keys must also be folder names, without .tif.
+  # match_merge_rasters_output_tiles: false
+  # match_merge_rasters_overlap: 0 # Tile mode only; smaller than shared_window_size
+  # match_merge_rasters_resampling_method: nearest # nearest | near | bilinear | cubic | cubicspline | lanczos
+  # match_merge_rasters_custom_tiles_csv: tiles.csv # Tile mode only; filename inside each output level
+  # match_merge_rasters_create_vrts: MergedImage.vrt # Portable mosaic VRT in each tile level
