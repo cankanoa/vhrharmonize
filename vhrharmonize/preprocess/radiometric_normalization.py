@@ -73,7 +73,7 @@ def radiometric_normalization(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     input_images = _normalize_input_images(shared_input_images)
     _log(
-        f"Running radiometric normalization inputs={len(input_images)} output={output_path.name}",
+        f"Processing inputs={len(input_images)} output={output_path.name}",
         enabled=log_to_console,
         step="radiometric",
     )

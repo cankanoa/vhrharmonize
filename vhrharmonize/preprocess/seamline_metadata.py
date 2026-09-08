@@ -92,7 +92,7 @@ def _calculate_seamline_metadata_geometry(
     log_to_console: bool,
 ) -> tuple[str, object]:
     """Open inputs in the worker and return only the image basename and geometry."""
-    _log_image_start(scene_basename, [image_path], [output_path], enabled=log_to_console)
+    _log_image_start(scene_basename, [image_path], [output_path], enabled=log_to_console, step="seamline_metadata")
     if footprint_source == "calculate_bounds":
         geometry = _valid_data_polygon_from_image(
             image_path, eight_connected=calculate_bounds_eight_connected,
@@ -298,7 +298,7 @@ def write_seamline_metadata_gpkg(
             record = records[image_basename]
             _write_seamline_metadata_record(datasource, output_layer, record, geometry)
             processed_image_basenames.add(image_basename)
-            _log_image_completed(record["scene_basename"], len(processed_image_basenames), total, enabled=log_to_console)
+            _log_image_completed(record["scene_basename"], len(processed_image_basenames), total, enabled=log_to_console, step="seamline_metadata")
     finally:
         output_layer = None
         datasource = None

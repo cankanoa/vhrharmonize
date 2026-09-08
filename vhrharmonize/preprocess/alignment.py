@@ -109,7 +109,7 @@ def align_image_pair(
         raise ValueError("solve_resolution must be > 0 when provided.")
 
     _log(
-        f"Running alignment moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",
+        f"Processing moving={os.path.basename(moving_image_path)} fixed={os.path.basename(fixed_image_path)} split_factor={split_factor}",
         enabled=log_to_console,
         step="alignment",
         scene_basename=scene_basename,

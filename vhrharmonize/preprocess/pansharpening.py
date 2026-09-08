@@ -28,12 +28,6 @@ def pansharpen_image(
     Returns:
         None.
     """
-    _log(
-        f"Running pansharpen mul={os.path.basename(input_low_resolution_path)} pan={os.path.basename(input_high_resolution_path)}",
-        enabled=log_to_console,
-        step="pansharpen",
-        scene_basename=scene_basename,
-    )
     pan_sharp = oty.PanSharpen(input_high_resolution_path, input_low_resolution_path)
     pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
 

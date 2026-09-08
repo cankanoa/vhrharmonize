@@ -10,24 +10,25 @@ from inspect import signature
 
 
 _active_scene = ContextVar("processing_scene", default=None)
+_active_step = ContextVar("processing_step", default=None)
 
 
 def _log_step_start(step: str, *, enabled: bool = False, uppercase: bool = True) -> None:
-    if enabled:
-        heading = f"start {step}:"
-        print(heading.upper() if uppercase else heading, flush=True)
+    """Retain discovery announcements; scene steps announce their own lifecycle."""
+    if not uppercase:
+        _log("Start", enabled=enabled, step=step)
 
 
-def _log_image_start(scene_basename: str, inputs, outputs, *, enabled: bool = False) -> None:
+def _log_image_start(scene_basename: str, inputs, outputs, *, enabled: bool = False, step: str | None = None) -> None:
     parts = ["Start"]
     for label, paths in (("in", inputs), ("out", outputs)):
         if paths:
             parts.append(f"{label}=" + ", ".join(os.path.basename(str(path)) for path in paths))
-    _log(" | ".join(parts), enabled=enabled, scene_basename=scene_basename)
+    _log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
-def _log_image_completed(scene_basename: str, index: int, total: int, *, enabled: bool = False) -> None:
-    _log(f"Completed {index}/{total}", enabled=enabled, scene_basename=scene_basename)
+def _log_image_completed(scene_basename: str, index: int, total: int, *, enabled: bool = False, step: str | None = None) -> None:
+    _log(f"Completed {index}/{total}", enabled=enabled, step=step, scene_basename=scene_basename)
 
 
 @contextmanager
@@ -36,11 +37,10 @@ def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, in
     if _active_scene.get() is not None and not allow_nested:
         yield
         return
-    if announce_step:
-        _log_step_start(step, enabled=enabled)
-    _log_image_start(scene_basename, inputs, outputs, enabled=enabled)
     token = _active_scene.set(scene_basename)
+    step_token = _active_step.set(step)
     try:
+        _log_image_start(scene_basename, inputs, outputs, enabled=enabled)
         yield
     except BaseException:
         _log("Failed", enabled=enabled, scene_basename=scene_basename)
@@ -48,6 +48,7 @@ def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, in
     else:
         _log_image_completed(scene_basename, index, total, enabled=enabled)
     finally:
+        _active_step.reset(step_token)
         _active_scene.reset(token)
 
 
@@ -94,8 +95,9 @@ def _log(
     if not enabled:
         return
     scene_basename = (scene_basename or _active_scene.get() or "").strip()
+    step = step or _active_step.get() or ("workflow" if scene_basename else None)
     if scene_basename:
-        prefix = f"[{scene_basename}] "
+        prefix = f"[{scene_basename} {step}] "
     elif step:
         prefix = f"[{step}] "
     else:

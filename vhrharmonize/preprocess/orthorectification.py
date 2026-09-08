@@ -58,7 +58,7 @@ def gcp_refined_rpc_orthorectification(
         None.
     """
     _log(
-        f"Running orthorectification input={os.path.basename(input_image_path)} dem={os.path.basename(dem_image_path)} epsg={output_epsg}",
+        f"Processing | in={os.path.basename(input_image_path)} | out={os.path.basename(output_image_path)} | dem={os.path.basename(dem_image_path)} | epsg={output_epsg}",
         enabled=log_to_console,
         step="orthorectification",
         scene_basename=scene_basename,

@@ -90,7 +90,7 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
         mul_photo_basename = found_default_file.get("mul_photo_basename")
         py6s_output_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}.tif")
         report_path = os.path.join(args.output_dir, f"{mul_photo_basename}{args.output_suffix}_metadata.json")
-        _log_image_start(mul_photo_basename, [found_default_file.get("mul_tif_file") or "missing"], [py6s_output_path, report_path], enabled=True)
+        _log_image_start(mul_photo_basename, [found_default_file.get("mul_tif_file") or "missing"], [py6s_output_path, report_path], enabled=True, step="py6s")
         required = ("mul_imd_file", "mul_tif_file")
         if not all(found_default_file.get(k) for k in required):
             _log("Skipped: required files missing", enabled=True, scene_basename=mul_photo_basename)
@@ -141,7 +141,7 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
                 f"{mul_photo_basename}{args.output_suffix}_ortho.tif",
             )
             _log_step_start("orthorectification", enabled=True)
-            _log_image_start(mul_photo_basename, [py6s_output_path], [ortho_output_path], enabled=True)
+            _log_image_start(mul_photo_basename, [py6s_output_path], [ortho_output_path], enabled=True, step="orthorectification")
             gcp_refined_rpc_orthorectification(
                 py6s_output_path,
                 ortho_output_path,
@@ -154,7 +154,7 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
                     mul_metadata.product_resolution,
                 ),
             )
-            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True, step="orthorectification")
             if args.keep_intermediate_py6s:
                 final_output_path = ortho_output_path
             else:
@@ -210,7 +210,7 @@ def _run_py6s_only(args: argparse.Namespace) -> int:
             },
         }
         _write_json(report_path, report)
-        _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+        _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True, step="py6s")
 
     print("All processing complete")
     return 0

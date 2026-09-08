@@ -278,7 +278,7 @@ def run_py6s(
         use_worldview_gain_offset_adjustment=use_worldview_gain_offset_adjustment,
     )
     _log(
-        f"Running Py6S input={os.path.basename(input_raster)} output={os.path.basename(output_raster)} profile={atmosphere_profile}",
+        f"Processing input={os.path.basename(input_raster)} output={os.path.basename(output_raster)} profile={atmosphere_profile}",
         enabled=log_to_console,
         step="py6s",
         scene_basename=scene_basename,
@@ -632,7 +632,7 @@ def _execute_flaash_task(
     log_to_console: bool = False,
  ) -> None:
     """Execute ENVI FLAASH with the provided parameter dictionary."""
-    _log("Running FLAASH", enabled=log_to_console, step="flaash")
+    _log("Processing", enabled=log_to_console, step="flaash")
     if output_image_path_to_delete:
         if os.path.exists(output_image_path_to_delete):
             os.remove(output_image_path_to_delete)

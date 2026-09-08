@@ -706,7 +706,6 @@ def _logged_scene_step(step):
                 return function(state, args)
             if step == "file_source" and state.current_step != "file_source":
                 return function(state, args)
-            _log_step_start(step, enabled=args.log_to_console)
             expected_outputs = _get_expected_scene_step_outputs(state, args)
             inputs = list(state.current_files)
             if step == "pansharpen" and state.pan_ortho_path:
@@ -1777,7 +1776,7 @@ def _run_default_radiometric_normalization(
         _log_step_plan(
             "radiometric",
             outputs=[group_output_path],
-            message="Skipping radiometric normalization because output exists",
+            message="Skipping because output exists",
             enabled=args.log_to_console,
         )
         return group_output_path
@@ -1791,7 +1790,7 @@ def _run_default_radiometric_normalization(
         "radiometric",
         inputs=available_paths,
         outputs=[group_output_path],
-        message="Running SpectralMatch radiometric normalization",
+        message="Running SpectralMatch",
         enabled=args.log_to_console,
     )
     radiometric_normalization(
@@ -2352,14 +2351,6 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 scene_basename=state.scene.primary_basename,
             )
         else:
-            _log_step_plan(
-                "orthorectification",
-                inputs=plan.pending_input_paths,
-                outputs=plan.pending_output_paths,
-                message=f"Projecting to EPSG:{args.epsg}",
-                enabled=args.log_to_console,
-                scene_basename=state.scene.primary_basename,
-            )
             for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
                 gcp_refined_rpc_orthorectification(
                     input_path,
@@ -2419,14 +2410,6 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                     scene_basename=state.scene.primary_basename,
                 )
             else:
-                _log_step_plan(
-                    "orthorectification_pan",
-                    inputs=pan_plan.pending_input_paths,
-                    outputs=pan_plan.pending_output_paths,
-                    message=f"Projecting to EPSG:{args.epsg}",
-                    enabled=args.log_to_console,
-                    scene_basename=state.scene.primary_basename,
-                )
                 for input_path, output_path in zip(pan_plan.pending_input_paths, pan_plan.pending_output_paths):
                     gcp_refined_rpc_orthorectification(
                         input_path,
@@ -2500,14 +2483,6 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
             scene_basename=state.scene.primary_basename,
         )
     else:
-        _log_step_plan(
-            "pansharpen",
-            inputs=plan.pending_input_paths + ([state.pan_ortho_path] if state.pan_ortho_path else []),
-            outputs=plan.pending_output_paths,
-            message="Running pansharpen",
-            enabled=args.log_to_console,
-            scene_basename=state.scene.primary_basename,
-        )
         for input_path, output_path in zip(plan.pending_input_paths, plan.pending_output_paths):
             pansharpen_image(
                 input_path,

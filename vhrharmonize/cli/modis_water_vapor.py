@@ -128,7 +128,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not mul_photo_basename or not mul_imd:
             continue
 
-        _log_image_start(mul_photo_basename, [mul_imd], [args.output_json, args.output_csv], enabled=True)
+        _log_image_start(mul_photo_basename, [mul_imd], [args.output_json, args.output_csv], enabled=True, step="fetch_atmosphere")
         try:
             scene_dt = _parse_scene_datetime_utc(mul_photo_basename)
             min_lon, min_lat, max_lon, max_lat = materialize_scene_bounds(load_worldview_metadata(mul_imd).raw_metadata).bounds
@@ -156,7 +156,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 **estimate.to_dict(),
             }
             rows.append(row)
-            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True)
+            _log_image_completed(mul_photo_basename, index, len(scene_inputs), enabled=True, step="fetch_atmosphere")
         except Exception as exc:
             _log(f"Failed: {exc}", enabled=True, scene_basename=mul_photo_basename)
             rows.append(

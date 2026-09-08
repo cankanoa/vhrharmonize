@@ -44,7 +44,7 @@ def cloudmask_raster(
 ) -> CloudMaskResult:
     """Create a cloud mask and apply it to a raster."""
     _log(
-        f"Running cloud mask on {os.path.basename(input_image_path)}",
+        f"Processing {os.path.basename(input_image_path)}",
         enabled=log_to_console,
         step="cloudmask",
         scene_basename=scene_basename,
