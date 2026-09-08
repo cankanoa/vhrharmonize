@@ -1728,7 +1728,11 @@ def _run_named_radiometric_group(
     )
     if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         _log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(group_output_path, args.overview_scales, log_to_console=args.log_to_console)
+        calculate_raster_overviews(
+            group_output_path, args.overview_scales, log_to_console=args.log_to_console,
+            scene_index=getattr(args, "scene_total", 1),
+            scene_total=getattr(args, "scene_total", 1),
+        )
     return group_output_path
 
 
@@ -1800,7 +1804,11 @@ def _run_default_radiometric_normalization(
     )
     if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
         _log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(group_output_path, args.overview_scales, log_to_console=args.log_to_console)
+        calculate_raster_overviews(
+            group_output_path, args.overview_scales, log_to_console=args.log_to_console,
+            scene_index=getattr(args, "scene_total", 1),
+            scene_total=getattr(args, "scene_total", 1),
+        )
     return group_output_path
 
 
@@ -1824,22 +1832,27 @@ def _run_radiometric_normalization_workflow(
     if not available_paths:
         raise ValueError("No scene outputs were available for radiometric normalization.")
 
-    group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
-    if group_spec is not None:
-        return _run_named_radiometric_groups(
-            group_spec,
-            available_paths=available_paths,
-            args=args,
-            temp_root=reference_state.step_dirs["temp_root"],
-            output_root=reference_state.step_dirs["output_root"],
-        )
+    with _processing_step(
+        "radiometric_normalization", "all_scenes", available_paths, [],
+        enabled=args.log_to_console, index=len(available_paths),
+        total=getattr(args, "scene_total", len(available_paths)),
+    ):
+        group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
+        if group_spec is not None:
+            return _run_named_radiometric_groups(
+                group_spec,
+                available_paths=available_paths,
+                args=args,
+                temp_root=reference_state.step_dirs["temp_root"],
+                output_root=reference_state.step_dirs["output_root"],
+            )
 
-    return _run_default_radiometric_normalization(
-        available_paths,
-        args=args,
-        output_path=reference_state.step_dirs["radiometric_normalization"],
-        temp_root=reference_state.step_dirs["temp_root"],
-    )
+        return _run_default_radiometric_normalization(
+            available_paths,
+            args=args,
+            output_path=reference_state.step_dirs["radiometric_normalization"],
+            temp_root=reference_state.step_dirs["temp_root"],
+        )
 
 
 def _run_seamline_metadata_workflow(
@@ -1869,7 +1882,7 @@ def _run_seamline_metadata_workflow(
     ):
         _log_step_start("seamline_metadata", enabled=args.log_to_console)
         total = len({os.path.basename(state.current_files[0]) for state in states if state.current_files})
-        _log(f"Already processed {total}/{total}; reusing metadata without validity checking", enabled=args.log_to_console, step="seamline_metadata")
+        _log(f"Already processed {total}/{getattr(args, 'scene_total', total)}; reusing metadata without validity checking", enabled=args.log_to_console, step="seamline_metadata")
         return output_path
 
     return write_seamline_metadata_gpkg(
@@ -1877,6 +1890,7 @@ def _run_seamline_metadata_workflow(
         output_path,
         layer=args.seamline_metadata_layer,
         image_field_name=args.seamline_metadata_image_field_name,
+        scene_total=getattr(args, "scene_total", len(states)),
         footprint_source=args.seamline_metadata_footprint_source,
         calculate_bounds_eight_connected=args.seamline_metadata_calculate_bounds_eight_connected,
         epsg=args.epsg,
@@ -3079,8 +3093,144 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
     return state
 
 
-def _log_processing_steps(args: argparse.Namespace) -> None:
-    """Show configured step switches and save targets before input discovery."""
+def _discovered_step_outputs(state: SceneWorkflowState, args: argparse.Namespace) -> Dict[str, List[str]]:
+    """Inspect each stage independently, including explicitly supplied stage inputs."""
+    expected = _get_expected_scene_step_outputs(state, args)
+    # Inputs can begin at a later stage. Do not add earlier suffixes to that input.
+    current = list(state.current_files)
+    start_index = RASTER_STEP_ORDER.index(state.current_step)
+    for step in RASTER_STEP_ORDER:
+        supplied = state.scene.step_outputs.get(step)
+        if supplied and step != "file_source":
+            expected[step] = list(supplied)
+        if RASTER_STEP_ORDER.index(step) <= start_index or not getattr(args, f"run_{step}", False):
+            continue
+        if step == "cloud_mask":
+            expected["cloud_mask_mask"] = plan_step_outputs(
+                current, output_dir=state.step_dirs[step], suffix=args.cloud_mask_mask_suffix,
+                skip_existing=False,
+            ).output_paths
+        current = plan_step_outputs(
+            current, output_dir=state.step_dirs[step],
+            suffix=getattr(args, f"{step}_output_suffix"),
+            extension=_get_atmospheric_extension(args) if step == "atmospheric_correction" else None,
+            skip_existing=False,
+        ).output_paths
+        if step == "orthorectification" and args.existing_mul_ortho_input:
+            current = [args.existing_mul_ortho_input]
+        if step == "atmospheric_correction" and args.skip_flaash and args.existing_flaash_input:
+            current = [args.existing_flaash_input]
+        expected[step] = list(current)
+    if args.existing_pan_ortho_input:
+        expected["orthorectification_pan"] = [args.existing_pan_ortho_input]
+    expected["final_raster"] = current
+    return expected
+
+
+def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespace) -> Dict[str, Dict[str, int]]:
+    """Count saved outputs and actual pending work over the complete discovered set."""
+    steps = [
+        "file_source", "fetch_atmosphere", "atmospheric_correction", "orthorectification",
+        "pansharpen", "cloud_mask", "alignment", "seamline_metadata", "radiometric_normalization",
+    ]
+    counts = {step: {"loaded": 0, "processing": 0} for step in steps}
+    quiet_args = argparse.Namespace(**vars(args))
+    quiet_args.log_to_console = False
+    states = [_initialize_scene_state(scene, quiet_args) for scene in scenes]
+    outputs = [_discovered_step_outputs(state, quiet_args) for state in states]
+
+    def complete(paths, step):
+        return _existing_outputs_are_reusable(
+            paths, check_validity=args.run_from_existing_check_validity,
+            validity_check_grid_size=args.validity_check_grid_size,
+            log_to_console=False, step=step,
+        )
+
+    for state, expected in zip(states, outputs):
+        cloud_cover = _scene_cloud_cover_percent(state.scene)
+        excluded = (args.max_cloud_cover_to_process is not None and cloud_cover is not None
+                    and cloud_cover > args.max_cloud_cover_to_process)
+        skipped = excluded or (args.skip_existing and _scene_final_outputs_complete(state, quiet_args))
+        for step in steps[:-2]:
+            if not getattr(args, f"run_{step}"):
+                continue
+            loaded = complete(_scene_step_expected_outputs(expected, step), step)
+            counts[step]["loaded"] += int(loaded)
+            if step == "file_source":
+                runs = state.current_step == "file_source"
+            elif step == "fetch_atmosphere":
+                runs = args.run_atmospheric_correction and _step_will_run_from(
+                    state.current_step, "atmospheric_correction", args)
+            else:
+                runs = _step_will_run_from(state.current_step, step, args)
+            if step == "orthorectification" and args.existing_mul_ortho_input:
+                runs = runs and args.run_pansharpen and not args.existing_pan_ortho_input
+            if step == "atmospheric_correction" and args.skip_flaash:
+                runs = False
+            counts[step]["processing"] += int(runs and not skipped and not (args.run_from_existing and loaded))
+
+    if not states:
+        return counts
+    final_paths = [expected["final_raster"][0] for expected in outputs]
+    reference = states[0]
+    if args.run_seamline_metadata:
+        path = reference.step_dirs["seamline_metadata"]
+        existing = set()
+        if os.path.exists(path):
+            import geopandas as gpd
+            frame = gpd.read_file(path, layer=args.seamline_metadata_layer)
+            if ("image_basename" in frame and args.seamline_metadata_image_field_name in frame
+                    and frame.crs is not None and frame.crs.to_epsg() == args.epsg):
+                existing = set(frame["image_basename"].dropna())
+        loaded = sum(os.path.basename(path) in existing for path in final_paths)
+        counts["seamline_metadata"]["loaded"] = loaded
+        reuse_whole = args.run_from_existing and not args.run_from_existing_check_validity and os.path.exists(path)
+        counts["seamline_metadata"]["processing"] = (
+            0 if reuse_whole else len(scenes) - (loaded if args.run_from_existing else 0)
+        )
+    if args.run_radiometric_normalization:
+        kwargs = _build_radiometric_kwargs(args)
+        loaded_scenes, pending_scenes = set(), set()
+
+        def group_members(value):
+            members = set()
+            for item in ([value] if isinstance(value, str) else value):
+                if isinstance(item, str):
+                    members.update(_resolve_radiometric_input_token(item, final_paths))
+                else:
+                    for name, child in item.items():
+                        members.update(count_group(name, child))
+            return members
+
+        def count_group(name, value):
+            members = group_members(value)
+            path = os.path.join(reference.step_dirs["output_root"], os.path.basename(name))
+            record_group(path, members)
+            return members
+
+        def record_group(path, members):
+            # An existing tiled directory is not evidence that all its tiles completed.
+            loaded = not kwargs.get("merge_rasters_output_tiles", False) and complete([path], "radiometric_normalization")
+            if loaded:
+                loaded_scenes.update(members)
+            if not (loaded and args.run_from_existing):
+                pending_scenes.update(members)
+
+        groups = _normalize_group_by_basename_spec(args.group_by_basename)
+        if groups:
+            for name, value in groups.items():
+                count_group(name, value)
+        else:
+            record_group(str(kwargs.get("shared_output_image_path") or reference.step_dirs["radiometric_normalization"]), final_paths)
+        counts["radiometric_normalization"] = {
+            "loaded": sum(path in loaded_scenes for path in final_paths),
+            "processing": sum(path in pending_scenes for path in final_paths),
+        }
+    return counts
+
+
+def _log_processing_steps(args: argparse.Namespace, counts: Dict[str, Dict[str, int]]) -> None:
+    """Show configured steps and independently discovered output counts."""
     if not args.log_to_console:
         return
     steps = [
@@ -3100,6 +3250,7 @@ def _log_processing_steps(args: argparse.Namespace) -> None:
                 save_value = ", ".join(f"$output/{os.path.basename(name)}" for name in groups)
                 storage = "output"
             message += f" | {storage}: {save_value}"
+            message += f" | loaded: {counts[step]['loaded']} | processing: {counts[step]['processing']}"
         _log(message, enabled=True)
 
 
@@ -3110,7 +3261,6 @@ def _run_workflow(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
-    _log_processing_steps(args)
     _log_step_start("glob_matches", enabled=args.log_to_console, uppercase=False)
     filter_basenames = _parse_filter_basenames(args.filter_basename)
     input_files_by_stage = _collect_input_files_by_stage(args.input_file_glob)
@@ -3125,6 +3275,9 @@ def _run_workflow(args: argparse.Namespace) -> int:
         enabled=args.log_to_console,
         step="workflow",
     )
+    if args.log_to_console:
+        _log("Inspecting existing step outputs", enabled=True, step="workflow")
+        _log_processing_steps(args, _count_processing_steps(scenes, args))
     processed_states = _process_scenes(scenes, args)
 
     seamline_metadata_output = None

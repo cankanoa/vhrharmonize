@@ -210,6 +210,7 @@ def write_seamline_metadata_gpkg(
     footprint_source: str,
     calculate_bounds_eight_connected: bool,
     epsg: int,
+    scene_total: int | None = None,
     run_from_existing_check_validity: bool = False,
     log_to_console: bool = False,
     concurrent_processing: int | str = 1,
@@ -248,7 +249,7 @@ def write_seamline_metadata_gpkg(
         for state in states if state.current_files
     }
     processed_image_basenames = existing_image_basenames.intersection(states_by_image_basename)
-    total = len(states_by_image_basename)
+    total = scene_total if scene_total is not None else len(states_by_image_basename)
     if processed_image_basenames:
         _log(f"Already processed {len(processed_image_basenames)}/{total}", enabled=log_to_console, step="seamline_metadata")
 
