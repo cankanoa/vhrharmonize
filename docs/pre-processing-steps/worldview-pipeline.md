@@ -42,9 +42,13 @@ The workflow also supports:
 
 - step-level reuse with `run_from_existing`
 - scene-level skipping with `skip_existing`
-- GDAL readability checks for reused rasters with `run_from_existing_check_validity`
+- GDAL readability checks for reused rasters and JSON-object validation for cached metadata with `run_from_existing_check_validity`
 - GDAL readability checks before whole-scene skips with `skip_existing_check_validity`
 - grouped per-scene multiprocessing with `concurrent_processing`
+
+Atmosphere caches must contain readable JSON objects before reuse. Empty, truncated, or non-object caches are logged as invalid and fetched again, including when raster validity checks are disabled. Valid cached atmosphere data and completed raster outputs remain reusable.
+
+Workflow JSON files are written to a temporary file in the destination directory, flushed and closed, then atomically replaced. A failed write preserves any previous destination and removes the temporary file. After freeing space following a disk-full failure, rerun the same configuration with resume enabled to recover invalid atmosphere caches.
 
 ## Processing Steps
 

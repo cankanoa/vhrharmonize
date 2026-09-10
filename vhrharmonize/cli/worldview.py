@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional
+from uuid import uuid4
 
 from osgeo import gdal
 from wcmatch import fnmatch as wc_fnmatch
@@ -513,16 +514,30 @@ def _resolve_scene_dem_file_path(state: SceneWorkflowState, args: argparse.Names
 
 
 def _write_json(path: str, payload: Dict) -> None:
-    """Write a JSON file.
+    """Atomically write a JSON file, preserving the destination on failure.
     Args:
         path: Output JSON path.
         payload: JSON-serializable payload.
     Returns:
         None.
     """
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    output_dir = os.path.dirname(path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    candidate_path = os.path.join(output_dir, f".{os.path.basename(path)}.{uuid4().hex}.tmp")
+    temp_path = None
+    try:
+        # Exclusive creation retains normal umask permissions for new outputs.
+        with open(candidate_path, "x", encoding="utf-8") as handle:
+            temp_path = candidate_path
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.path.exists(path):
+            shutil.copymode(path, temp_path)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None:
+            Path(temp_path).unlink(missing_ok=True)
 
 
 def _read_json(path: str) -> Dict:
@@ -1088,7 +1103,7 @@ def _existing_outputs_are_reusable(
     """Return whether existing outputs can be reused.
     Args:
         output_paths: Output file paths expected for reuse.
-        check_validity: Whether GDAL-readable raster outputs must be valid.
+        check_validity: Whether raster outputs and JSON objects must be readable.
         log_to_console: Whether to log validation failures.
         step: Step name used for concise logging.
         scene_basename: Optional scene basename for the log prefix.
@@ -1100,12 +1115,20 @@ def _existing_outputs_are_reusable(
     if not check_validity:
         return True
     for output_path in output_paths:
-        if not _is_gdal_raster_path(output_path):
+        if os.path.splitext(output_path)[1].lower() == ".json":
+            try:
+                _read_json(output_path)
+            except (OSError, ValueError) as exc:
+                is_valid, reason = False, str(exc)
+            else:
+                is_valid, reason = True, None
+        elif _is_gdal_raster_path(output_path):
+            is_valid, reason = _gdal_raster_is_valid(
+                output_path,
+                validity_check_grid_size=validity_check_grid_size,
+            )
+        else:
             continue
-        is_valid, reason = _gdal_raster_is_valid(
-            output_path,
-            validity_check_grid_size=validity_check_grid_size,
-        )
         if not is_valid:
             _log_step_plan(
                 step,
@@ -2095,16 +2118,27 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         step="fetch_atmosphere",
         scene_basename=state.scene.primary_basename,
     ):
-        _log_step_plan(
-            "fetch_atmosphere",
-            outputs=plan.output_paths,
-            message="Skipping because output exists",
-            enabled=args.log_to_console,
-            scene_basename=state.scene.primary_basename,
-        )
-        state.fetch_atmosphere_result = _read_json(plan.output_paths[0])
-        _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
-        return
+        try:
+            cached_result = _read_json(plan.output_paths[0])
+        except (OSError, ValueError) as exc:
+            _log_step_plan(
+                "fetch_atmosphere",
+                outputs=plan.output_paths,
+                message=f"Existing output invalid; rerunning ({exc})",
+                enabled=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+            )
+        else:
+            _log_step_plan(
+                "fetch_atmosphere",
+                outputs=plan.output_paths,
+                message="Skipping because output exists",
+                enabled=args.log_to_console,
+                scene_basename=state.scene.primary_basename,
+            )
+            state.fetch_atmosphere_result = cached_result
+            _register_step_outputs(state, "fetch_atmosphere", plan.output_paths)
+            return
 
     scene_bbox = materialize_scene_bounds(mul_image.standardized_metadata.source_metadata).bounds
     fetch_source = _resolve_fetch_atmosphere_source(args)
