@@ -46,7 +46,7 @@ def align_image_pair(
     output_nodata: float | None = None,
     min_valid_fraction: float = 0.01,
     temp_dir: str | None = None,
-    keep_temp_dir: bool = False,
+    delete_temp_dir: bool = True,
     split_factor: int = 2,
     clip_fixed_to_moving: bool = False,
     output_on_moving_grid: bool = True,
@@ -74,7 +74,7 @@ def align_image_pair(
         output_nodata: Optional output nodata override.
         min_valid_fraction: Minimum valid overlap fraction required for registration.
         temp_dir: Optional temp directory for coregix intermediates.
-        keep_temp_dir: Whether to preserve the coregix temp directory.
+        delete_temp_dir: Whether to delete the coregix temp directory after alignment.
         split_factor: Chunking factor used by coregix.
         clip_fixed_to_moving: Whether to clip the fixed image to the moving bounds before registration.
         output_on_moving_grid: Whether to write the aligned result on the moving grid.
@@ -126,7 +126,7 @@ def align_image_pair(
         output_nodata=output_nodata,
         min_valid_fraction=min_valid_fraction,
         temp_dir=temp_dir,
-        keep_temp_dir=keep_temp_dir,
+        keep_temp_dir=not delete_temp_dir,
         clip_fixed_to_moving=clip_fixed_to_moving,
         output_on_moving_grid=output_on_moving_grid,
         split_factor=split_factor,

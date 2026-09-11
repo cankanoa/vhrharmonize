@@ -16,7 +16,8 @@ import shutil
 import struct
 import subprocess
 import sys
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional
@@ -108,6 +109,8 @@ class SceneWorkflowState:
     alignment_result: Optional[object] = None
     cloud_mask_pixel_count: Optional[int] = None
     cloud_mask_path: Optional[str] = None
+    source_files: List[str] = field(default_factory=list)
+    cleanup_step_outputs: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def _require_scene_image(scene: WorldViewScene, role: str) -> WorldViewImage:
@@ -285,6 +288,7 @@ def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
         if hasattr(args, "match_" + key):
             match_kwargs[key] = getattr(args, "match_" + key)
     radiometric_kwargs.update(match_kwargs)
+    radiometric_kwargs.setdefault("delete_temp_dir", getattr(args, "delete_temp_dir", True))
     overview_scales = getattr(args, "overview_scales", None)
     if overview_scales is not None:
         radiometric_kwargs.setdefault("shared_window_scales", tuple(overview_scales))
@@ -429,6 +433,8 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
         Normalized config defaults mapping.
     """
     normalized = dict(config_defaults)
+    if "keep_temp_dir" in normalized:
+        raise ValueError("Unrecognized config key: keep_temp_dir")
     if "input_file_glob" in normalized:
         normalized["input_file_glob"] = _normalize_input_file_glob_entries(normalized["input_file_glob"])
     for list_key in ("filter_basename", "match_steps"):
@@ -627,6 +633,19 @@ def _process_scenes(
         for index, scene in enumerate(scenes, start=1)
     }
     args.scene_total = len(scenes)
+    if getattr(args, "delete_temp_steps_proactively", False) or getattr(args, "delete_temp_dir", False):
+        args._cleanup_source_files = _dedupe_paths([
+            path for scene in scenes for image in scene.iter_images()
+            for path in _worldview_image_source_files(image)
+        ] + [path for scene in scenes for paths in scene.step_outputs.values() for path in paths])
+    if getattr(args, "delete_temp_steps_proactively", False):
+        # Sweep all discovered scenes before dispatch, including scenes that will
+        # be skipped or may never reach a worker if another scene fails.
+        args._cleanup_source_keys = _cleanup_file_keys(_files_with_sidecars(args._cleanup_source_files))
+        if args.temp_dir:
+            for scene in scenes:
+                state = _initialize_scene_state(scene, args, validate_inputs=False)
+                _cleanup_completed_scene_temp_steps(state, args)
     worker_count = _resolve_concurrent_processing(args.concurrent_processing)
     backend = _resolve_concurrent_processing_backend(args.concurrent_processing_backend)
     if backend == "dask":
@@ -1470,16 +1489,20 @@ def _validate_remaining_scene_inputs(
         )
 
 
-def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> SceneWorkflowState:
+def _initialize_scene_state(
+    scene: WorldViewScene, args: argparse.Namespace, *, validate_inputs: bool = True,
+) -> SceneWorkflowState:
     """Initialize workflow state for a scene.
     Args:
         scene: Scene to initialize.
         args: Parsed CLI arguments.
+        validate_inputs: Check remaining processing inputs; false for cleanup inspection only.
     Returns:
         Initialized scene workflow state.
     """
     start_step = _get_scene_input_start_step(scene)
-    _validate_remaining_scene_inputs(scene, start_step=start_step, args=args)
+    if validate_inputs:
+        _validate_remaining_scene_inputs(scene, start_step=start_step, args=args)
     start_path = _get_worldview_scene_step_path(scene, "mul", start_step)
 
     state = SceneWorkflowState(
@@ -1488,6 +1511,14 @@ def _initialize_scene_state(scene: WorldViewScene, args: argparse.Namespace) -> 
         current_files=[start_path],
         current_step=start_step,
     )
+    if getattr(args, "delete_temp_steps_proactively", False) or getattr(args, "delete_temp_dir", False):
+        state.source_files = _dedupe_paths([
+            path for image in scene.iter_images() for path in _worldview_image_source_files(image)
+        ] + [path for paths in scene.step_outputs.values() for path in paths])
+        if args.dem_file_path not in (None, "", "online"):
+            state.source_files.append(resolve_relative_to_input(args.dem_file_path, os.path.dirname(scene.mul_image.tif_file)))
+    if getattr(args, "delete_temp_steps_proactively", False):
+        state.cleanup_step_outputs = _discovered_step_outputs(state, args)
     return state
 
 
@@ -2741,7 +2772,7 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
                 output_nodata=args.alignment_output_nodata if args.alignment_output_nodata is not None else args.nodata_value,
                 min_valid_fraction=args.alignment_min_valid_fraction,
                 temp_dir=state.step_dirs["temp_root"],
-                keep_temp_dir=args.keep_temp_dir,
+                delete_temp_dir=args.delete_temp_dir,
                 split_factor=args.alignment_split_factor,
                 clip_fixed_to_moving=args.alignment_clip_fixed_to_moving,
                 output_on_moving_grid=args.alignment_output_on_moving_grid,
@@ -2894,50 +2925,177 @@ def _delete_files(paths: List[str]) -> None:
             os.remove(path)
 
 
-def _scene_temp_cleanup_paths(state: SceneWorkflowState, args: argparse.Namespace) -> List[str]:
-    """Collect temp cleanup paths for a scene.
-    Args:
-        state: Scene workflow state.
-        args: Parsed CLI arguments.
-    Returns:
-        Temp-backed file paths safe to delete after scene completion.
+def _configured_cleanup_inputs(args: argparse.Namespace) -> List[str]:
+    """Collect caller-owned file inputs, including nested SpectralMatch references."""
+    def configured_files(value):
+        if isinstance(value, str):
+            path = os.path.expanduser(value.removeprefix("file:"))
+            if os.path.isfile(path):
+                yield path
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                if not str(key).startswith("_"):
+                    yield from configured_files(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                yield from configured_files(child)
+
+    return _dedupe_paths([
+        *configured_files(vars(args)),
+        *configured_files(_parse_json_dict(args.radiometric_normalization_kwargs_json)),
+        *configured_files(_normalize_group_by_basename_spec(args.group_by_basename)),
+    ])
+
+
+def _cleanup_workflow_temp_dirs(
+    states: List[SceneWorkflowState], args: argparse.Namespace, saved_aggregate_outputs: List[str],
+) -> None:
+    """Remove workflow temp directories after success, independently of per-file cleanup."""
+    if not args.delete_temp_dir:
+        return
+    protected = list(getattr(args, "_cleanup_source_files", []))
+    protected.extend(_configured_cleanup_inputs(args))
+    protected.extend(saved_aggregate_outputs)
+    temp_roots = set()
+    for state in states:
+        temp_roots.add(os.path.realpath(state.step_dirs["temp_root"]))
+        protected.extend(state.source_files)
+        protected.append(state.step_dirs["output_root"])
+        # Explicit non-temp save targets can live within a configured temp root.
+        for step, path in state.step_dirs.items():
+            if hasattr(args, f"save_{step}") and not _is_temp_save_value(getattr(args, f"save_{step}")):
+                protected.append(path)
+    locations = set()
+    for path in protected:
+        locations.add(os.path.realpath(path))
+        # Preserve the source link itself as well as its resolved target.
+        locations.add(os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path)))
+    reserved_roots = {os.path.realpath(path) for path in (
+        os.sep, os.path.expanduser("~"), os.getcwd(), tempfile.gettempdir(), "/tmp", "/var/tmp",
+    )}
+    locations.update(reserved_roots)
+    for root in sorted(temp_roots):
+        if not os.path.isdir(root):
+            continue
+        if root in reserved_roots or any(os.path.commonpath([root, path]) == root for path in locations):
+            _log(
+                f"Keeping temp directory {root}: it is shared or contains protected inputs or saved outputs",
+                enabled=args.log_to_console, step="temp_cleanup",
+            )
+            continue
+        _log(f"Deleting temp directory {root}", enabled=args.log_to_console, step="temp_cleanup")
+        shutil.rmtree(root)
+
+
+def _files_with_sidecars(paths: List[str]) -> List[str]:
+    """Name owned raster sidecars without following dataset references or scanning directories."""
+    files = list(paths)
+    for path in paths:
+        if not _is_gdal_raster_path(path):
+            continue
+        stem = os.path.splitext(path)[0]
+        for suffix in (".aux.xml", ".ovr", ".msk", ".msk.ovr", ".hdr", ".params.txt", ".flaash_params.txt"):
+            files.extend([path + suffix, path + suffix.upper()])
+        for suffix in (".hdr", ".rpb", ".rpc", ".rpc.txt", ".imd", ".til", ".xml", ".att", ".eph", ".geo", ".ste"):
+            files.extend([stem + suffix, stem + suffix.upper()])
+    return _dedupe_paths(files)
+
+
+def _cleanup_file_keys(paths: List[str]) -> tuple[set[str], set[tuple[int, int]]]:
+    """Identify protected files by both resolved path and inode (including hard links)."""
+    real_paths = set()
+    inodes = set()
+    for path in paths:
+        real_paths.add(os.path.realpath(path))
+        try:
+            stat = os.stat(path)
+            inodes.add((stat.st_dev, stat.st_ino))
+        except FileNotFoundError:
+            pass
+    return real_paths, inodes
+
+
+def _cleanup_completed_scene_temp_steps(
+    state: SceneWorkflowState,
+    args: argparse.Namespace,
+    *,
+    aggregate_outputs: List[str] | None = None,
+) -> None:
+    """Delete a scene's temp products only after all its persistent outputs are complete.
+
+    Planned paths include leftovers from prior runs and partially populated temp
+    steps. None means aggregate consumers may still need the final scene raster;
+    a list is supplied only after all enabled aggregate steps finish successfully.
     """
-    temp_paths: List[str] = []
+    if not getattr(args, "delete_temp_steps_proactively", False):
+        return
+    expected = state.cleanup_step_outputs or _discovered_step_outputs(state, args)
+    outputs = {**expected, **state.scene.step_outputs}
+    # Stage-tagged source inputs are registered before file_source has copied them.
+    outputs["file_source"] = expected.get("file_source", [])
+    required, temporary = [], []
+    for step in ["file_source", "fetch_atmosphere", *RASTER_STEP_ORDER[1:]]:
+        if not getattr(args, f"run_{step}"):
+            continue
+        paths = _scene_step_expected_outputs(outputs, step)
+        if _is_temp_save_value(getattr(args, f"save_{step}")):
+            # Include planned files even if the step did not run in this invocation.
+            temporary.extend(_scene_step_expected_outputs(expected, step))
+            temporary.extend(paths)
+        else:
+            required.extend(paths)
+    required.extend(aggregate_outputs or [])
+    if not _existing_outputs_are_reusable(
+        _dedupe_paths(required), check_validity=args.skip_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console, step="temp_cleanup",
+        scene_basename=state.scene.primary_basename,
+    ):
+        return
 
-    def _extend(step_name: str) -> None:
-        """Extend temp paths from a step.
-        Args:
-            step_name: Step name whose outputs should be added.
-        Returns:
-            None.
-        """
-        temp_paths.extend(state.scene.step_outputs.get(step_name, []))
+    protected = list(state.source_files) + required + _configured_cleanup_inputs(args)
+    if args.dem_file_path not in (None, "", "online"):
+        protected.append(state.dem_file_path or resolve_relative_to_input(
+            args.dem_file_path, os.path.dirname(state.scene.mul_image.tif_file),
+        ))
+    final_paths = list(expected.get("final_raster", []))
+    if state.current_step != "file_source":
+        final_paths.extend(state.current_files)
+    if aggregate_outputs is None and (args.run_seamline_metadata or args.run_radiometric_normalization):
+        protected.extend(final_paths)
+    temporary.extend(os.path.splitext(path)[0] + "_metadata.json" for path in final_paths if path in temporary)
+    temporary.append(os.path.join(state.step_dirs["scene_work"], f"{state.scene.mul_image.basename}.gpkg"))
+    if args.dem_file_path == "online":
+        temporary.append(os.path.join(state.step_dirs["temp_root"], "dem", f"{state.scene.mul_image.basename}_dem.tif"))
 
-    if args.run_file_source and _is_temp_save_value(args.save_file_source):
-        _extend("file_source")
-    if args.run_fetch_atmosphere and _is_temp_save_value(args.save_fetch_atmosphere):
-        _extend("fetch_atmosphere")
-    if args.run_atmospheric_correction and _is_temp_save_value(args.save_atmospheric_correction):
-        _extend("atmospheric_correction")
-        if args.atmospheric_method == "flaash":
-            temp_paths.extend([f"{path}.params.txt" for path in state.scene.step_outputs.get("atmospheric_correction", [])])
-    if args.run_orthorectification and _is_temp_save_value(args.save_orthorectification):
-        _extend("orthorectification")
-        if args.run_pansharpen:
-            _extend("orthorectification_pan")
-    if args.run_pansharpen and _is_temp_save_value(args.save_pansharpen):
-        _extend("pansharpen")
-    if args.run_cloud_mask and _is_temp_save_value(args.save_cloud_mask):
-        _extend("cloud_mask")
-        _extend("cloud_mask_mask")
-    if args.run_alignment and _is_temp_save_value(args.save_alignment):
-        _extend("alignment")
-
-    mul_image = state.scene.mul_image
-    if mul_image is not None:
-        temp_paths.append(os.path.join(state.step_dirs["scene_work"], f"{mul_image.basename}.gpkg"))
-
-    return _dedupe_paths(temp_paths)
+    protected_paths, protected_inodes = _cleanup_file_keys(_files_with_sidecars(protected))
+    shared_paths, shared_inodes = getattr(args, "_cleanup_source_keys", (set(), set()))
+    # Protect companions of aliased inputs as well as the primary raster itself.
+    for path in _dedupe_paths(temporary):
+        if not os.path.isfile(path):
+            continue
+        real_path = os.path.realpath(path)
+        stat = os.stat(path)
+        inode = (stat.st_dev, stat.st_ino)
+        if (real_path in protected_paths or real_path in shared_paths
+                or inode in protected_inodes or inode in shared_inodes):
+            protected_paths.update(os.path.realpath(item) for item in _files_with_sidecars([path]))
+    to_delete = []
+    for path in _files_with_sidecars(temporary):
+        real_path = os.path.realpath(path)
+        if real_path in protected_paths or real_path in shared_paths or not os.path.isfile(path):
+            continue
+        stat = os.stat(path)
+        inode = (stat.st_dev, stat.st_ino)
+        if inode not in protected_inodes and inode not in shared_inodes:
+            to_delete.append(path)
+    if to_delete:
+        _log(
+            f"Deleting {len(to_delete)} temp files because saved scene outputs are complete",
+            enabled=args.log_to_console, step="temp_cleanup",
+            scene_basename=state.scene.primary_basename,
+        )
+        _delete_files(to_delete)
 
 
 def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, scene_started_utc: str) -> None:
@@ -2984,6 +3142,8 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "run_from_existing": args.run_from_existing,
             "run_from_existing_check_validity": args.run_from_existing_check_validity,
             "skip_existing_check_validity": args.skip_existing_check_validity,
+            "delete_temp_steps_proactively": args.delete_temp_steps_proactively,
+            "delete_temp_dir": args.delete_temp_dir,
             "run_file_source": args.run_file_source,
             "run_fetch_atmosphere": args.run_fetch_atmosphere,
             "run_atmospheric_correction": args.run_atmospheric_correction,
@@ -3078,6 +3238,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             step="workflow",
             scene_basename=scene.primary_basename,
         )
+        _cleanup_completed_scene_temp_steps(state, args)
         return state
     if args.skip_existing and _scene_final_outputs_complete(state, args):
         _log(
@@ -3088,6 +3249,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             scene_basename=scene.primary_basename,
         )
         _mark_scene_complete_from_existing_output(state, args)
+        _cleanup_completed_scene_temp_steps(state, args)
         return state
 
     scene_started_utc = datetime.utcnow().isoformat() + "Z"
@@ -3115,16 +3277,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
             scene_basename=scene.primary_basename,
         )
     _write_scene_report(state, args, scene_started_utc=scene_started_utc)
-    if not args.keep_temp_dir:
-        temp_cleanup_paths = _scene_temp_cleanup_paths(state, args)
-        if temp_cleanup_paths:
-            _log(
-                f"Deleting {len(temp_cleanup_paths)} temp files",
-                enabled=args.log_to_console,
-                step="workflow",
-                scene_basename=scene.primary_basename,
-            )
-            _delete_files(temp_cleanup_paths)
+    _cleanup_completed_scene_temp_steps(state, args)
     _log_image_completed(
         scene.primary_basename,
         getattr(args, "scene_indices", {}).get(scene.primary_basename, 1),
@@ -3320,6 +3473,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
         _log_processing_steps(args, _count_processing_steps(scenes, args))
     processed_states = _process_scenes(scenes, args)
 
+    saved_aggregate_outputs = []
     seamline_metadata_output = None
     if processed_states and args.run_seamline_metadata:
         seamline_metadata_output = _run_seamline_metadata_workflow(
@@ -3328,6 +3482,8 @@ def _run_workflow(args: argparse.Namespace) -> int:
             reference_state=processed_states[0],
         )
         if seamline_metadata_output:
+            if not _is_temp_save_value(args.save_seamline_metadata):
+                saved_aggregate_outputs.append(seamline_metadata_output)
             _log(
                 f"Wrote seamline metadata {seamline_metadata_output}",
                 enabled=args.log_to_console,
@@ -3347,12 +3503,21 @@ def _run_workflow(args: argparse.Namespace) -> int:
             reference_state=processed_states[0],
         )
         if radiometric_output:
+            if (args.group_by_basename
+                    or _build_radiometric_kwargs(args).get("shared_output_image_path")
+                    or not _is_temp_save_value(args.save_radiometric_normalization)):
+                saved_aggregate_outputs.append(radiometric_output)
             _log(
                 f"Wrote radiometric normalization output {radiometric_output}",
                 enabled=args.log_to_console,
                 step="workflow",
             )
 
+    if args.delete_temp_steps_proactively and (args.run_seamline_metadata or args.run_radiometric_normalization):
+        for state in processed_states:
+            _cleanup_completed_scene_temp_steps(state, args, aggregate_outputs=saved_aggregate_outputs)
+
+    _cleanup_workflow_temp_dirs(processed_states, args, saved_aggregate_outputs)
     _log("All processing complete", enabled=args.log_to_console, step="workflow")
     return 0
 
@@ -3427,7 +3592,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dask-scheduler-address")
     parser.add_argument("--overview-scales", nargs="+")
     parser.add_argument("--temp-dir")
-    parser.add_argument("--keep-temp-dir", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--delete-temp-dir", action=argparse.BooleanOptionalAction, default=True,
+        help="Delete workflow temp directories after successful completion; independent of proactive per-file cleanup.",
+    )
+    parser.add_argument(
+        "--delete-temp-steps-proactively", action=argparse.BooleanOptionalAction, default=False,
+        help="Delete individual scene temp files once non-temp outputs are complete, including skipped scenes; leaves directories in place.",
+    )
     parser.add_argument("--run-file-source", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-file-source", default="$temp/file_source")
     parser.add_argument("--calculate-overviews-file-source", action=argparse.BooleanOptionalAction, default=False)

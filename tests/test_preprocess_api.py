@@ -56,10 +56,54 @@ def _metadata() -> SimpleNamespace:
     )
 
 
-def test_align_image_pair(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setitem(sys.modules, "coregix", SimpleNamespace(align_image_pair=lambda **kwargs: SimpleNamespace(output_image_path=kwargs["output_image_path"])))
-    output = align_image_pair("moving.tif", "fixed.tif", str(tmp_path / "out.tif"))
+@pytest.mark.parametrize("delete_temp", [None, False, True])
+def test_align_image_pair(monkeypatch, tmp_path: Path, delete_temp) -> None:
+    calls = []
+    alignment = importlib.import_module("vhrharmonize.preprocess.alignment")
+    monkeypatch.setattr(
+        alignment, "coregix_align_image_pair",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(output_image_path=kwargs["output_image_path"]),
+    )
+    options = {} if delete_temp is None else {"delete_temp_dir": delete_temp}
+    output = align_image_pair("moving.tif", "fixed.tif", str(tmp_path / "out.tif"), **options)
     assert output.output_image_path.endswith("out.tif")
+    assert calls[0]["keep_temp_dir"] is (delete_temp is False)
+
+
+def test_align_image_pair_rejects_removed_keep_temp_dir() -> None:
+    with pytest.raises(TypeError, match="keep_temp_dir"):
+        align_image_pair("moving.tif", "fixed.tif", "out.tif", keep_temp_dir=True)
+
+
+@pytest.mark.parametrize("flags, delete_temp", [([], True), (["--delete-temp-dir"], True), (["--no-delete-temp-dir"], False)])
+def test_align_image_pair_cli_cleanup_option(monkeypatch, tmp_path: Path, flags, delete_temp) -> None:
+    alignment_cli = importlib.import_module("vhrharmonize.cli.align_image_pair")
+    image = tmp_path / "input.tif"
+    image.touch()
+    calls = []
+    monkeypatch.setattr(
+        alignment_cli, "align_image_pair",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(output_image_path=kwargs["output_image_path"]),
+    )
+
+    assert alignment_cli.main([
+        "--moving-image", str(image), "--fixed-image", str(image),
+        "--output-image", str(tmp_path / "out.tif"), *flags,
+    ]) == 0
+
+    assert calls[0]["delete_temp_dir"] is delete_temp
+    assert "keep_temp_dir" not in calls[0]
+
+
+@pytest.mark.parametrize("flag", ["--keep-temp-dir", "--no-keep-temp-dir"])
+def test_align_image_pair_cli_rejects_removed_flag(flag, capsys) -> None:
+    alignment_cli = importlib.import_module("vhrharmonize.cli.align_image_pair")
+    with pytest.raises(SystemExit):
+        alignment_cli._build_parser().parse_args([
+            "--moving-image", "moving.tif", "--fixed-image", "fixed.tif",
+            "--output-image", "out.tif", flag,
+        ])
+    assert f"unrecognized arguments: {flag}" in capsys.readouterr().err
 
 
 def test_py6s_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
@@ -218,7 +262,7 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
         run_from_existing_check_validity=False,
         validity_check_grid_size=0,
         log_to_console=False,
-        keep_temp_dir=False,
+        delete_temp_dir=True,
         dtype="int16",
         radiometric_normalization_method="spectralmatch",
         calculate_overviews_radiometric_normalization=False,
@@ -304,6 +348,7 @@ def test_worldview_spectralmatch_runtime_kwargs_follow_scene_backend() -> None:
     )
 
     assert worldview._build_radiometric_kwargs(args) == {
+        "delete_temp_dir": True,
         "shared_concurrent_processing_backend": "dask",
         "shared_dask_scheduler": ("file", "/tmp/dask-scheduler.json"),
         "shared_image_threads": None,

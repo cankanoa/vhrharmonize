@@ -37,7 +37,8 @@ shared:
   # dem_online_timeout_s: 120.0
 
   #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
-  keep_temp_dir: false
+  delete_temp_dir: true # Remove workflow temp directories after successful completion
+  delete_temp_steps_proactively: false # Remove individual completed-scene temp files during processing; independent of delete_temp_dir
   nodata_value: -9999 # Shared nodata value used by raster-writing steps
   dtype: int16 # Shared output dtype for raster-writing steps
   log_to_console: true
@@ -238,7 +239,7 @@ radiometric_normalization:
   # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"] # Resolved from the previous steps output
   # match_shared_output_image_path: /path/to/image.tif # Resolved from save_radiometric_normalization
   # match_shared_temp_dir: ./temp/spectralmatch # Resolved from temp_dir
-  # match_delete_temp_dir: true # Resolved from keep_temp_dir
+  # match_delete_temp_dir: true # Defaults to delete_temp_dir
   # match_shared_debug_logs: false # Resolved from log_to_console
   # match_shared_output_dtype: int16 # Resolved from dtype
   # match_shared_window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Resolved from overview_scales; consecutive powers of 2 for tile pyramids

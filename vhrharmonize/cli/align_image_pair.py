@@ -77,9 +77,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--temp-dir", help="Optional parent directory for temporary working files.")
     parser.add_argument(
-        "--keep-temp-dir",
-        action="store_true",
-        help="Keep the temporary working directory for debugging.",
+        "--delete-temp-dir",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the temporary working directory after alignment (default: true).",
     )
     parser.add_argument(
         "--clip-fixed-to-moving",
@@ -173,7 +174,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         output_nodata=args.output_nodata,
         min_valid_fraction=args.min_valid_fraction,
         temp_dir=args.temp_dir,
-        keep_temp_dir=args.keep_temp_dir,
+        delete_temp_dir=args.delete_temp_dir,
         split_factor=args.split_factor,
         clip_fixed_to_moving=args.clip_fixed_to_moving,
         output_on_moving_grid=args.output_on_moving_grid,

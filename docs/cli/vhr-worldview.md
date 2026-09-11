@@ -30,7 +30,7 @@ vhr-worldview \
 
 - Config and discovery: `--config-yaml`, `--input-file-glob`, `--filter-basename`
 - DEM and projection: `--dem-file-path`, `--dem-online-api-key`, `--dem-online-source`, `--dem-online-api-endpoint`, `--dem-online-timeout-s`, `--epsg`
-- Shared output/runtime: `--output-dir`, `--temp-dir`, `--keep-temp-dir`, `--nodata-value`, `--dtype`, `--log-to-console`, `--concurrent-processing`, `--overview-scales`
+- Shared output/runtime: `--output-dir`, `--temp-dir`, `--delete-temp-dir/--no-delete-temp-dir`, `--delete-temp-steps-proactively/--no-delete-temp-steps-proactively`, `--nodata-value`, `--dtype`, `--log-to-console`, `--concurrent-processing`, `--overview-scales`
 - Scene reuse and filtering: `--skip-existing/--no-skip-existing`, `--run-from-existing/--no-run-from-existing`, `--max-cloud-cover-to-process`
 - Per-step enable/save/overview flags: `--run-fetch-atmosphere`, `--save-fetch-atmosphere`, `--run-atmospheric-correction`, `--save-atmospheric-correction`, `--calculate-overviews-atmospheric-correction`, `--run-orthorectification`, `--save-orthorectification`, `--calculate-overviews-orthorectification`, `--run-pansharpen`, `--save-pansharpen`, `--calculate-overviews-pansharpen`, `--run-cloud-mask`, `--save-cloud-mask`, `--calculate-overviews-cloud-mask`, `--run-alignment`, `--save-alignment`, `--calculate-overviews-alignment`, `--run-seamline-metadata`, `--save-seamline-metadata`, `--run-radiometric-normalization`, `--save-radiometric-normalization`, `--calculate-overviews-radiometric-normalization`
 - Per-scene step save paths support: `$temp`, `$temp/...`, `$output`, `$output/...`, `./relative/to/mul`, `/absolute/path`, `relative/to/current/working/directory`

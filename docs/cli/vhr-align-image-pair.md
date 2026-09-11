@@ -26,7 +26,7 @@ vhr-align-image-pair \
 - Required: `--moving-image`, `--fixed-image`, `--output-image`
 - Band selection: `--band-index`, `--moving-band-index`, `--fixed-band-index`
 - Nodata and overlap: `--moving-nodata`, `--fixed-nodata`, `--output-nodata`, `--min-valid-fraction`
-- Temp and logging: `--temp-dir`, `--keep-temp-dir`, `--log-to-console`
+- Temp and logging: `--temp-dir`, `--delete-temp-dir/--no-delete-temp-dir`, `--log-to-console`
 - Alignment behavior: `--use-edge-proxies/--no-use-edge-proxies`, `--split-factor`, `--clip-fixed-to-moving/--no-clip-fixed-to-moving`, `--output-on-moving-grid/--no-output-on-moving-grid`, `--solve-resolution`
 - Edge trimming: `--trim-edge-invalid/--no-trim-edge-invalid`, `--edge-trim-depth`, `--edge-trim-detection-band-index`, `--edge-trim-invalid-below`, `--edge-trim-invalid-above`
 - Masking: `--enforce-mutual-valid-mask/--no-enforce-mutual-valid-mask`

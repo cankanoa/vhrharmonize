@@ -36,12 +36,14 @@ Each step save location can point to:
 - `/absolute/path`
 - `relative/to/current/working/directory`
 
-If `temp_dir` is not set, the workflow creates a real temporary directory. If `keep_temp_dir` is false, temp-saved files are deleted after a scene finishes.
+If `temp_dir` is not set, the workflow creates a real temporary directory.
 
+- `delete_temp_dir`: Delete workflow temp directories after all scene and aggregate processing succeeds. Defaults to true; false retains them. Directories containing source inputs or saved outputs are preserved.
 - `run_from_existing`: Reuse step outputs. Tiled radiometric outputs and seamline metadata retain incremental resume behavior.
 - `skip_existing`: Skip completed scenes.
 - `run_from_existing_check_validity`: Check every expected output for GDAL raster readability or atmosphere JSON syntax, even if others are missing. JSON checks exclude required fields and atmospheric values. At each step, automatically remove invalid primary outputs before rerunning and refetch invalid atmosphere JSON. Preserve valid files, sidecars, and source inputs. Startup inspection and upload/download planning never delete files.
 - `skip_existing_check_validity`: Apply the same checks before skipping scenes, without deleting files.
+- `delete_temp_steps_proactively`: Delete individual temp step files and sidecars once non-temp outputs pass the scene-skip validity checks, including skipped scenes with incomplete temp steps. Leaves directories in place and operates independently of `delete_temp_dir`. Defaults to false. Preserves source/configured inputs and rasters needed by pending aggregate steps. Temp-only scenes require a saved non-temp aggregate output before per-file cleanup.
 - `concurrent_processing`: Group multiprocessing tasks by scene.
 
 ## Processing Steps
