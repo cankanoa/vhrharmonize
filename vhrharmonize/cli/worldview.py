@@ -31,6 +31,7 @@ from vhrharmonize.cli.cli_helpers import _load_yaml_config
 from vhrharmonize.io.geospatial import calculate_raster_overviews, get_image_percentile_value
 from vhrharmonize.io.workflow_utils import (
     plan_step_outputs,
+    remove_output_files,
     resolve_output_dir,
     resolve_temp_dir,
     resolve_relative_to_input,
@@ -909,16 +910,6 @@ def _enabled_raster_steps(args: argparse.Namespace) -> List[str]:
     return enabled_steps
 
 
-def _step_outputs_exist(output_paths: List[str]) -> bool:
-    """Return whether all output paths exist.
-    Args:
-        output_paths: Output file paths to check.
-    Returns:
-        True when every output path exists.
-    """
-    return bool(output_paths) and all(os.path.exists(path) for path in output_paths)
-
-
 def _is_gdal_raster_path(path: str) -> bool:
     """Return whether a path should be validated as a GDAL raster."""
     extension = os.path.splitext(path)[1].lower()
@@ -935,10 +926,11 @@ def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tu
     """
     if not os.path.exists(path):
         return False, "missing"
-    dataset = gdal.OpenEx(path, gdal.OF_RASTER)
-    if dataset is None:
-        return False, "GDAL open failed"
+    dataset = None
     try:
+        dataset = gdal.OpenEx(path, gdal.OF_RASTER)
+        if dataset is None:
+            return False, "GDAL open failed"
         band_count = dataset.RasterCount
         width = dataset.RasterXSize
         height = dataset.RasterYSize
@@ -1076,6 +1068,54 @@ def _sample_pixel_is_valid(value: object, nodata: float | int | None, mask_value
     return sample != nodata
 
 
+def _json_file_is_valid(path: str) -> tuple[bool, str | None]:
+    """Check that a file can be parsed as JSON without validating its contents."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return False, str(exc)
+    return True, None
+
+
+def _existing_output_failures(
+    output_paths: List[str],
+    *,
+    check_validity: bool,
+    validity_check_grid_size: int,
+    log_to_console: bool,
+    step: str,
+    scene_basename: str | None = None,
+) -> Dict[str, str]:
+    """Inspect every expected output without changing files, including partial sets."""
+    failures: Dict[str, str] = {}
+    for output_path in output_paths:
+        if not os.path.exists(output_path):
+            failures[output_path] = "missing"
+            continue
+        if not check_validity:
+            continue
+        if os.path.splitext(output_path)[1].lower() == ".json":
+            is_valid, reason = _json_file_is_valid(output_path)
+        elif _is_gdal_raster_path(output_path):
+            is_valid, reason = _gdal_raster_is_valid(
+                output_path,
+                validity_check_grid_size=validity_check_grid_size,
+            )
+        else:
+            continue
+        if not is_valid:
+            failures[output_path] = reason or "invalid"
+            _log_step_plan(
+                step,
+                outputs=[output_path],
+                message=f"Existing output invalid ({reason})",
+                enabled=log_to_console,
+                scene_basename=scene_basename,
+            )
+    return failures
+
+
 def _existing_outputs_are_reusable(
     output_paths: List[str],
     *,
@@ -1085,37 +1125,43 @@ def _existing_outputs_are_reusable(
     step: str,
     scene_basename: str | None = None,
 ) -> bool:
-    """Return whether existing outputs can be reused.
-    Args:
-        output_paths: Output file paths expected for reuse.
-        check_validity: Whether GDAL-readable raster outputs must be valid.
-        log_to_console: Whether to log validation failures.
-        step: Step name used for concise logging.
-        scene_basename: Optional scene basename for the log prefix.
-    Returns:
-        True when all outputs exist and enabled validity checks pass.
+    """Return whether all outputs exist and pass enabled checks, without deleting files."""
+    return bool(output_paths) and not _existing_output_failures(
+        output_paths,
+        check_validity=check_validity,
+        validity_check_grid_size=validity_check_grid_size,
+        log_to_console=log_to_console,
+        step=step,
+        scene_basename=scene_basename,
+    )
+
+
+def _prepare_step_outputs(
+    output_paths: List[str],
+    *,
+    input_paths: List[str],
+    args: argparse.Namespace,
+    step: str,
+    scene_basename: str | None = None,
+    remove_invalid: bool = True,
+) -> bool:
+    """Check reuse and remove invalid outputs before executing a processing step.
+
+    Valid outputs are preserved. With validity checking disabled, files are only
+    checked for existence. Inspection/counting code must use the read-only helper.
+    Set remove_invalid=False when the caller will bypass generation of these outputs.
     """
-    if not _step_outputs_exist(output_paths):
-        return False
-    if not check_validity:
-        return True
-    for output_path in output_paths:
-        if not _is_gdal_raster_path(output_path):
-            continue
-        is_valid, reason = _gdal_raster_is_valid(
-            output_path,
-            validity_check_grid_size=validity_check_grid_size,
-        )
-        if not is_valid:
-            _log_step_plan(
-                step,
-                outputs=[output_path],
-                message=f"Existing output invalid; rerunning ({reason})",
-                enabled=log_to_console,
-                scene_basename=scene_basename,
-            )
-            return False
-    return True
+    failures = _existing_output_failures(
+        output_paths,
+        check_validity=args.run_from_existing_check_validity,
+        validity_check_grid_size=args.validity_check_grid_size,
+        log_to_console=args.log_to_console,
+        step=step,
+        scene_basename=scene_basename,
+    )
+    if remove_invalid and args.run_from_existing_check_validity and failures:
+        remove_output_files(failures, input_paths=input_paths)
+    return args.run_from_existing and bool(output_paths) and not failures
 
 
 def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) -> Dict[str, str]:
@@ -1693,12 +1739,11 @@ def _run_named_radiometric_group(
         output_root=output_root,
     )
     # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
-    reuse_single_output = args.run_from_existing and not radiometric_kwargs.get("merge_rasters_output_tiles", False)
-    if reuse_single_output and _existing_outputs_are_reusable(
+    single_output = not radiometric_kwargs.get("merge_rasters_output_tiles", False)
+    if single_output and _prepare_step_outputs(
         [group_output_path],
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=child_inputs,
+        args=args,
         step="radiometric",
     ):
         _log_step_plan(
@@ -1769,12 +1814,11 @@ def _run_default_radiometric_normalization(
     radiometric_kwargs = _build_radiometric_kwargs(args)
     group_output_path = str(radiometric_kwargs.get("shared_output_image_path") or output_path)
     # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
-    reuse_single_output = args.run_from_existing and not radiometric_kwargs.get("merge_rasters_output_tiles", False)
-    if reuse_single_output and _existing_outputs_are_reusable(
+    single_output = not radiometric_kwargs.get("merge_rasters_output_tiles", False)
+    if single_output and _prepare_step_outputs(
         [group_output_path],
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=available_paths,
+        args=args,
         step="radiometric",
     ):
         _log_step_plan(
@@ -2004,11 +2048,10 @@ def _run_file_source_step(state: SceneWorkflowState, args: argparse.Namespace) -
     output_paths = list(path_map.values())
     expected_outputs = _get_expected_scene_step_outputs(state, args)
 
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=list(path_map),
+        args=args,
         step="file_source",
         scene_basename=state.scene.primary_basename,
     ):
@@ -2087,11 +2130,10 @@ def _run_fetch_atmosphere_step(state: SceneWorkflowState, args: argparse.Namespa
         extension=".json",
         skip_existing=False,
     )
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         plan.output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=[mul_image.tif_file],
+        args=args,
         step="fetch_atmosphere",
         scene_basename=state.scene.primary_basename,
     ):
@@ -2189,13 +2231,16 @@ def _run_atmospheric_correction_step(state: SceneWorkflowState, args: argparse.N
         extension=_get_atmospheric_extension(args),
         skip_existing=False,
     )
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         plan.output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=plan.input_paths,
+        args=args,
         step="atmospheric_correction",
         scene_basename=state.scene.primary_basename,
+        remove_invalid=(
+            args.atmospheric_method != "none"
+            and not (args.atmospheric_method == "flaash" and args.skip_flaash)
+        ),
     ):
         _log_step_plan(
             "atmospheric_correction",
@@ -2349,11 +2394,10 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
             suffix=args.orthorectification_output_suffix,
             skip_existing=False,
         )
-        if args.run_from_existing and _existing_outputs_are_reusable(
+        if _prepare_step_outputs(
             plan.output_paths,
-            check_validity=args.run_from_existing_check_validity,
-            validity_check_grid_size=args.validity_check_grid_size,
-            log_to_console=args.log_to_console,
+            input_paths=plan.input_paths + [resolved_dem_file_path],
+            args=args,
             step="orthorectification",
             scene_basename=state.scene.primary_basename,
         ):
@@ -2408,11 +2452,10 @@ def _run_orthorectification_step(state: SceneWorkflowState, args: argparse.Names
                 suffix=args.orthorectification_pan_output_suffix,
                 skip_existing=False,
             )
-            if args.run_from_existing and _existing_outputs_are_reusable(
+            if _prepare_step_outputs(
                 pan_plan.output_paths,
-                check_validity=args.run_from_existing_check_validity,
-                validity_check_grid_size=args.validity_check_grid_size,
-                log_to_console=args.log_to_console,
+                input_paths=pan_plan.input_paths + [resolved_dem_file_path],
+                args=args,
                 step="orthorectification_pan",
                 scene_basename=state.scene.primary_basename,
             ):
@@ -2481,11 +2524,10 @@ def _run_pansharpen_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         suffix=args.pansharpen_output_suffix,
         skip_existing=False,
     )
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         plan.output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=plan.input_paths + [state.pan_ortho_path],
+        args=args,
         step="pansharpen",
         scene_basename=state.scene.primary_basename,
     ):
@@ -2554,11 +2596,10 @@ def _run_cloud_mask_step(state: SceneWorkflowState, args: argparse.Namespace) ->
         skip_existing=False,
     )
 
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         output_plan.output_paths + mask_plan.output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=output_plan.input_paths,
+        args=args,
         step="cloud_mask",
         scene_basename=state.scene.primary_basename,
     ):
@@ -2664,11 +2705,10 @@ def _run_alignment_step(state: SceneWorkflowState, args: argparse.Namespace) -> 
         suffix=args.alignment_output_suffix,
         skip_existing=False,
     )
-    if args.run_from_existing and _existing_outputs_are_reusable(
+    if _prepare_step_outputs(
         plan.output_paths,
-        check_validity=args.run_from_existing_check_validity,
-        validity_check_grid_size=args.validity_check_grid_size,
-        log_to_console=args.log_to_console,
+        input_paths=plan.input_paths + [args.alignment_fixed_image],
+        args=args,
         step="alignment",
         scene_basename=state.scene.primary_basename,
     ):

@@ -38,13 +38,11 @@ Each step save location can point to:
 
 If `temp_dir` is not set, the workflow creates a real temporary directory. If `keep_temp_dir` is false, temp-saved files are deleted after a scene finishes.
 
-The workflow also supports:
-
-- step-level reuse with `run_from_existing`
-- scene-level skipping with `skip_existing`
-- GDAL readability checks for reused rasters with `run_from_existing_check_validity`
-- GDAL readability checks before whole-scene skips with `skip_existing_check_validity`
-- grouped per-scene multiprocessing with `concurrent_processing`
+- `run_from_existing`: Reuse step outputs. Tiled radiometric outputs and seamline metadata retain incremental resume behavior.
+- `skip_existing`: Skip completed scenes.
+- `run_from_existing_check_validity`: Check every expected output for GDAL raster readability or atmosphere JSON syntax, even if others are missing. JSON checks exclude required fields and atmospheric values. At each step, automatically remove invalid primary outputs before rerunning and refetch invalid atmosphere JSON. Preserve valid files, sidecars, and source inputs. Startup inspection and upload/download planning never delete files.
+- `skip_existing_check_validity`: Apply the same checks before skipping scenes, without deleting files.
+- `concurrent_processing`: Group multiprocessing tasks by scene.
 
 ## Processing Steps
 

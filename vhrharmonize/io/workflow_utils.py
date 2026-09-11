@@ -18,6 +18,33 @@ class StepOutputPlan:
     pending_output_paths: List[str]
 
 
+def remove_output_files(output_paths: Iterable[str], *, input_paths: Iterable[str] = ()) -> None:
+    """Remove only the named output files without opening corrupt datasets.
+
+    Sidecars are left untouched. Refuse to remove any input, including aliases
+    and hard links. Directories and files referenced by VRTs are never deleted.
+    """
+    paths = list(dict.fromkeys(os.fspath(path) for path in output_paths))
+    inputs = [path for path in input_paths if path]
+    # Check the entire removal set before changing any files.
+    for path in paths:
+        if os.path.isdir(path) and not os.path.islink(path):
+            raise IsADirectoryError(f"Cannot remove output directory: {path}")
+        for input_path in inputs:
+            same_path = os.path.realpath(path) == os.path.realpath(input_path)
+            same_file = (
+                os.path.exists(path) and os.path.exists(input_path)
+                and os.path.samefile(path, input_path)
+            )
+            if same_path or same_file:
+                raise ValueError(f"Cannot remove output that is also an input: {path}")
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def resolve_relative_to_input(path: str, input_folder: str) -> str:
     """Resolve a path against an input folder.
     Args:
@@ -142,6 +169,7 @@ __all__ = [
     "StepOutputPlan",
     "build_output_path_from_input",
     "plan_step_outputs",
+    "remove_output_files",
     "resolve_output_dir",
     "resolve_temp_dir",
     "resolve_relative_to_input",

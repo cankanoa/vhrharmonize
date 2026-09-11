@@ -17,6 +17,7 @@ from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 
 from vhrharmonize.io.geospatial import get_image_percentile_value
+from vhrharmonize.io.workflow_utils import remove_output_files
 from vhrharmonize.preprocess.fetch_external_data import\
     fetch_power_atmosphere_for_bbox
 from vhrharmonize.preprocess.helpers import _log, _logged_operation
@@ -318,6 +319,8 @@ class Py6SCorrector:
         missing = [k for k in required if kwargs.get(k) is None]
         if missing:
             raise ValueError(f"Missing required Py6S kwargs: {', '.join(missing)}")
+        if os.path.exists(output_raster) and os.path.samefile(input_raster, output_raster):
+            raise ValueError("Py6S input and output rasters must be different files.")
 
         solar_zenith = float(kwargs["solar_zenith"])
         solar_azimuth = float(kwargs["solar_azimuth"])
@@ -634,8 +637,7 @@ def _execute_flaash_task(
     """Execute ENVI FLAASH with the provided parameter dictionary."""
     _log("Processing", enabled=log_to_console, step="flaash")
     if output_image_path_to_delete:
-        if os.path.exists(output_image_path_to_delete):
-            os.remove(output_image_path_to_delete)
+        remove_output_files([output_image_path_to_delete])
     task = envi_engine.task("FLAASH")
     task.execute(flaash_params)
     with open(output_params_path, "w", encoding="utf-8") as file:

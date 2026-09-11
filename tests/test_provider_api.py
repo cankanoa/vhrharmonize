@@ -96,7 +96,7 @@ def test_scene_initialization_and_reused_steps_do_not_materialize_bounds(make_wo
     materialize = Mock(side_effect=AssertionError("unused bounds were materialized"))
     monkeypatch.setattr(worldview, "materialize_scene_bounds", materialize)
     state = worldview._initialize_scene_state(scene, args)
-    monkeypatch.setattr(worldview, "_existing_outputs_are_reusable", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worldview, "_prepare_step_outputs", lambda *args, **kwargs: True)
     monkeypatch.setattr(worldview, "_read_json", lambda path: {"source": "existing"})
     worldview._run_fetch_atmosphere_step(state, args)
     worldview._run_atmospheric_correction_step(state, args)

@@ -216,6 +216,7 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
         radiometric_normalization_kwargs_json=None,
         run_from_existing=False,
         run_from_existing_check_validity=False,
+        validity_check_grid_size=0,
         log_to_console=False,
         keep_temp_dir=False,
         dtype="int16",

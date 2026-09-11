@@ -42,8 +42,8 @@ def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, in
     try:
         _log_image_start(scene_basename, inputs, outputs, enabled=enabled)
         yield
-    except BaseException:
-        _log("Failed", enabled=enabled, scene_basename=scene_basename)
+    except BaseException as exc:
+        _log(f"Failed | {type(exc).__name__}: {exc}", enabled=enabled, scene_basename=scene_basename)
         raise
     else:
         _log_image_completed(scene_basename, index, total, enabled=enabled)
