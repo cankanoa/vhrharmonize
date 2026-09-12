@@ -1,4 +1,4 @@
-"""CLI for radiometric normalization via SpectralMatch."""
+"""CLI for SpectralMatch via SpectralMatch."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import sys
 from typing import Any
 
-from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
+from vhrharmonize.preprocess.spectralmatch import spectralmatch
 
 
 def _coerce_unknown_arg_value(raw_value: str) -> Any:
@@ -104,18 +104,18 @@ def _json_dict(value: str | None) -> dict[str, Any]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the radiometric normalization CLI parser.
+    """Build the SpectralMatch CLI parser.
     Args:
         None.
     Returns:
         Configured argument parser.
     """
-    parser = argparse.ArgumentParser(description="Run radiometric normalization via SpectralMatch.")
+    parser = argparse.ArgumentParser(description="Run SpectralMatch via SpectralMatch.")
     parser.add_argument("--input-image", action="append", required=True, help="Input raster. Repeat for multiple images.")
     parser.add_argument(
         "--output-image",
         required=True,
-        help="Merged normalized output image path.",
+        help="Output file or folder matching the final SpectralMatch step.",
     )
     parser.add_argument("--temp-dir", help="Optional shared temp directory.")
     parser.add_argument("--delete-temp-dir", action=argparse.BooleanOptionalAction, default=True)
@@ -138,7 +138,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the radiometric normalization CLI.
+    """Run the SpectralMatch CLI.
     Args:
         argv: Optional command line arguments.
     Returns:
@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     match_kwargs = _collect_prefixed_kwargs(args, "match_")
     extra_kwargs.update(match_kwargs)
 
-    output = radiometric_normalization(
+    output = spectralmatch(
         shared_input_images=args.input_image,
         shared_output_image_path=args.output_image,
         shared_temp_dir=args.temp_dir,

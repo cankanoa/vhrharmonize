@@ -62,7 +62,7 @@ vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
 vhr-orthorectification --help
-vhr-radiometric-normalization --help
+vhr-spectralmatch --help
 vhr-py6s --help
 ```
 

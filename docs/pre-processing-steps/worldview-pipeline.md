@@ -39,10 +39,13 @@ Each step save location can point to:
 If `temp_dir` is not set, the workflow creates a real temporary directory.
 
 - `delete_temp_dir`: Delete workflow temp directories after all scene and aggregate processing succeeds. Defaults to true; false retains them. Directories containing source inputs or saved outputs are preserved.
-- `run_from_existing`: Reuse step outputs. Tiled radiometric outputs and seamline metadata retain incremental resume behavior.
+- `run_from_existing`: Reuse VHRHarmonize step outputs. Seamline metadata retains incremental resume behavior; SpectralMatch handles its own reuse.
 - `skip_existing`: Skip completed scenes.
-- `run_from_existing_check_validity`: Check every expected output for GDAL raster readability or atmosphere JSON syntax, even if others are missing. JSON checks exclude required fields and atmospheric values. At each step, automatically remove invalid primary outputs before rerunning and refetch invalid atmosphere JSON. Preserve valid files, sidecars, and source inputs. Startup inspection and upload/download planning never delete files.
+- `run_from_existing_check_validity`: Check VHRHarmonize step outputs for GDAL raster readability, TIFF strip/tile bounds (including internal overviews), or atmosphere JSON syntax, even if others are missing. SpectralMatch outputs are excluded. JSON checks exclude required fields and atmospheric values. At each step, automatically remove invalid primary outputs before rerunning and refetch invalid atmosphere JSON. Preserve valid files, sidecars, and source inputs. Startup inspection and upload/download planning never delete files.
 - `skip_existing_check_validity`: Apply the same checks before skipping scenes, without deleting files.
+- `run_spectralmatch`: Call SpectralMatch after scene processing. VHRHarmonize does not inspect, validate, delete invalid outputs, or skip its outputs; use `match_shared_resume_from_steps` for reuse.
+- `save_spectralmatch`: Output file or folder matching the last `match_steps` entry. Use a file for a merged mosaic, a folder for tiled merges or multi-raster steps, and a vector file for seamline steps.
+- `calculate_overviews_spectralmatch`: Enable the last overview-capable entry in `match_steps`: joint coregistration, global regression, local block adjustment, or merge. Requires overview scales and errors if any explicit `match_*_build_overviews` is true. Uses SpectralMatch's default step order when `match_steps` is omitted.
 - `delete_temp_steps_proactively`: Delete individual temp step files and sidecars once non-temp outputs pass the scene-skip validity checks, including skipped scenes with incomplete temp steps. Leaves directories in place and operates independently of `delete_temp_dir`. Defaults to false. Preserves source/configured inputs and rasters needed by pending aggregate steps. Temp-only scenes require a saved non-temp aggregate output before per-file cleanup.
 - `concurrent_processing`: Group multiprocessing tasks by scene.
 
@@ -59,6 +62,6 @@ The scene pipeline works in this order:
 7. Optional cloud masking
 8. Optional alignment to a fixed raster
 9. Optional seamline metadata vector after scene-level raster steps complete
-10. Optional radiometric normalization after scene-level raster steps complete
+10. Optional SpectralMatch after scene-level raster steps complete
 
 At the end of the scene run, the workflow writes a scene metadata JSON beside the final raster output. If the scene is skipped because of cloud cover filtering, it writes a short metadata JSON explaining the skip.

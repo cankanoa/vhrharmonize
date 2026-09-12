@@ -24,7 +24,7 @@ pip install "vhrharmonize[flaash]"
 pip install "vhrharmonize[orthorectification]"
 pip install "vhrharmonize[pansharpen]"
 pip install "vhrharmonize[align]"
-pip install "vhrharmonize[radiometric-normalization]"
+pip install "vhrharmonize[spectralmatch]"
 pip install "vhrharmonize[docs]"
 pip install "vhrharmonize[all]"
 ```
@@ -60,7 +60,7 @@ pip install -e ".[flaash]"
 pip install -e ".[orthorectification]"
 pip install -e ".[pansharpen]"
 pip install -e ".[align]"
-pip install -e ".[radiometric-normalization]"
+pip install -e ".[spectralmatch]"
 pip install -e ".[docs]"
 pip install -e ".[all]"
 ```
@@ -79,6 +79,6 @@ vhr-cloudmask-raster --help
 vhr-pansharpen-orthos --help
 vhr-align-image-pair --help
 vhr-orthorectification --help
-vhr-radiometric-normalization --help
+vhr-spectralmatch --help
 vhr-py6s --help
 ```

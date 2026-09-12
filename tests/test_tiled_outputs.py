@@ -50,15 +50,15 @@ def test_directory_download_resumes_as_one_group(tmp_path, monkeypatch, make_tes
 
 @pytest.mark.parametrize('steps', [['merge'], ['align', 'merge']])
 def test_pipeline_runs_real_tiled_merge(tmp_path, make_test_raster, steps):
-    rad = importlib.import_module('vhrharmonize.preprocess.radiometric_normalization')
+    rad = importlib.import_module('vhrharmonize.preprocess.spectralmatch')
     raster = make_test_raster(tmp_path / 'input.tif', width=32, height=32)
     output = tmp_path / 'tiles'
     worldview = importlib.import_module('vhrharmonize.cli.worldview')
-    kwargs = worldview._build_radiometric_kwargs(Namespace(
-        radiometric_normalization_kwargs_json=None, overview_scales=[2],
+    kwargs = worldview._build_spectralmatch_kwargs(Namespace(
+        spectralmatch_kwargs_json=None, overview_scales=[2],
         match_merge_rasters_build_overviews=True,
     ))
-    result = rad.radiometric_normalization(
+    result = rad.spectralmatch(
         [str(raster)], str(output), steps=steps,
         shared_image_threads=1, shared_io_threads=1, shared_tile_threads=1,
         merge_rasters_output_tiles=True, shared_window_size=16,
@@ -86,8 +86,8 @@ def test_tiled_group_plan_keeps_one_folder_mapping(tmp_path):
 @pytest.mark.parametrize('override', [[2, 4], [], None])
 def test_shared_scales_override_workflow_overviews(override):
     worldview = importlib.import_module('vhrharmonize.cli.worldview')
-    kwargs = worldview._build_radiometric_kwargs(Namespace(
-        radiometric_normalization_kwargs_json=None, overview_scales=[2, 4, 8],
+    kwargs = worldview._build_spectralmatch_kwargs(Namespace(
+        spectralmatch_kwargs_json=None, overview_scales=[2, 4, 8],
         match_shared_window_scales=override,
     ))
     assert kwargs['shared_window_scales'] == override
@@ -95,7 +95,7 @@ def test_shared_scales_override_workflow_overviews(override):
 
 
 def test_match_yaml_options_reach_pipeline_with_nulls_and_tuple_types(tmp_path, monkeypatch):
-    rad = importlib.import_module('vhrharmonize.preprocess.radiometric_normalization')
+    rad = importlib.import_module('vhrharmonize.preprocess.spectralmatch')
     from spectralmatch.types_and_validation import Match
     calls = []
 
@@ -116,11 +116,11 @@ local_block_adjustment_load_block_maps: [null, [one.tif, two.tif]]
 shared_window_scales: null
 ''')
     worldview = importlib.import_module('vhrharmonize.cli.worldview')
-    kwargs = worldview._build_radiometric_kwargs(Namespace(
-        radiometric_normalization_kwargs_json=None, overview_scales=[2, 4],
+    kwargs = worldview._build_spectralmatch_kwargs(Namespace(
+        spectralmatch_kwargs_json=None, overview_scales=[2, 4],
         **{'match_' + key: value for key, value in options.items()},
     ))
-    rad.radiometric_normalization(['input.tif'], str(tmp_path / 'out.tif'), **kwargs)
+    rad.spectralmatch(['input.tif'], str(tmp_path / 'out.tif'), **kwargs)
     assert len(calls) == 1
     assert calls[0]['global_regression_pif_method'] == 'flood_from_match_points'
     assert calls[0]['global_regression_pif_max_samples'] is None
@@ -128,14 +128,13 @@ shared_window_scales: null
     assert calls[0]['local_block_adjustment_load_block_maps'] == (None, ['one.tif', 'two.tif'])
 
 
-@pytest.mark.parametrize('final_file_overviews', [False, True])
-def test_pipeline_overview_flags_are_independent(final_file_overviews):
+def test_explicit_pipeline_overview_flags_pass_through_when_automatic_flag_is_off():
     worldview = importlib.import_module('vhrharmonize.cli.worldview')
     args = Namespace(
-        radiometric_normalization_kwargs_json=None,
-        calculate_overviews_radiometric_normalization=final_file_overviews,
+        spectralmatch_kwargs_json=None,
+        calculate_overviews_spectralmatch=False,
     )
-    kwargs = worldview._build_radiometric_kwargs(args)
+    kwargs = worldview._build_spectralmatch_kwargs(args)
     assert not any(key.endswith('_build_overviews') for key in kwargs)
 
     flags = {
@@ -146,5 +145,5 @@ def test_pipeline_overview_flags_are_independent(final_file_overviews):
     }
     for key, value in flags.items():
         setattr(args, 'match_' + key, value)
-    kwargs = worldview._build_radiometric_kwargs(args)
+    kwargs = worldview._build_spectralmatch_kwargs(args)
     assert {key: kwargs[key] for key in flags} == flags

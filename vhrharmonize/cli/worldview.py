@@ -23,6 +23,7 @@ from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional
 
 from osgeo import gdal
+from tifffile import TiffFile
 from wcmatch import fnmatch as wc_fnmatch
 from wcmatch import glob
 
@@ -58,7 +59,7 @@ from vhrharmonize.preprocess.orthorectification import (
     resolve_output_resolution_for_crs,
 )
 from vhrharmonize.preprocess.pansharpening import pansharpen_image
-from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
+from vhrharmonize.preprocess.spectralmatch import DEFAULT_PIPELINE_STEPS, spectralmatch
 from vhrharmonize.preprocess.seamline_metadata import write_seamline_metadata_gpkg
 from vhrharmonize.providers.worldview import (
     WorldViewImage,
@@ -74,6 +75,13 @@ RASTER_STEP_ORDER = [
     "cloud_mask",
     "alignment",
 ]
+
+SPECTRALMATCH_OVERVIEW_STEPS = {
+    "joint_coregistration": "joint_coregistration_build_overviews",
+    "global_regression": "global_regression_build_overviews",
+    "local_block_adjustment": "local_block_adjustment_build_overviews",
+    "merge": "merge_rasters_build_overviews",
+}
 
 WCMATCH_INPUT_FLAGS = (
     glob.GLOBSTAR
@@ -274,27 +282,48 @@ def _collect_prefixed_kwargs(
     return collected
 
 
-def _build_radiometric_kwargs(args: argparse.Namespace) -> Dict:
-    """Build radiometric normalization keyword arguments.
+def _build_spectralmatch_kwargs(args: argparse.Namespace) -> Dict:
+    """Build SpectralMatch keyword arguments.
     Args:
         args: Parsed CLI arguments.
     Returns:
-        Radiometric normalization keyword arguments.
+        SpectralMatch keyword arguments.
     """
-    radiometric_kwargs = _parse_json_dict(args.radiometric_normalization_kwargs_json)
+    spectralmatch_kwargs = _parse_json_dict(args.spectralmatch_kwargs_json)
     match_kwargs = _collect_prefixed_kwargs(args, "match_")
     # Explicit null disables these upstream defaults instead of omitting the option.
     for key in ("shared_window_scales", "global_regression_pif_max_samples", "global_regression_pif_min_samples"):
         if hasattr(args, "match_" + key):
             match_kwargs[key] = getattr(args, "match_" + key)
-    radiometric_kwargs.update(match_kwargs)
-    radiometric_kwargs.setdefault("delete_temp_dir", getattr(args, "delete_temp_dir", True))
+    spectralmatch_kwargs.update(match_kwargs)
+    spectralmatch_kwargs.setdefault("delete_temp_dir", getattr(args, "delete_temp_dir", True))
     overview_scales = getattr(args, "overview_scales", None)
     if overview_scales is not None:
-        radiometric_kwargs.setdefault("shared_window_scales", tuple(overview_scales))
+        spectralmatch_kwargs.setdefault("shared_window_scales", tuple(overview_scales))
     for key, value in _spectralmatch_runtime_kwargs(args).items():
-        radiometric_kwargs.setdefault(key, value)
-    return radiometric_kwargs
+        spectralmatch_kwargs.setdefault(key, value)
+    if getattr(args, "calculate_overviews_spectralmatch", False):
+        conflicts = [
+            "match_" + key for key, value in spectralmatch_kwargs.items()
+            if key.endswith("_build_overviews") and value is True
+        ]
+        if conflicts:
+            raise ValueError(
+                "calculate_overviews_spectralmatch cannot be combined with enabled "
+                + ", ".join(conflicts)
+            )
+        steps = spectralmatch_kwargs.get("steps", DEFAULT_PIPELINE_STEPS)
+        overview_option = next(
+            (SPECTRALMATCH_OVERVIEW_STEPS[step] for step in reversed(steps)
+             if step in SPECTRALMATCH_OVERVIEW_STEPS),
+            None,
+        )
+        if overview_option is None:
+            raise ValueError("calculate_overviews_spectralmatch requires an overview-capable step in match_steps.")
+        if not spectralmatch_kwargs.get("shared_window_scales"):
+            raise ValueError("calculate_overviews_spectralmatch requires overview_scales or match_shared_window_scales.")
+        spectralmatch_kwargs[overview_option] = True
+    return spectralmatch_kwargs
 
 
 def _spectralmatch_runtime_kwargs(args: argparse.Namespace) -> Dict:
@@ -315,12 +344,12 @@ def _spectralmatch_runtime_kwargs(args: argparse.Namespace) -> Dict:
     }
 
 
-def _radiometric_steps_include(args: argparse.Namespace, step_name: str) -> bool:
+def _spectralmatch_steps_include(args: argparse.Namespace, step_name: str) -> bool:
     """Return whether the SpectralMatch steps list includes a step."""
     steps = getattr(args, "match_steps", None)
     if steps is None:
-        radiometric_kwargs = _parse_json_dict(getattr(args, "radiometric_normalization_kwargs_json", None))
-        steps = radiometric_kwargs.get("steps")
+        spectralmatch_kwargs = _parse_json_dict(getattr(args, "spectralmatch_kwargs_json", None))
+        steps = spectralmatch_kwargs.get("steps")
     if steps is None:
         return False
     if isinstance(steps, str):
@@ -435,6 +464,9 @@ def _normalize_config_defaults(config_defaults: Dict) -> Dict:
     normalized = dict(config_defaults)
     if "keep_temp_dir" in normalized:
         raise ValueError("Unrecognized config key: keep_temp_dir")
+    retired = [key for key in normalized if "radiometric_normalization" in key]
+    if retired:
+        raise ValueError("Use spectralmatch instead of radiometric_normalization in config keys: " + ", ".join(retired))
     if "input_file_glob" in normalized:
         normalized["input_file_glob"] = _normalize_input_file_glob_entries(normalized["input_file_glob"])
     for list_key in ("filter_basename", "match_steps"):
@@ -935,8 +967,30 @@ def _is_gdal_raster_path(path: str) -> bool:
     return extension in {".tif", ".tiff", ".dat", ".img", ".vrt"}
 
 
+def _tiff_truncation_reason(path: str) -> str | None:
+    """Check strip/tile bounds in all TIFF image directories without decoding pixels."""
+    try:
+        with TiffFile(path) as tif:
+            file_size = tif.filehandle.size
+            pending = [tif.pages]
+            while pending:
+                for page in pending.pop():
+                    for offset, byte_count in zip(page.dataoffsets, page.databytecounts):
+                        if offset and byte_count and offset + byte_count > file_size:
+                            return (
+                                f"Truncated TIFF: offset {offset} + byte count {byte_count} "
+                                f"exceeds file size {file_size} (IFD at {page.offset})"
+                            )
+                    if page.pages is not None:
+                        pending.append(page.pages)
+    except (OSError, ValueError, NotImplementedError, struct.error):
+        # Inconclusive TIFF inspection: let the existing GDAL checks decide.
+        pass
+    return None
+
+
 def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tuple[bool, str | None]:
-    """Check that a raster can be opened and read by GDAL.
+    """Check raster readability and TIFF strip/tile bounds.
     Args:
         path: Raster path to validate.
         validity_check_grid_size: Pixel sampling grid size. 0 disables pixel validity sampling.
@@ -950,6 +1004,10 @@ def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tu
         dataset = gdal.OpenEx(path, gdal.OF_RASTER)
         if dataset is None:
             return False, "GDAL open failed"
+        if dataset.GetDriver().ShortName == "GTiff":
+            reason = _tiff_truncation_reason(path)
+            if reason:
+                return False, reason
         band_count = dataset.RasterCount
         width = dataset.RasterXSize
         height = dataset.RasterYSize
@@ -1268,10 +1326,10 @@ def _resolve_scene_step_dirs(args: argparse.Namespace, scene: WorldViewScene) ->
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
         )
-    if args.run_radiometric_normalization:
-        step_dirs["radiometric_normalization"] = _resolve_single_output_save_path(
-            args.save_radiometric_normalization,
-            default="$temp/radiometric_root.tif",
+    if args.run_spectralmatch:
+        step_dirs["spectralmatch"] = _resolve_single_output_save_path(
+            args.save_spectralmatch,
+            default="$temp/spectralmatch_root.tif",
             temp_root=resolved_temp_root,
             output_root=resolved_output_root,
             relative_base_folder=relative_output_base,
@@ -1600,7 +1658,7 @@ def _scene_skip_required_outputs(state: SceneWorkflowState, args: argparse.Names
 
 
 def _normalize_group_by_basename_spec(raw_spec: object) -> object:
-    """Normalize a radiometric grouping specification.
+    """Normalize a spectralmatch grouping specification.
     Args:
         raw_spec: Raw grouping specification value.
     Returns:
@@ -1613,47 +1671,47 @@ def _normalize_group_by_basename_spec(raw_spec: object) -> object:
         if stripped.startswith("{"):
             return _normalize_group_by_basename_spec(json.loads(stripped))
         raise ValueError("group_by_basename must be a JSON object such as {'name.tif': ['auto:*123*', 'file:/tmp/ref.tif']}.")
-    return _validate_radiometric_group_spec(raw_spec)
+    return _validate_spectralmatch_group_spec(raw_spec)
 
 
-def _validate_radiometric_group_spec(group_spec: object) -> Dict[str, object]:
-    """Validate the named radiometric grouping JSON shape."""
+def _validate_spectralmatch_group_spec(group_spec: object) -> Dict[str, object]:
+    """Validate the named spectralmatch grouping JSON shape."""
     if not isinstance(group_spec, dict) or not group_spec:
         raise ValueError("group_by_basename must be a non-empty object with output filename keys.")
     normalized: Dict[str, object] = {}
     for output_name, value in group_spec.items():
         if not isinstance(output_name, str) or not output_name:
-            raise ValueError("Each radiometric group key must be a non-empty output filename string.")
-        normalized[output_name] = _validate_radiometric_group_value(value)
+            raise ValueError("Each spectralmatch group key must be a non-empty output filename string.")
+        normalized[output_name] = _validate_spectralmatch_group_value(value)
     return normalized
 
 
-def _validate_radiometric_group_value(value: object) -> object:
-    """Validate a radiometric group value."""
+def _validate_spectralmatch_group_value(value: object) -> object:
+    """Validate a spectralmatch group value."""
     if isinstance(value, str):
         if not (value.startswith("auto:") or value.startswith("file:")):
-            raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
+            raise ValueError("SpectralMatch group strings must start with 'auto:' or 'file:'.")
         if value in {"auto:", "file:"}:
-            raise ValueError("Radiometric group strings must include a pattern or path after the prefix.")
+            raise ValueError("SpectralMatch group strings must include a pattern or path after the prefix.")
         return value
     if isinstance(value, list):
         if not value:
-            raise ValueError("Radiometric group lists must not be empty.")
-        return [_validate_radiometric_group_item(item) for item in value]
-    raise ValueError("Radiometric group values must be strings or lists.")
+            raise ValueError("SpectralMatch group lists must not be empty.")
+        return [_validate_spectralmatch_group_item(item) for item in value]
+    raise ValueError("SpectralMatch group values must be strings or lists.")
 
 
-def _validate_radiometric_group_item(item: object) -> object:
-    """Validate an item inside a radiometric group list."""
+def _validate_spectralmatch_group_item(item: object) -> object:
+    """Validate an item inside a spectralmatch group list."""
     if isinstance(item, str):
-        return _validate_radiometric_group_value(item)
+        return _validate_spectralmatch_group_value(item)
     if isinstance(item, dict):
-        return _validate_radiometric_group_spec(item)
-    raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
+        return _validate_spectralmatch_group_spec(item)
+    raise ValueError("SpectralMatch group list items must be prefixed strings or nested group objects.")
 
 
-def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
-    """Match radiometric input patterns against available paths.
+def _match_spectralmatch_input_patterns(pattern: str, available_paths: List[str]) -> List[str]:
+    """Match spectralmatch input patterns against available paths.
     Args:
         pattern: Glob-like pattern to match.
         available_paths: Available scene output paths.
@@ -1666,18 +1724,18 @@ def _match_radiometric_input_patterns(pattern: str, available_paths: List[str]) 
         if wc_fnmatch.fnmatch(os.path.basename(path), pattern, flags=WCMATCH_GROUP_FLAGS)
     ]
     if not matches:
-        raise ValueError(f"No radiometric normalization inputs matched pattern: {pattern}")
+        raise ValueError(f"No SpectralMatch inputs matched pattern: {pattern}")
     return matches
 
 
-def _resolve_radiometric_input_token(token: str, available_paths: List[str]) -> List[str]:
-    """Resolve a prefixed radiometric group token into input paths."""
+def _resolve_spectralmatch_input_token(token: str, available_paths: List[str]) -> List[str]:
+    """Resolve a prefixed spectralmatch group token into input paths."""
     source, value = token.split(":", 1)
     if source == "auto":
-        return _match_radiometric_input_patterns(value, available_paths)
+        return _match_spectralmatch_input_patterns(value, available_paths)
     if source == "file":
         return [value]
-    raise ValueError("Radiometric group strings must start with 'auto:' or 'file:'.")
+    raise ValueError("SpectralMatch group strings must start with 'auto:' or 'file:'.")
 
 
 def _dedupe_paths(paths: List[str]) -> List[str]:
@@ -1697,19 +1755,19 @@ def _dedupe_paths(paths: List[str]) -> List[str]:
     return deduped
 
 
-def _resolve_radiometric_group_output_path(
+def _resolve_spectralmatch_group_output_path(
     *,
     output_name: str,
     temp_root: str,
     output_root: str,
 ) -> str:
-    """Resolve a radiometric group output path.
+    """Resolve a spectralmatch group output path.
     Args:
         output_name: Group output filename.
         temp_root: Temp root directory.
         output_root: Output root directory.
     Returns:
-        Resolved radiometric group output path.
+        Resolved spectralmatch group output path.
     """
     del temp_root
     group_output_path = os.path.join(output_root, os.path.basename(output_name))
@@ -1717,7 +1775,7 @@ def _resolve_radiometric_group_output_path(
     return group_output_path
 
 
-def _run_named_radiometric_group(
+def _run_named_spectralmatch_group(
     output_name: str,
     group_value: object,
     *,
@@ -1726,18 +1784,18 @@ def _run_named_radiometric_group(
     temp_root: str,
     output_root: str,
 ) -> str:
-    """Run one named radiometric group and return its output path."""
+    """Run one named spectralmatch group and return its output path."""
     child_inputs: List[str] = []
     if isinstance(group_value, str):
-        child_inputs.extend(_resolve_radiometric_input_token(group_value, available_paths))
+        child_inputs.extend(_resolve_spectralmatch_input_token(group_value, available_paths))
     elif isinstance(group_value, list):
         for item in group_value:
             if isinstance(item, str):
-                child_inputs.extend(_resolve_radiometric_input_token(item, available_paths))
+                child_inputs.extend(_resolve_spectralmatch_input_token(item, available_paths))
             elif isinstance(item, dict):
                 for child_output_name, child_value in item.items():
                     child_inputs.append(
-                        _run_named_radiometric_group(
+                        _run_named_spectralmatch_group(
                             child_output_name,
                             child_value,
                             available_paths=available_paths,
@@ -1747,9 +1805,9 @@ def _run_named_radiometric_group(
                         )
                     )
             else:
-                raise ValueError("Radiometric group list items must be prefixed strings or nested group objects.")
+                raise ValueError("SpectralMatch group list items must be prefixed strings or nested group objects.")
     else:
-        raise ValueError("Radiometric group values must be strings or lists.")
+        raise ValueError("SpectralMatch group values must be strings or lists.")
 
     # Only full-resolution tiles feed parent groups; pyramid subfolders are excluded.
     expanded_inputs = []
@@ -1762,57 +1820,34 @@ def _run_named_radiometric_group(
         else:
             expanded_inputs.append(path)
     child_inputs = _dedupe_paths(expanded_inputs)
-    radiometric_kwargs = _build_radiometric_kwargs(args)
-    radiometric_kwargs.pop("shared_output_image_path", None)
-    group_output_path = _resolve_radiometric_group_output_path(
+    spectralmatch_kwargs = _build_spectralmatch_kwargs(args)
+    spectralmatch_kwargs.pop("shared_output_image_path", None)
+    group_output_path = _resolve_spectralmatch_group_output_path(
         output_name=output_name,
         temp_root=temp_root,
         output_root=output_root,
     )
-    # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
-    single_output = not radiometric_kwargs.get("merge_rasters_output_tiles", False)
-    if single_output and _prepare_step_outputs(
-        [group_output_path],
-        input_paths=child_inputs,
-        args=args,
-        step="radiometric",
-    ):
-        _log_step_plan(
-            "radiometric",
-            outputs=[group_output_path],
-            message=f"Skipping group {output_name} because output exists",
-            enabled=args.log_to_console,
-        )
-        return group_output_path
-
-    radiometric_kwargs.setdefault("shared_input_images", child_inputs)
-    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
-    radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
-    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
-    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    spectralmatch_kwargs.setdefault("shared_input_images", child_inputs)
+    spectralmatch_kwargs.setdefault("shared_output_image_path", group_output_path)
+    spectralmatch_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
+    spectralmatch_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+    spectralmatch_kwargs.setdefault("shared_output_dtype", args.dtype)
     _log_step_plan(
-        "radiometric",
+        "spectralmatch",
         inputs=child_inputs,
         outputs=[group_output_path],
         message=f"Running SpectralMatch group {output_name}",
         enabled=args.log_to_console,
     )
-    radiometric_normalization(
-        method=args.radiometric_normalization_method,
+    spectralmatch(
+        method=args.spectralmatch_method,
         log_to_console=args.log_to_console,
-        **radiometric_kwargs,
+        **spectralmatch_kwargs,
     )
-    if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
-        _log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(
-            group_output_path, args.overview_scales, log_to_console=args.log_to_console,
-            scene_index=getattr(args, "scene_total", 1),
-            scene_total=getattr(args, "scene_total", 1),
-        )
     return group_output_path
 
 
-def _run_named_radiometric_groups(
+def _run_named_spectralmatch_groups(
     group_spec: Dict[str, object],
     *,
     available_paths: List[str],
@@ -1820,10 +1855,10 @@ def _run_named_radiometric_groups(
     temp_root: str,
     output_root: str,
 ) -> Optional[str]:
-    """Run named radiometric groups in order and return the final output path."""
+    """Run named spectralmatch groups in order and return the final output path."""
     final_output: Optional[str] = None
     for output_name, group_value in group_spec.items():
-        final_output = _run_named_radiometric_group(
+        final_output = _run_named_spectralmatch_group(
             output_name,
             group_value,
             available_paths=available_paths,
@@ -1834,87 +1869,64 @@ def _run_named_radiometric_groups(
     return final_output
 
 
-def _run_default_radiometric_normalization(
+def _run_default_spectralmatch(
     available_paths: List[str],
     *,
     args: argparse.Namespace,
     output_path: str,
     temp_root: str,
 ) -> str:
-    """Run one default radiometric normalization over all scene outputs."""
-    radiometric_kwargs = _build_radiometric_kwargs(args)
-    group_output_path = str(radiometric_kwargs.get("shared_output_image_path") or output_path)
-    # Let SpectralMatch resume individual tiles; an existing folder may be incomplete.
-    single_output = not radiometric_kwargs.get("merge_rasters_output_tiles", False)
-    if single_output and _prepare_step_outputs(
-        [group_output_path],
-        input_paths=available_paths,
-        args=args,
-        step="radiometric",
-    ):
-        _log_step_plan(
-            "radiometric",
-            outputs=[group_output_path],
-            message="Skipping because output exists",
-            enabled=args.log_to_console,
-        )
-        return group_output_path
-
-    radiometric_kwargs.setdefault("shared_input_images", available_paths)
-    radiometric_kwargs.setdefault("shared_output_image_path", group_output_path)
-    radiometric_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
-    radiometric_kwargs.setdefault("shared_debug_logs", args.log_to_console)
-    radiometric_kwargs.setdefault("shared_output_dtype", args.dtype)
+    """Run one default SpectralMatch over all scene outputs."""
+    spectralmatch_kwargs = _build_spectralmatch_kwargs(args)
+    group_output_path = str(spectralmatch_kwargs.get("shared_output_image_path") or output_path)
+    spectralmatch_kwargs.setdefault("shared_input_images", available_paths)
+    spectralmatch_kwargs.setdefault("shared_output_image_path", group_output_path)
+    spectralmatch_kwargs.setdefault("shared_temp_dir", os.path.join(temp_root, "spectralmatch"))
+    spectralmatch_kwargs.setdefault("shared_debug_logs", args.log_to_console)
+    spectralmatch_kwargs.setdefault("shared_output_dtype", args.dtype)
     _log_step_plan(
-        "radiometric",
+        "spectralmatch",
         inputs=available_paths,
         outputs=[group_output_path],
         message="Running SpectralMatch",
         enabled=args.log_to_console,
     )
-    radiometric_normalization(
-        method=args.radiometric_normalization_method,
+    spectralmatch(
+        method=args.spectralmatch_method,
         log_to_console=args.log_to_console,
-        **radiometric_kwargs,
+        **spectralmatch_kwargs,
     )
-    if args.calculate_overviews_radiometric_normalization and not os.path.isdir(group_output_path):
-        _log("Calculating overviews for step radiometric_normalization", enabled=args.log_to_console, step="overviews")
-        calculate_raster_overviews(
-            group_output_path, args.overview_scales, log_to_console=args.log_to_console,
-            scene_index=getattr(args, "scene_total", 1),
-            scene_total=getattr(args, "scene_total", 1),
-        )
     return group_output_path
 
 
-def _run_radiometric_normalization_workflow(
+def _run_spectralmatch_workflow(
     scene_output_paths: List[str],
     *,
     args: argparse.Namespace,
     reference_state: SceneWorkflowState,
 ) -> Optional[str]:
-    """Run grouped radiometric normalization.
+    """Run grouped SpectralMatch.
     Args:
         scene_output_paths: Per-scene output raster paths.
         args: Parsed CLI arguments.
         reference_state: Reference scene state used for directory resolution.
     Returns:
-        Final radiometric output path or None.
+        Final spectralmatch output path or None.
     """
-    if not args.run_radiometric_normalization:
+    if not args.run_spectralmatch:
         return None
     available_paths = _dedupe_paths([str(path) for path in scene_output_paths if str(path)])
     if not available_paths:
-        raise ValueError("No scene outputs were available for radiometric normalization.")
+        raise ValueError("No scene outputs were available for SpectralMatch.")
 
     with _processing_step(
-        "radiometric_normalization", "all_scenes", available_paths, [],
+        "spectralmatch", "all_scenes", available_paths, [],
         enabled=args.log_to_console, index=len(available_paths),
         total=getattr(args, "scene_total", len(available_paths)),
     ):
         group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
         if group_spec is not None:
-            return _run_named_radiometric_groups(
+            return _run_named_spectralmatch_groups(
                 group_spec,
                 available_paths=available_paths,
                 args=args,
@@ -1922,10 +1934,10 @@ def _run_radiometric_normalization_workflow(
                 output_root=reference_state.step_dirs["output_root"],
             )
 
-        return _run_default_radiometric_normalization(
+        return _run_default_spectralmatch(
             available_paths,
             args=args,
-            output_path=reference_state.step_dirs["radiometric_normalization"],
+            output_path=reference_state.step_dirs["spectralmatch"],
             temp_root=reference_state.step_dirs["temp_root"],
         )
 
@@ -1984,7 +1996,7 @@ def _apply_weighted_seamline_metadata_defaults(args: argparse.Namespace, seamlin
     """Default weighted seamline inputs from the generated WorldView metadata GPKG."""
     if not seamline_metadata_output:
         return
-    if not _radiometric_steps_include(args, "weighted_seamline"):
+    if not _spectralmatch_steps_include(args, "weighted_seamline"):
         return
     if not getattr(args, "match_weighted_seamline_input_polygons", None):
         setattr(args, "match_weighted_seamline_input_polygons", seamline_metadata_output)
@@ -2840,7 +2852,7 @@ def _scene_final_outputs_complete(state: SceneWorkflowState, args: argparse.Name
         scene_basename=state.scene.primary_basename,
     ):
         return False
-    if args.run_radiometric_normalization:
+    if args.run_spectralmatch:
         return _existing_outputs_are_reusable(
             expected_outputs["final_raster"],
             check_validity=args.skip_existing_check_validity,
@@ -2942,7 +2954,7 @@ def _configured_cleanup_inputs(args: argparse.Namespace) -> List[str]:
 
     return _dedupe_paths([
         *configured_files(vars(args)),
-        *configured_files(_parse_json_dict(args.radiometric_normalization_kwargs_json)),
+        *configured_files(_parse_json_dict(args.spectralmatch_kwargs_json)),
         *configured_files(_normalize_group_by_basename_spec(args.group_by_basename)),
     ])
 
@@ -3020,6 +3032,7 @@ def _cleanup_completed_scene_temp_steps(
     args: argparse.Namespace,
     *,
     aggregate_outputs: List[str] | None = None,
+    spectralmatch_outputs: List[str] | None = None,
 ) -> None:
     """Delete a scene's temp products only after all its persistent outputs are complete.
 
@@ -3045,15 +3058,18 @@ def _cleanup_completed_scene_temp_steps(
         else:
             required.extend(paths)
     required.extend(aggregate_outputs or [])
-    if not _existing_outputs_are_reusable(
+    if required and not _existing_outputs_are_reusable(
         _dedupe_paths(required), check_validity=args.skip_existing_check_validity,
         validity_check_grid_size=args.validity_check_grid_size,
         log_to_console=args.log_to_console, step="temp_cleanup",
         scene_basename=state.scene.primary_basename,
     ):
         return
+    if not required and not spectralmatch_outputs:
+        return
 
-    protected = list(state.source_files) + required + _configured_cleanup_inputs(args)
+    # SpectralMatch outputs are trusted only after its pipeline returns successfully.
+    protected = list(state.source_files) + required + (spectralmatch_outputs or []) + _configured_cleanup_inputs(args)
     if args.dem_file_path not in (None, "", "online"):
         protected.append(state.dem_file_path or resolve_relative_to_input(
             args.dem_file_path, os.path.dirname(state.scene.mul_image.tif_file),
@@ -3061,7 +3077,7 @@ def _cleanup_completed_scene_temp_steps(
     final_paths = list(expected.get("final_raster", []))
     if state.current_step != "file_source":
         final_paths.extend(state.current_files)
-    if aggregate_outputs is None and (args.run_seamline_metadata or args.run_radiometric_normalization):
+    if aggregate_outputs is None and (args.run_seamline_metadata or args.run_spectralmatch):
         protected.extend(final_paths)
     temporary.extend(os.path.splitext(path)[0] + "_metadata.json" for path in final_paths if path in temporary)
     temporary.append(os.path.join(state.step_dirs["scene_work"], f"{state.scene.mul_image.basename}.gpkg"))
@@ -3081,8 +3097,11 @@ def _cleanup_completed_scene_temp_steps(
                 or inode in protected_inodes or inode in shared_inodes):
             protected_paths.update(os.path.realpath(item) for item in _files_with_sidecars([path]))
     to_delete = []
+    spectralmatch_roots = [os.path.realpath(path) for path in (spectralmatch_outputs or [])]
     for path in _files_with_sidecars(temporary):
         real_path = os.path.realpath(path)
+        if any(os.path.commonpath([real_path, root]) == root for root in spectralmatch_roots):
+            continue
         if real_path in protected_paths or real_path in shared_paths or not os.path.isfile(path):
             continue
         stat = os.stat(path)
@@ -3152,7 +3171,7 @@ def _write_scene_report(state: SceneWorkflowState, args: argparse.Namespace, *, 
             "run_cloud_mask": args.run_cloud_mask,
             "run_alignment": args.run_alignment,
             "run_seamline_metadata": args.run_seamline_metadata,
-            "run_radiometric_normalization": args.run_radiometric_normalization,
+            "run_spectralmatch": args.run_spectralmatch,
             "atmospheric_method": args.atmospheric_method,
             "epsg": args.epsg,
             "nodata_value": args.nodata_value,
@@ -3324,7 +3343,7 @@ def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespa
     """Count saved outputs and actual pending work over the complete discovered set."""
     steps = [
         "file_source", "fetch_atmosphere", "atmospheric_correction", "orthorectification",
-        "pansharpen", "cloud_mask", "alignment", "seamline_metadata", "radiometric_normalization",
+        "pansharpen", "cloud_mask", "alignment", "seamline_metadata", "spectralmatch",
     ]
     counts = {step: {"loaded": 0, "processing": 0} for step in steps}
     quiet_args = argparse.Namespace(**vars(args))
@@ -3381,44 +3400,9 @@ def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespa
         counts["seamline_metadata"]["processing"] = (
             0 if reuse_whole else len(scenes) - (loaded if args.run_from_existing else 0)
         )
-    if args.run_radiometric_normalization:
-        kwargs = _build_radiometric_kwargs(args)
-        loaded_scenes, pending_scenes = set(), set()
-
-        def group_members(value):
-            members = set()
-            for item in ([value] if isinstance(value, str) else value):
-                if isinstance(item, str):
-                    members.update(_resolve_radiometric_input_token(item, final_paths))
-                else:
-                    for name, child in item.items():
-                        members.update(count_group(name, child))
-            return members
-
-        def count_group(name, value):
-            members = group_members(value)
-            path = os.path.join(reference.step_dirs["output_root"], os.path.basename(name))
-            record_group(path, members)
-            return members
-
-        def record_group(path, members):
-            # An existing tiled directory is not evidence that all its tiles completed.
-            loaded = not kwargs.get("merge_rasters_output_tiles", False) and complete([path], "radiometric_normalization")
-            if loaded:
-                loaded_scenes.update(members)
-            if not (loaded and args.run_from_existing):
-                pending_scenes.update(members)
-
-        groups = _normalize_group_by_basename_spec(args.group_by_basename)
-        if groups:
-            for name, value in groups.items():
-                count_group(name, value)
-        else:
-            record_group(str(kwargs.get("shared_output_image_path") or reference.step_dirs["radiometric_normalization"]), final_paths)
-        counts["radiometric_normalization"] = {
-            "loaded": sum(path in loaded_scenes for path in final_paths),
-            "processing": sum(path in pending_scenes for path in final_paths),
-        }
+    if args.run_spectralmatch:
+        # Every enabled run reaches SpectralMatch; its pipeline owns reuse counts.
+        counts["spectralmatch"]["processing"] = len(scenes)
     return counts
 
 
@@ -3429,7 +3413,7 @@ def _log_processing_steps(args: argparse.Namespace, counts: Dict[str, Dict[str, 
     steps = [
         "file_source", "fetch_atmosphere", "atmospheric_correction",
         "orthorectification", "pansharpen", "cloud_mask", "alignment",
-        "seamline_metadata", "radiometric_normalization",
+        "seamline_metadata", "spectralmatch",
     ]
     _log("Processing steps:", enabled=True)
     for step in steps:
@@ -3438,12 +3422,15 @@ def _log_processing_steps(args: argparse.Namespace, counts: Dict[str, Dict[str, 
         if enabled:
             save_value = getattr(args, f"save_{step}")
             storage = "temp" if _is_temp_save_value(save_value) else "output"
-            if step == "radiometric_normalization" and args.group_by_basename:
+            if step == "spectralmatch" and args.group_by_basename:
                 groups = _normalize_group_by_basename_spec(args.group_by_basename)
                 save_value = ", ".join(f"$output/{os.path.basename(name)}" for name in groups)
                 storage = "output"
             message += f" | {storage}: {save_value}"
-            message += f" | loaded: {counts[step]['loaded']} | processing: {counts[step]['processing']}"
+            if step == "spectralmatch":
+                message += " | output reuse and validation handled by SpectralMatch"
+            else:
+                message += f" | loaded: {counts[step]['loaded']} | processing: {counts[step]['processing']}"
         _log(message, enabled=True)
 
 
@@ -3474,6 +3461,7 @@ def _run_workflow(args: argparse.Namespace) -> int:
     processed_states = _process_scenes(scenes, args)
 
     saved_aggregate_outputs = []
+    saved_spectralmatch_outputs = []
     seamline_metadata_output = None
     if processed_states and args.run_seamline_metadata:
         seamline_metadata_output = _run_seamline_metadata_workflow(
@@ -3491,33 +3479,36 @@ def _run_workflow(args: argparse.Namespace) -> int:
             )
         _apply_weighted_seamline_metadata_defaults(args, seamline_metadata_output)
 
-    if processed_states and args.run_radiometric_normalization:
+    if processed_states and args.run_spectralmatch:
         _log(
-            f"Preparing grouped radiometric normalization for {len([state for state in processed_states if state.current_files])} scene outputs",
+            f"Preparing grouped SpectralMatch for {len([state for state in processed_states if state.current_files])} scene outputs",
             enabled=args.log_to_console,
             step="workflow",
         )
-        radiometric_output = _run_radiometric_normalization_workflow(
+        spectralmatch_output = _run_spectralmatch_workflow(
             [state.current_files[0] for state in processed_states if state.current_files],
             args=args,
             reference_state=processed_states[0],
         )
-        if radiometric_output:
+        if spectralmatch_output:
             if (args.group_by_basename
-                    or _build_radiometric_kwargs(args).get("shared_output_image_path")
-                    or not _is_temp_save_value(args.save_radiometric_normalization)):
-                saved_aggregate_outputs.append(radiometric_output)
+                    or _build_spectralmatch_kwargs(args).get("shared_output_image_path")
+                    or not _is_temp_save_value(args.save_spectralmatch)):
+                saved_spectralmatch_outputs.append(spectralmatch_output)
             _log(
-                f"Wrote radiometric normalization output {radiometric_output}",
+                f"Wrote SpectralMatch output {spectralmatch_output}",
                 enabled=args.log_to_console,
                 step="workflow",
             )
 
-    if args.delete_temp_steps_proactively and (args.run_seamline_metadata or args.run_radiometric_normalization):
+    if args.delete_temp_steps_proactively and (args.run_seamline_metadata or args.run_spectralmatch):
         for state in processed_states:
-            _cleanup_completed_scene_temp_steps(state, args, aggregate_outputs=saved_aggregate_outputs)
+            _cleanup_completed_scene_temp_steps(
+                state, args, aggregate_outputs=saved_aggregate_outputs,
+                spectralmatch_outputs=saved_spectralmatch_outputs,
+            )
 
-    _cleanup_workflow_temp_dirs(processed_states, args, saved_aggregate_outputs)
+    _cleanup_workflow_temp_dirs(processed_states, args, saved_aggregate_outputs + saved_spectralmatch_outputs)
     _log("All processing complete", enabled=args.log_to_console, step="workflow")
     return 0
 
@@ -3634,9 +3625,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
-    parser.add_argument("--run-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--save-radiometric-normalization", default="$temp/radiometric_root.tif")
-    parser.add_argument("--calculate-overviews-radiometric-normalization", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--run-spectralmatch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save-spectralmatch", default="$temp/spectralmatch_root.tif")
+    parser.add_argument(
+        "--calculate-overviews-spectralmatch", action=argparse.BooleanOptionalAction, default=False,
+        help="Enable overviews on the last eligible match step; conflicts with any enabled match-*-build-overviews flag.",
+    )
     parser.add_argument("--skip-flaash", action="store_true")
     parser.add_argument("--existing-flaash-input")
     parser.add_argument("--existing-mul-ortho-input")
@@ -3650,8 +3644,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fetch-atmosphere-authenticate", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--fetch-atmosphere-env-file")
     parser.add_argument("--fetch-atmosphere-hours-window", type=int, default=24)
-    parser.add_argument("--radiometric-normalization-method", default="spectralmatch")
-    parser.add_argument("--radiometric-normalization-kwargs-json")
+    parser.add_argument("--spectralmatch-method", default="spectralmatch")
+    parser.add_argument("--spectralmatch-kwargs-json")
     parser.add_argument("--group-by-basename")
     parser.add_argument("--match-steps", nargs="+")
     parser.add_argument("--cloud-mask-command")
@@ -3768,7 +3762,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     for arg_name, default_value in (
         ("save_seamline_metadata", "$temp/seamline_metadata.gpkg"),
-        ("save_radiometric_normalization", "$temp/radiometric_root.tif"),
+        ("save_spectralmatch", "$temp/spectralmatch_root.tif"),
     ):
         _validate_save_target_value(
             getattr(args, arg_name),
@@ -3801,7 +3795,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.calculate_overviews_pansharpen
         or args.calculate_overviews_cloud_mask
         or args.calculate_overviews_alignment
-        or args.calculate_overviews_radiometric_normalization
     ) and not args.overview_scales:
         parser.error("--overview-scales is required when any calculate-overviews-* option is enabled.")
     if args.alignment_band_index < 0:
@@ -3821,25 +3814,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.alignment_solve_resolution is not None and args.alignment_solve_resolution <= 0:
         parser.error("--alignment-solve-resolution must be > 0.")
     _parse_json_dict(args.cloud_mask_omnicloud_kwargs_json)
-    radiometric_kwargs_json = _parse_json_dict(args.radiometric_normalization_kwargs_json)
-    save_radiometric_output_is_explicit = (
-        "save_radiometric_normalization" in config_defaults
-        or _explicit_cli_arg_present(raw_argv, "save_radiometric_normalization")
+    spectralmatch_kwargs_json = _parse_json_dict(args.spectralmatch_kwargs_json)
+    save_spectralmatch_output_is_explicit = args.save_spectralmatch not in (None, "") and (
+        "save_spectralmatch" in config_defaults
+        or _explicit_cli_arg_present(raw_argv, "save_spectralmatch")
     )
     match_shared_output_is_explicit = (
         getattr(args, "match_shared_output_image_path", None) is not None
-        or "shared_output_image_path" in radiometric_kwargs_json
+        or "shared_output_image_path" in spectralmatch_kwargs_json
     )
-    if save_radiometric_output_is_explicit and match_shared_output_is_explicit:
+    if save_spectralmatch_output_is_explicit and match_shared_output_is_explicit:
         parser.error(
-            "Cannot set both save_radiometric_normalization and "
-            "match_shared_output_image_path/shared_output_image_path; use only one radiometric output path option."
+            "Cannot set both save_spectralmatch and "
+            "match_shared_output_image_path/shared_output_image_path; use only one spectralmatch output path option."
         )
     group_by_basename_spec = _normalize_group_by_basename_spec(args.group_by_basename)
-    if group_by_basename_spec is not None and save_radiometric_output_is_explicit:
-        parser.error("Cannot set save_radiometric_normalization when group_by_basename is set; use group keys as output filenames.")
+    if group_by_basename_spec is not None and save_spectralmatch_output_is_explicit:
+        parser.error("Cannot set save_spectralmatch when group_by_basename is set; use group keys as output filenames.")
     if group_by_basename_spec is not None and match_shared_output_is_explicit:
         parser.error("Cannot set match_shared_output_image_path/shared_output_image_path when group_by_basename is set; use group keys as output filenames.")
+    try:
+        _build_spectralmatch_kwargs(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     return _run_workflow(args)
 
 

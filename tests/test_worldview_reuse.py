@@ -92,26 +92,27 @@ def test_prepare_outputs_preserves_valid_files(tmp_path, make_test_raster, reuse
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_radiometric_outputs_use_shared_cleanup(tmp_path, make_test_raster, monkeypatch, named):
+def test_spectralmatch_outputs_are_left_to_pipeline(tmp_path, make_test_raster, monkeypatch, named):
     args = worldview._build_parser().parse_args([])
     source = make_test_raster(tmp_path / "source.tif")
     target = tmp_path / "result.tif"
     target.write_bytes(b"II\x2a\x00\x08\x02\x00\x00")
 
     def regenerate(**kwargs):
-        assert not target.exists()
+        assert target.read_bytes() == b"II\x2a\x00\x08\x02\x00\x00"
+        target.unlink()  # The pipeline owns replacement of its invalid outputs.
         make_test_raster(target)
         return str(target)
 
-    monkeypatch.setattr(worldview, "radiometric_normalization", regenerate)
+    monkeypatch.setattr(worldview, "spectralmatch", regenerate)
     with gdal.ExceptionMgr(useExceptions=True):
         if named:
-            result = worldview._run_named_radiometric_group(
+            result = worldview._run_named_spectralmatch_group(
                 "result.tif", "auto:*.tif", available_paths=[str(source)], args=args,
                 temp_root=str(tmp_path), output_root=str(tmp_path),
             )
         else:
-            result = worldview._run_default_radiometric_normalization(
+            result = worldview._run_default_spectralmatch(
                 [str(source)], args=args, output_path=str(target), temp_root=str(tmp_path),
             )
     assert result == str(target)

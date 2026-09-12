@@ -15,6 +15,6 @@ The file is organized into these sections:
 - `pansharpen`: pansharpening-specific settings
 - `cloud_mask`: cloud masking settings
 - `alignment`: pairwise alignment settings
-- `radiometric_normalization`: SpectralMatch settings
+- `spectralmatch`: SpectralMatch settings
 
 Use the YAML template as the source of truth for current keys and examples. The CLI parser can still override any of these values at runtime.

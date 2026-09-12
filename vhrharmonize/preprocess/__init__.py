@@ -25,7 +25,7 @@ _EXPORTS = {
         ".cloudmasking",
         "apply_binary_cloud_mask_to_image",
     ),
-    "radiometric_normalization": (".radiometric_normalization", "radiometric_normalization"),
+    "spectralmatch": (".spectralmatch", "spectralmatch"),
     "write_seamline_metadata_gpkg": (".seamline_metadata", "write_seamline_metadata_gpkg"),
     "align_image_pair": (".alignment", "align_image_pair"),
     "AlignmentResult": (".alignment", "AlignmentResult"),

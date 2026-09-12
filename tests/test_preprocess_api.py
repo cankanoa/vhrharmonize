@@ -13,7 +13,7 @@ import yaml
 
 import vhrharmonize.preprocess.atmospheric_correction as atmos_mod
 import vhrharmonize.preprocess.fetch_external_data as fetch_mod
-import vhrharmonize.preprocess.radiometric_normalization as rad_mod
+import vhrharmonize.preprocess.spectralmatch as rad_mod
 from vhrharmonize.preprocess.alignment import align_image_pair
 from vhrharmonize.preprocess.atmospheric_correction import (
     atmospheric_correction,
@@ -39,7 +39,7 @@ from vhrharmonize.preprocess.fetch_external_data import (
     fetch_power_atmosphere_for_bbox,
     _init_ee_client,
 )
-from vhrharmonize.preprocess.radiometric_normalization import radiometric_normalization
+from vhrharmonize.preprocess.spectralmatch import spectralmatch
 
 
 def _metadata() -> SimpleNamespace:
@@ -189,7 +189,7 @@ def test_fetch_functions(monkeypatch, tmp_path: Path) -> None:
     assert modis.status == "ok"
 
 
-def test_pansharpen_and_radiometric(monkeypatch, tmp_path: Path) -> None:
+def test_pansharpen_and_spectralmatch(monkeypatch, tmp_path: Path) -> None:
     class _PanSharpen:
         def __init__(self, pan, mul): self.pan, self.mul = pan, mul
         def process(self, output_image_path, write_mask=False, overwrite=True):
@@ -212,12 +212,12 @@ def test_pansharpen_and_radiometric(monkeypatch, tmp_path: Path) -> None:
     out = tmp_path / "ps.tif"
     pansharpen_mod.pansharpen_image(str(mul), str(pan), str(out), change_nodata_value=0)
     assert out.exists()
-    monkeypatch.setattr(rad_mod, "_load_spectralmatch_pipeline", lambda: (lambda **kwargs: kwargs["shared_output_image_path"]))
-    result = radiometric_normalization([str(out)], str(tmp_path / "norm.tif"), shared_cache="auto")
+    monkeypatch.setattr(rad_mod, "spectralmatch_pipeline", lambda **kwargs: kwargs["shared_output_image_path"])
+    result = spectralmatch([str(out)], str(tmp_path / "norm.tif"), shared_cache="auto")
     assert result.endswith("norm.tif")
 
 
-def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> None:
+def test_worldview_named_spectralmatch_grouping(monkeypatch, tmp_path: Path) -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     root_output = str(tmp_path / "out" / "root.tif")
     child_output = str(tmp_path / "out" / "child.tif")
@@ -229,17 +229,17 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
         ]
     })
     assert spec["root.tif"][1]["child.tif"][0] == "file:/external/ref.tif"
-    assert worldview._resolve_radiometric_group_output_path(
+    assert worldview._resolve_spectralmatch_group_output_path(
         output_name="from_output.tif",
         temp_root=str(tmp_path / "tmp"),
         output_root=str(tmp_path / "out"),
     ) == str(tmp_path / "out" / "from_output.tif")
-    assert worldview._resolve_radiometric_group_output_path(
+    assert worldview._resolve_spectralmatch_group_output_path(
         output_name="nested/from_output.tif",
         temp_root=str(tmp_path / "tmp"),
         output_root=str(tmp_path / "out"),
     ) == str(tmp_path / "out" / "from_output.tif")
-    assert worldview._match_radiometric_input_patterns("*893242343*", ["/scene/auto_893242343.tif"]) == [
+    assert worldview._match_spectralmatch_input_patterns("*893242343*", ["/scene/auto_893242343.tif"]) == [
         "/scene/auto_893242343.tif"
     ]
     for bad_spec in ({"x.tif": "*missing-prefix*"}, {"": "auto:*"}, {"x.tif": []}):
@@ -253,26 +253,26 @@ def test_worldview_named_radiometric_grouping(monkeypatch, tmp_path: Path) -> No
     calls = []
     monkeypatch.setattr(
         worldview,
-        "radiometric_normalization",
+        "spectralmatch",
         lambda **kwargs: calls.append(kwargs) or kwargs["shared_output_image_path"],
     )
     args = SimpleNamespace(
-        radiometric_normalization_kwargs_json=None,
+        spectralmatch_kwargs_json=None,
         run_from_existing=False,
         run_from_existing_check_validity=False,
         validity_check_grid_size=0,
         log_to_console=False,
         delete_temp_dir=True,
         dtype="int16",
-        radiometric_normalization_method="spectralmatch",
-        calculate_overviews_radiometric_normalization=False,
+        spectralmatch_method="spectralmatch",
+        calculate_overviews_spectralmatch=False,
     )
     available = [
         "/scene/auto_893242343.tif",
         "/scene/auto_222222222.tif",
         "/scene/auto_123456789.tif",
     ]
-    result = worldview._run_named_radiometric_groups(
+    result = worldview._run_named_spectralmatch_groups(
         spec,
         available_paths=available,
         args=args,
@@ -298,7 +298,7 @@ def test_worldview_save_target_expands_user_home(monkeypatch, tmp_path: Path) ->
 
     normalized, kind = worldview._classify_save_target(
         "~/koa_scratch/output/mosaic.tif",
-        default="$temp/radiometric_root.tif",
+        default="$temp/spectralmatch_root.tif",
     )
 
     assert normalized == str(tmp_path / "koa_scratch" / "output" / "mosaic.tif")
@@ -313,10 +313,10 @@ def test_worldview_save_target_expands_user_home(monkeypatch, tmp_path: Path) ->
     )
 
 
-def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None:
+def test_worldview_spectralmatch_steps_passthrough_and_weighted_defaults() -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     args = SimpleNamespace(
-        radiometric_normalization_kwargs_json=None,
+        spectralmatch_kwargs_json=None,
         match_steps=["global_regression", "weighted_seamline", "mask"],
         match_weighted_seamline_input_polygons=None,
         match_weighted_seamline_input_layer=None,
@@ -325,7 +325,7 @@ def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None
         seamline_metadata_image_field_name="image",
     )
 
-    assert worldview._build_radiometric_kwargs(args)["steps"] == [
+    assert worldview._build_spectralmatch_kwargs(args)["steps"] == [
         "global_regression",
         "weighted_seamline",
         "mask",
@@ -339,7 +339,7 @@ def test_worldview_radiometric_steps_passthrough_and_weighted_defaults() -> None
 def test_worldview_spectralmatch_runtime_kwargs_follow_scene_backend() -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     args = SimpleNamespace(
-        radiometric_normalization_kwargs_json=None,
+        spectralmatch_kwargs_json=None,
         concurrent_processing_backend="dask",
         dask_scheduler_file="/tmp/dask-scheduler.json",
         dask_scheduler_address=None,
@@ -347,7 +347,7 @@ def test_worldview_spectralmatch_runtime_kwargs_follow_scene_backend() -> None:
         match_shared_dask_scheduler=None,
     )
 
-    assert worldview._build_radiometric_kwargs(args) == {
+    assert worldview._build_spectralmatch_kwargs(args) == {
         "delete_temp_dir": True,
         "shared_concurrent_processing_backend": "dask",
         "shared_dask_scheduler": ("file", "/tmp/dask-scheduler.json"),
@@ -358,7 +358,7 @@ def test_worldview_spectralmatch_runtime_kwargs_follow_scene_backend() -> None:
 def test_worldview_explicit_spectralmatch_runtime_kwargs_override_defaults() -> None:
     worldview = importlib.import_module("vhrharmonize.cli.worldview")
     args = SimpleNamespace(
-        radiometric_normalization_kwargs_json=(
+        spectralmatch_kwargs_json=(
             '{"shared_concurrent_processing_backend": "process_pool", "shared_dask_scheduler": null}'
         ),
         concurrent_processing_backend="dask",
@@ -368,7 +368,7 @@ def test_worldview_explicit_spectralmatch_runtime_kwargs_override_defaults() -> 
         match_shared_dask_scheduler=None,
     )
 
-    kwargs = worldview._build_radiometric_kwargs(args)
+    kwargs = worldview._build_spectralmatch_kwargs(args)
     assert kwargs["shared_concurrent_processing_backend"] == "process_pool"
     assert kwargs["shared_dask_scheduler"] is None
 
@@ -519,13 +519,13 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
                     "run_file_source": True,
                     "run_cloud_mask": True,
                     "save_cloud_mask": str(tmp_path / "local_output"),
-                    "run_radiometric_normalization": True,
+                    "run_spectralmatch": True,
                     "run_from_existing": False,
                 },
                 "cloud_mask": {
                     "cloud_mask_method": "threshold",
                 },
-                "radiometric_normalization": {
+                "spectralmatch": {
                     "group_by_basename": {
                         "grouped.tif": "auto:**/*.tif",
                     },
@@ -629,7 +629,7 @@ def test_slurm_prepare_worldview_file_maps(tmp_path: Path, make_worldview_bundle
         for item in staged_inputs
     )
     assert staged["shared"]["run_file_source"] is True
-    assert list(staged["radiometric_normalization"]["group_by_basename"]) == ["grouped.tif"]
+    assert list(staged["spectralmatch"]["group_by_basename"]) == ["grouped.tif"]
     assert (
         plan["download_output_paths"][str((tmp_path / "local_output" / "grouped.tif").resolve())]
         == "/remote/runs/RUN123/output/grouped.tif"
@@ -668,7 +668,7 @@ def test_remote_rewrite_keeps_single_outputs_relative_to_remote_roots() -> None:
     staged = _rewrite_worldview_config_for_remote(
         {
             "workflow": {
-                "save_radiometric_normalization": "/mnt/c/Users/Lama/Downloads/processed/mosaic_1.tif",
+                "save_spectralmatch": "/mnt/c/Users/Lama/Downloads/processed/mosaic_1.tif",
             },
         },
         input_file_entries=None,
@@ -677,7 +677,7 @@ def test_remote_rewrite_keeps_single_outputs_relative_to_remote_roots() -> None:
         remote_temp_dir="~/koa_scratch/vhrharmonize/runs/1/tmp",
     )
 
-    assert staged["workflow"]["save_radiometric_normalization"] == "$output/mosaic_1.tif"
+    assert staged["workflow"]["save_spectralmatch"] == "$output/mosaic_1.tif"
 
 
 def test_start_slurm_yaml_writer_and_remote_quote(tmp_path: Path) -> None:

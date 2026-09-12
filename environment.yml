@@ -6,6 +6,7 @@ dependencies:
   - python=3.12
   - gdal=3.12.*
   - rasterio>=1.4.3
+  - tifffile
   - geopandas
   - shapely
   - pyproj

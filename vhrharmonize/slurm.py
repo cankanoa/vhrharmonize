@@ -82,7 +82,7 @@ WORLDVIEW_HEADER_BY_KEY = {
     "cloud_mask": "# Cloud mask settings",
     "alignment": "# Alignment settings",
     "seamline_metadata": "# Seamline metadata settings",
-    "radiometric_normalization": "# Radiometric normalization settings",
+    "spectralmatch": "# SpectralMatch settings",
 }
 
 
@@ -849,14 +849,14 @@ def _collect_planned_non_temp_outputs(
             local_path = local_state.step_dirs["seamline_metadata"]
             output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
 
-    if local_args.run_radiometric_normalization and not getattr(local_args, "group_by_basename", None):
+    if local_args.run_spectralmatch and not getattr(local_args, "group_by_basename", None):
         first_scene = next(iter(scene_list), None)
-        if first_scene is not None and not worldview._is_temp_save_value(local_args.save_radiometric_normalization):
+        if first_scene is not None and not worldview._is_temp_save_value(local_args.save_spectralmatch):
             local_state = _make_planning_state(first_scene, local_args)
-            local_path = local_state.step_dirs["radiometric_normalization"]
+            local_path = local_state.step_dirs["spectralmatch"]
             output_map[os.path.abspath(local_path)] = _remote_output_file_path(local_path, remote_output_dir)
 
-    if local_args.run_radiometric_normalization and getattr(local_args, "group_by_basename", None):
+    if local_args.run_spectralmatch and getattr(local_args, "group_by_basename", None):
         first_scene = next(iter(scene_list), None)
         if first_scene is not None:
             local_state = _make_planning_state(first_scene, local_args)
@@ -898,7 +898,7 @@ def _collect_group_by_basename_output_downloads(
 
     def _walk(spec: Mapping[str, Any]) -> None:
         for output_key, value in spec.items():
-            local_path = worldview._resolve_radiometric_group_output_path(
+            local_path = worldview._resolve_spectralmatch_group_output_path(
                 output_name=output_key,
                 temp_root=local_temp_root,
                 output_root=local_output_root,

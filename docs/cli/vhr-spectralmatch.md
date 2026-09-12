@@ -1,19 +1,21 @@
-# vhr-radiometric-normalization
+# vhr-spectralmatch
 
 ## Overview
 
-`vhr-radiometric-normalization` runs the shared SpectralMatch wrapper directly. Any `--match-*` argument is forwarded into the upstream SpectralMatch pipeline after the `match_` prefix is stripped.
+`vhr-spectralmatch` runs the shared SpectralMatch wrapper directly. Any `--match-*` argument is forwarded into the upstream SpectralMatch pipeline after the `match_` prefix is stripped.
+
+SpectralMatch handles all output reuse and validation. Use `--match-shared-resume-from-steps no`, `yes`, or `validate` to choose its resume behavior. `--output-image` accepts the file or folder required by the final `--match-steps` entry.
 
 ## Installation
 
 ```bash
-pip install "vhrharmonize[radiometric-normalization]"
+pip install "vhrharmonize[spectralmatch]"
 ```
 
 ## Usage
 
 ```bash
-vhr-radiometric-normalization \
+vhr-spectralmatch \
   --input-image /data/image_a.tif \
   --input-image /data/image_b.tif \
   --output-image /data/normalized.tif

@@ -1,11 +1,11 @@
-"""Radiometric normalization via the upstream SpectralMatch pipeline API."""
+"""SpectralMatch via the upstream SpectralMatch pipeline API."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable
 
-from spectralmatch.chain import pipeline as spectralmatch_pipeline
+from spectralmatch.chain import DEFAULT_PIPELINE_STEPS, pipeline as spectralmatch_pipeline
 from vhrharmonize.preprocess.helpers import _log, _logged_operation
 
 
@@ -22,8 +22,8 @@ def _normalize_input_images(shared_input_images: Iterable[str]) -> list[str]:
     return normalized
 
 
-@_logged_operation("radiometric_normalization", outputs=("shared_output_image_path",))
-def radiometric_normalization(
+@_logged_operation("spectralmatch", outputs=("shared_output_image_path",))
+def spectralmatch(
     shared_input_images: Iterable[str],
     shared_output_image_path: str,
     *,
@@ -43,11 +43,11 @@ def radiometric_normalization(
     log_to_console: bool = False,
     **kwargs: Any,
 ) -> str:
-    """Run radiometric normalization with SpectralMatch.
+    """Run SpectralMatch with SpectralMatch.
     Args:
         shared_input_images: Input raster paths for normalization.
-        shared_output_image_path: Output raster path, or folder for a tiled merge.
-        method: Requested radiometric normalization method.
+        shared_output_image_path: File or folder matching the final SpectralMatch step.
+        method: Requested SpectralMatch method.
         shared_temp_dir: Optional SpectralMatch temp directory.
         delete_temp_dir: Whether SpectralMatch should delete its temp directory.
         shared_debug_logs: Whether SpectralMatch should emit debug logs.
@@ -67,7 +67,7 @@ def radiometric_normalization(
     """
     method_norm = method.strip().lower()
     if method_norm != "spectralmatch":
-        raise ValueError(f"Unsupported radiometric normalization method: {method}")
+        raise ValueError(f"Unsupported SpectralMatch method: {method}")
 
     output_path = Path(shared_output_image_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +75,7 @@ def radiometric_normalization(
     _log(
         f"Processing inputs={len(input_images)} output={output_path.name}",
         enabled=log_to_console,
-        step="radiometric",
+        step="spectralmatch",
     )
 
     pipeline_kwargs = {
@@ -110,25 +110,11 @@ def radiometric_normalization(
     for key, value in kwargs.items():
         pipeline_kwargs[key] = tuple(value) if key in tuple_options and isinstance(value, list) else value
 
-    result = spectralmatch_pipeline(**pipeline_kwargs)
-
-    if output_path.exists():
-        _log(f"Wrote output {output_path.name}", enabled=log_to_console, step="radiometric")
-        return str(output_path)
-    if isinstance(result, str) and result:
-        return result
-    if hasattr(result, "get") and callable(result.get):
-        output_value = result.get("output")
-        if output_value:
-            return str(output_value)
-    if hasattr(result, "shared_output_image_path") and getattr(result, "shared_output_image_path"):
-        return str(getattr(result, "shared_output_image_path"))
-    if hasattr(result, "output_image_path") and getattr(result, "output_image_path"):
-        return str(getattr(result, "output_image_path"))
-
-    raise RuntimeError("spectralmatch pipeline did not produce the requested output image.")
+    spectralmatch_pipeline(**pipeline_kwargs)
+    # SpectralMatch owns output validation and resume, including folder outputs.
+    return str(output_path)
 
 
 __all__ = [
-    "radiometric_normalization",
+    "spectralmatch",
 ]

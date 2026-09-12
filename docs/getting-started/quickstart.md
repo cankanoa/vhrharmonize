@@ -93,8 +93,8 @@ vhr-py6s \
 ```
 
 ```bash
-# Run radiometric normalization directly
-vhr-radiometric-normalization \
+# Run SpectralMatch directly
+vhr-spectralmatch \
   --input-image /data/image_a.tif \
   --input-image /data/image_b.tif \
   --output-image /data/normalized.tif

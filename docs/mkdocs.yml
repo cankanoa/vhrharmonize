@@ -21,7 +21,7 @@ nav:
       - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
       - vhr-align-image-pair: cli/vhr-align-image-pair.md
       - vhr-orthorectification: cli/vhr-orthorectification.md
-      - vhr-radiometric-normalization: cli/vhr-radiometric-normalization.md
+      - vhr-spectralmatch: cli/vhr-spectralmatch.md
       - vhr-py6s: cli/vhr-py6s.md
   - Configuration:
       - WorldView Config: configuration/worldview-config.md
@@ -37,7 +37,7 @@ nav:
       - preprocess.helpers: api/preprocess-helpers.md
       - preprocess.orthorectification: api/preprocess-orthorectification.md
       - preprocess.pansharpening: api/preprocess-pansharpening.md
-      - preprocess.radiometric_normalization: api/preprocess-radiometric-normalization.md
+      - preprocess.spectralmatch: api/preprocess-spectralmatch.md
       - providers.standardized: api/providers-standardized.md
       - providers.worldview: api/providers-worldview.md
 

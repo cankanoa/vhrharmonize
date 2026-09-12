@@ -188,13 +188,13 @@ def test_proactive_cleanup_protects_source_aliases(cleanup_scene, make_test_rast
     assert sidecar.exists()
 
 
-@pytest.mark.parametrize("consumer", ["alignment_fixed_image", "dem_file_path", "group_by_basename", "radiometric_normalization_kwargs_json"])
+@pytest.mark.parametrize("consumer", ["alignment_fixed_image", "dem_file_path", "group_by_basename", "spectralmatch_kwargs_json"])
 def test_proactive_cleanup_preserves_explicit_file_inputs(cleanup_scene, make_test_raster, consumer):
     args, state, _ = cleanup_scene
     save_scene_outputs(state, args, make_test_raster)
     temp = make_test_raster(Path(state.cleanup_step_outputs["atmospheric_correction"][0]))
     value = {"mosaic.tif": [f"file:{temp}"]} if consumer == "group_by_basename" else str(temp)
-    if consumer == "radiometric_normalization_kwargs_json":
+    if consumer == "spectralmatch_kwargs_json":
         value = json.dumps({"shared_input_images": [str(temp)]})
     setattr(args, consumer, value)
 
@@ -203,7 +203,7 @@ def test_proactive_cleanup_preserves_explicit_file_inputs(cleanup_scene, make_te
     assert temp.exists()
 
 
-@pytest.mark.parametrize("aggregate", ["seamline_metadata", "radiometric_normalization"])
+@pytest.mark.parametrize("aggregate", ["seamline_metadata", "spectralmatch"])
 @pytest.mark.parametrize("succeeds", [False, True])
 @pytest.mark.parametrize("delete_temp", [False, True])
 def test_aggregate_inputs_survive_until_consumers_finish(
@@ -258,7 +258,7 @@ def test_temp_only_scene_is_retained_without_a_saved_aggregate(cleanup_scene, ma
 def test_temp_only_scene_can_be_cleaned_after_a_persistent_aggregate(cleanup_scene, make_test_raster):
     args, state, _ = cleanup_scene
     args.save_cloud_mask = "$temp/cloud"
-    args.run_radiometric_normalization = True
+    args.run_spectralmatch = True
     state = worldview._initialize_scene_state(state.scene, args)
     final = make_test_raster(Path(state.cleanup_step_outputs["final_raster"][0]))
     mosaic = make_test_raster(Path(args.output_dir) / "mosaic.tif")
@@ -267,6 +267,43 @@ def test_temp_only_scene_can_be_cleaned_after_a_persistent_aggregate(cleanup_sce
 
     assert not final.exists()
     assert mosaic.exists()
+
+
+@pytest.mark.parametrize("succeeds", [False, True])
+def test_spectralmatch_success_controls_cleanup_without_output_validation(
+    cleanup_scene, make_test_raster, monkeypatch, succeeds,
+):
+    args, state, _ = cleanup_scene
+    args.run_spectralmatch = True
+    args.save_spectralmatch = str(Path(args.output_dir) / "timelapse")
+    args.save_cloud_mask = "$temp/cloud"
+    state = worldview._initialize_scene_state(state.scene, args)
+    final = make_test_raster(Path(state.cleanup_step_outputs["final_raster"][0]))
+    make_test_raster(Path(state.cleanup_step_outputs["cloud_mask_mask"][0]))
+    monkeypatch.setattr(worldview, "_collect_input_files_by_stage", lambda value: {"file_source": state.source_files})
+    monkeypatch.setattr(worldview, "_load_worldview_scenes_from_stage_paths", lambda *a, **k: [state.scene])
+    inspect = worldview._existing_outputs_are_reusable
+
+    def check(paths, **kwargs):
+        assert args.save_spectralmatch not in paths
+        return inspect(paths, **kwargs)
+
+    def consume(*a, **k):
+        assert final.exists()
+        if not succeeds:
+            raise RuntimeError("SpectralMatch failed")
+        # Successful return is the completion signal; the wrapper must not inspect it.
+        return args.save_spectralmatch
+
+    monkeypatch.setattr(worldview, "_existing_outputs_are_reusable", check)
+    monkeypatch.setattr(worldview, "_run_spectralmatch_workflow", consume)
+    if succeeds:
+        assert worldview._run_workflow(args) == 0
+    else:
+        with pytest.raises(RuntimeError, match="SpectralMatch failed"):
+            worldview._run_workflow(args)
+
+    assert final.exists() is (not succeeds)
 
 
 def test_staged_permanent_source_bundle_must_be_complete(cleanup_scene, make_test_raster):
@@ -338,12 +375,12 @@ def test_removed_directory_cleanup_flags_are_rejected(flag):
 
 @pytest.mark.parametrize("delete_temp", [False, True])
 @pytest.mark.parametrize("match_override", [None, False, True])
-def test_radiometric_cleanup_defaults_follow_workflow_flag(delete_temp, match_override):
+def test_spectralmatch_cleanup_defaults_follow_workflow_flag(delete_temp, match_override):
     args = worldview._build_parser().parse_args([])
     args.delete_temp_dir = delete_temp
     args.match_delete_temp_dir = match_override
 
-    kwargs = worldview._build_radiometric_kwargs(args)
+    kwargs = worldview._build_spectralmatch_kwargs(args)
 
     assert kwargs["delete_temp_dir"] is (delete_temp if match_override is None else match_override)
 

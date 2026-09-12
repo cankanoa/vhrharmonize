@@ -29,9 +29,9 @@ _EXPORTS = {
         ".preprocess.orthorectification",
         "resolve_output_resolution_for_crs",
     ),
-    "radiometric_normalization": (
-        ".preprocess.radiometric_normalization",
-        "radiometric_normalization",
+    "spectralmatch": (
+        ".preprocess.spectralmatch",
+        "spectralmatch",
     ),
     "align_image_pair": (".preprocess.alignment", "align_image_pair"),
     "AlignmentResult": (".preprocess.alignment", "AlignmentResult"),
