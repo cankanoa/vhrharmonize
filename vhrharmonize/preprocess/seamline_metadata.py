@@ -291,7 +291,7 @@ def write_seamline_metadata_gpkg(
     )
     datasource = output_layer = None
     try:
-        for image_basename, geometry in results:
+        for completed, (image_basename, geometry) in enumerate(results, start=1):
             if datasource is None:
                 datasource, output_layer = _open_seamline_metadata_writer(
                     output_path, layer, epsg, records, append=append,
@@ -299,7 +299,10 @@ def write_seamline_metadata_gpkg(
             record = records[image_basename]
             _write_seamline_metadata_record(datasource, output_layer, record, geometry)
             processed_image_basenames.add(image_basename)
-            _log_image_completed(record["scene_basename"], len(processed_image_basenames), total, enabled=log_to_console, step="seamline_metadata")
+            _log_image_completed(
+                record["scene_basename"], completed, total, processing_total=len(tasks),
+                enabled=log_to_console, step="seamline_metadata",
+            )
     finally:
         output_layer = None
         datasource = None

@@ -212,7 +212,7 @@ alignment:
   alignment_use_edge_proxies: true
   alignment_split_factor: 0 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
   alignment_clip_fixed_to_moving: true
-  alignment_output_on_moving_grid: true
+  alignment_output_on_moving_grid: false
   alignment_trim_edge_invalid: true
   alignment_edge_trim_depth: 8 # Number of edge pixels to trim
   alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
@@ -270,23 +270,28 @@ spectralmatch:
   # match_steps: [joint_coregistration, global_regression, local_block_adjustment, align] # For a time series
 
   # Joint coregistration
+  # match_joint_coregistration_tie_feature_method: orb
+  # match_joint_coregistration_tie_grid_spacing: 500.0 # Search-center spacing in CRS units, independent of local_grid_spacing
+  # match_joint_coregistration_tie_search_radius: 128px # Window half-width; positive number followed by px or crs
+  # match_joint_coregistration_tie_orb_max_features: 100 # Per image per search window
+  # match_joint_coregistration_tie_max_matches_per_window: 1 # Per image pair; null keeps all surviving matches
+  # match_joint_coregistration_tie_maximum_displacement: null # Maximum displacement in CRS units; null disables the limit
+  # match_joint_coregistration_tie_ransac_reprojection_threshold: null # CRS units; null uses three pixels at the coarser resolution
+  # match_joint_coregistration_tie_robust_loss: huber # none | huber | soft_l1 | cauchy
+  # match_joint_coregistration_tie_robust_loss_scale: null # CRS units; null uses the median pair RANSAC threshold
+  # match_joint_coregistration_tie_save_path: /path/to/tie_points.json # Selected ties in original zero-based pixel coordinates
+  # match_joint_coregistration_tie_save_crs_path: /path/to/tie_points.gpkg # Paired points in the input CRS; GPKG or GeoJSON
+  # match_joint_coregistration_tie_load_path: /path/to/tie_points.json
   # match_joint_coregistration_global_model: translation # none | translation | similarity | affine
-  # match_joint_coregistration_global_image_position_preservation_weights: null # Mapping of image basename to weight
-  # match_joint_coregistration_global_tie_point_alignment_strength: 1.0
+  # match_joint_coregistration_global_image_movement_penalty_weights: null # Ordered basename-glob mapping to positive weights; first match wins; larger weights resist movement
+  # match_joint_coregistration_global_tie_alignment_strength: 1.0 # 0..1 or a JSON object string, e.g. '{"reference*": 0, "*": 1}'
   # match_joint_coregistration_local_model: piecewise_affine # none | bilinear | piecewise_affine
-  # match_joint_coregistration_local_image_position_preservation_weights: null # Mapping of image basename to weight
-  # match_joint_coregistration_local_tie_point_alignment_strength: 1.0
+  # match_joint_coregistration_local_image_movement_penalty_weights: null # Ordered basename-glob mapping to positive weights; first match wins; larger weights resist deformation
+  # match_joint_coregistration_local_tie_alignment_strength: 1.0 # 0..1 or a JSON object string, e.g. '{"reference*": 0, "*": 1}'
   # match_joint_coregistration_local_grid_spacing: 500.0
   # match_joint_coregistration_local_smoothness_weight: 1.0
   # match_joint_coregistration_local_bending_weight: 1.0
   # match_joint_coregistration_local_anchor_falloff_distance: 500.0
-  # match_joint_coregistration_feature_method: orb
-  # match_joint_coregistration_maximum_tie_point_displacement: null
-  # match_joint_coregistration_ransac_reprojection_threshold: null
-  # match_joint_coregistration_robust_loss: huber # none | huber | soft_l1 | cauchy
-  # match_joint_coregistration_robust_loss_scale: null
-  # match_joint_coregistration_save_adjustments: /path/to/tie_points.json
-  # match_joint_coregistration_load_adjustments: /path/to/tie_points.json
   # match_joint_coregistration_resampling_method: bilinear # nearest | bilinear | cubic | lanczos
   # match_joint_coregistration_tap: false
   # match_joint_coregistration_resolution: null # Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units

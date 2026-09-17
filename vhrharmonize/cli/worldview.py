@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import ExitStack, nullcontext
 import json
 import math
+from multiprocessing import Manager
 import os
 from pathlib import Path
 import re
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional
+from uuid import uuid4
 
 from osgeo import gdal
 from tifffile import TiffFile
@@ -631,7 +634,13 @@ def _process_scenes_with_process_pool(
 ) -> List[SceneWorkflowState]:
     """Run independent scene preprocessing with ProcessPoolExecutor."""
     ordered_results: List[SceneWorkflowState | None] = [None] * len(scenes)
-    with ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))) as executor:
+    with ExitStack() as stack:
+        if args.log_to_console:
+            manager = stack.enter_context(Manager())
+            args = argparse.Namespace(**vars(args))
+            args._completed_steps = manager.dict()
+            args._progress_lock = manager.Lock()
+        executor = stack.enter_context(ProcessPoolExecutor(max_workers=min(worker_count, len(scenes))))
         future_to_index = {
             executor.submit(_process_scene, scene, args): index
             for index, scene in enumerate(scenes)
@@ -648,10 +657,21 @@ def _process_scenes_with_dask(
 ) -> List[SceneWorkflowState]:
     """Run independent scene preprocessing on an existing Dask cluster."""
     client = _make_dask_client(args)
+    progress = None
     try:
+        if args.log_to_console:
+            from dask.distributed import Lock, Variable
+            name = f"vhr-progress-{uuid4().hex}"
+            progress = Variable(name, client=client)
+            progress.set({})
+            args = argparse.Namespace(**vars(args))
+            args._dask_progress = progress
+            args._progress_lock = Lock(name)
         futures = client.map(_process_scene, scenes, [args] * len(scenes))
         return list(client.gather(futures))
     finally:
+        if progress is not None:
+            progress.delete()
         client.close()
 
 
@@ -665,6 +685,10 @@ def _process_scenes(
         for index, scene in enumerate(scenes, start=1)
     }
     args.scene_total = len(scenes)
+    if args.log_to_console:
+        if not hasattr(args, "_processing_scenes"):
+            _count_processing_steps(scenes, args)
+        args._completed_steps = {}
     if getattr(args, "delete_temp_steps_proactively", False) or getattr(args, "delete_temp_dir", False):
         args._cleanup_source_files = _dedupe_paths([
             path for scene in scenes for image in scene.iter_images()
@@ -749,6 +773,31 @@ def _log_step_plan(
     _log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
+def _log_scene_step_completed(scene_basename, args, step="workflow"):
+    """Advance only pending work, sharing completion counts between workers."""
+    if not args.log_to_console:
+        return
+    pending = getattr(args, "_processing_scenes", {}).get(step)
+    if pending is not None and scene_basename not in pending:
+        return
+    total = getattr(args, "scene_total", 1)
+    with getattr(args, "_progress_lock", None) or nullcontext():
+        distributed = getattr(args, "_dask_progress", None)
+        counts = distributed.get() if distributed is not None else getattr(args, "_completed_steps", None)
+        if counts is None:
+            index = getattr(args, "scene_indices", {}).get(scene_basename, 1)
+        else:
+            index = counts.get(step, 0) + 1
+            counts[step] = index
+            if distributed is not None:
+                distributed.set(counts)
+        _log_image_completed(
+            scene_basename, index, total,
+            processing_total=len(pending) if pending is not None else total,
+            enabled=True, step=step,
+        )
+
+
 def _logged_scene_step(step):
     """Give each scene step a consistent lifecycle, including reused outputs."""
     def _decorate(function):
@@ -774,6 +823,7 @@ def _logged_scene_step(step):
                 index=getattr(args, "scene_indices", {}).get(scene_basename, 1),
                 total=getattr(args, "scene_total", 1),
                 announce_step=False,
+                on_completed=lambda: _log_scene_step_completed(scene_basename, args, step),
             ):
                 return function(state, args)
         return _wrapped
@@ -1923,6 +1973,7 @@ def _run_spectralmatch_workflow(
         "spectralmatch", "all_scenes", available_paths, [],
         enabled=args.log_to_console, index=len(available_paths),
         total=getattr(args, "scene_total", len(available_paths)),
+        processing_total=len(available_paths),
     ):
         group_spec = _normalize_group_by_basename_spec(args.group_by_basename)
         if group_spec is not None:
@@ -3297,11 +3348,7 @@ def _process_scene(scene: WorldViewScene, args: argparse.Namespace) -> SceneWork
         )
     _write_scene_report(state, args, scene_started_utc=scene_started_utc)
     _cleanup_completed_scene_temp_steps(state, args)
-    _log_image_completed(
-        scene.primary_basename,
-        getattr(args, "scene_indices", {}).get(scene.primary_basename, 1),
-        getattr(args, "scene_total", 1), enabled=args.log_to_console,
-    )
+    _log_scene_step_completed(scene.primary_basename, args)
     return state
 
 
@@ -3346,6 +3393,7 @@ def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespa
         "pansharpen", "cloud_mask", "alignment", "seamline_metadata", "spectralmatch",
     ]
     counts = {step: {"loaded": 0, "processing": 0} for step in steps}
+    args._processing_scenes = {step: set() for step in [*steps[:-2], "workflow"]}
     quiet_args = argparse.Namespace(**vars(args))
     quiet_args.log_to_console = False
     states = [_initialize_scene_state(scene, quiet_args) for scene in scenes]
@@ -3363,6 +3411,8 @@ def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespa
         excluded = (args.max_cloud_cover_to_process is not None and cloud_cover is not None
                     and cloud_cover > args.max_cloud_cover_to_process)
         skipped = excluded or (args.skip_existing and _scene_final_outputs_complete(state, quiet_args))
+        if not skipped:
+            args._processing_scenes["workflow"].add(state.scene.primary_basename)
         for step in steps[:-2]:
             if not getattr(args, f"run_{step}"):
                 continue
@@ -3379,7 +3429,9 @@ def _count_processing_steps(scenes: List[WorldViewScene], args: argparse.Namespa
                 runs = runs and args.run_pansharpen and not args.existing_pan_ortho_input
             if step == "atmospheric_correction" and args.skip_flaash:
                 runs = False
-            counts[step]["processing"] += int(runs and not skipped and not (args.run_from_existing and loaded))
+            if runs and not skipped and not (args.run_from_existing and loaded):
+                counts[step]["processing"] += 1
+                args._processing_scenes[step].add(state.scene.primary_basename)
 
     if not states:
         return counts

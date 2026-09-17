@@ -27,12 +27,14 @@ def _log_image_start(scene_basename: str, inputs, outputs, *, enabled: bool = Fa
     _log(" | ".join(parts), enabled=enabled, step=step, scene_basename=scene_basename)
 
 
-def _log_image_completed(scene_basename: str, index: int, total: int, *, enabled: bool = False, step: str | None = None) -> None:
-    _log(f"Completed {index}/{total}", enabled=enabled, step=step, scene_basename=scene_basename)
+def _log_image_completed(scene_basename: str, index: int, total: int, *, processing_total: int | None = None, enabled: bool = False, step: str | None = None) -> None:
+    if processing_total is None:
+        processing_total = total
+    _log(f"Completed {index}/{processing_total}/{total}", enabled=enabled, step=step, scene_basename=scene_basename)
 
 
 @contextmanager
-def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, index=1, total=1, announce_step=True, allow_nested=False):
+def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, index=1, total=1, processing_total=None, announce_step=True, allow_nested=False, on_completed=None):
     """Log successful completion only; nested operations share the scene context."""
     if _active_scene.get() is not None and not allow_nested:
         yield
@@ -46,7 +48,10 @@ def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, in
         _log(f"Failed | {type(exc).__name__}: {exc}", enabled=enabled, scene_basename=scene_basename)
         raise
     else:
-        _log_image_completed(scene_basename, index, total, enabled=enabled)
+        if on_completed is not None:
+            on_completed()
+        else:
+            _log_image_completed(scene_basename, index, total, processing_total=processing_total, enabled=enabled)
     finally:
         _active_step.reset(step_token)
         _active_scene.reset(token)

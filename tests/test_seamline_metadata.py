@@ -4,6 +4,8 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import redirect_stdout
+from io import StringIO
 import sys
 
 import geopandas as gpd
@@ -69,6 +71,25 @@ class SeamlineMetadataTests(unittest.TestCase):
             self.write([self.state("/new/a.tif")])
         calculate.assert_not_called()
         save.assert_not_called()
+
+    def test_progress_excludes_reused_records_and_counts_completion_order(self):
+        with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
+            self.write([self.state("a.tif")])
+        self.kwargs.update(log_to_console=True, scene_total=264)
+        states = [self.state(name) for name in ("a.tif", "b.tif", "c.tif")]
+
+        def results(*args, **kwargs):
+            yield "c.tif", box(0, 0, 1, 1)
+            yield "b.tif", box(0, 0, 1, 1)
+
+        output = StringIO()
+        with redirect_stdout(output), patch.object(seamline_metadata, "_iter_seamline_metadata_results", results):
+            self.write(states)
+        lines = [line for line in output.getvalue().splitlines() if "Completed" in line]
+        self.assertEqual(lines, [
+            "[c seamline_metadata] Completed 1/2/264",
+            "[b seamline_metadata] Completed 2/2/264",
+        ])
 
     def test_disabled_validation_replaces_output(self):
         with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
