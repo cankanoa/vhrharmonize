@@ -9,6 +9,7 @@ from io import StringIO
 import sys
 
 import geopandas as gpd
+import numpy as np
 from osgeo import gdal, osr
 from shapely.geometry import box, MultiPolygon
 
@@ -162,6 +163,23 @@ class SeamlineMetadataTests(unittest.TestCase):
         result = self.read()
         self.assertEqual(set(result.image_basename), {"a.tif", "b.tif", "c.tif"})
         self.assertTrue(all(geometry.equals(box(0, 0, 4, 4)) for geometry in result.geometry))
+
+    def test_diagonally_connected_pixels_are_repaired_before_saving(self):
+        image_path = str(Path(self.temp.name) / "diagonal.tif")
+        dataset = gdal.GetDriverByName("GTiff").Create(image_path, 2, 2, 1, gdal.GDT_Byte)
+        dataset.SetGeoTransform((10, 2, 0, 20, 0, -2))
+        dataset.GetRasterBand(1).SetNoDataValue(0)
+        dataset.GetRasterBand(1).WriteArray(np.array([[1, 0], [0, 1]], dtype=np.uint8))
+        dataset = None
+
+        geometry = seamline_metadata._valid_data_polygon_from_image(image_path)
+        expected = MultiPolygon([box(10, 18, 12, 20), box(12, 16, 14, 18)])
+        self.assertTrue(geometry.is_valid)
+        self.assertTrue(geometry.equals(expected))
+        self.write([self.state(image_path)])
+        saved = self.read().geometry.iloc[0]
+        self.assertTrue(saved.is_valid)
+        self.assertTrue(saved.equals(expected))
 
     def test_package_bounds_workers_use_imd_and_reuse_existing_without_corners(self):
         from test_scene_bounds import CORNERS

@@ -264,7 +264,7 @@ spectralmatch:
   # match_delete_previous_step: false # Delete inactive intermediate step outputs
 
   # Pipeline order.
-  # Allowed steps: joint_coregistration, align, global_regression, local_block_adjustment, voronoi_center_seamline, weighted_seamline, mask, merge. Only one seamline step may be included.
+  # Allowed steps: joint_coregistration, align, global_regression, local_block_adjustment, create_footprints, postprocess_footprints, weighted_seamline, mask, merge. Only one seamline step may be included: voronoi_center_seamline or weighted_seamline.
   # Below matches SpectralMatch's default pipeline; a separate align step is unnecessary after joint_coregistration.
   # match_steps: [joint_coregistration, global_regression, local_block_adjustment, voronoi_center_seamline, mask, merge] # For mosaic
   # match_steps: [joint_coregistration, global_regression, local_block_adjustment, align] # For a time series
@@ -319,7 +319,7 @@ spectralmatch:
   # match_global_regression_pif_max_samples: 10000 # null disables the cap
   # match_global_regression_pif_min_samples: 10
   # match_global_regression_pif_feature_method: orb
-  # match_global_regression_pif_load_tie_points: /path/to/tie_points.json
+  # match_global_regression_pif_load_ties: /path/to/tie_points.json
   # match_global_regression_pif_save_inz: /path/to/inz_outputs
   # match_global_regression_build_overviews: false
   # Local block adjustment
@@ -332,15 +332,38 @@ spectralmatch:
   # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
   # match_local_block_adjustment_build_overviews: false
 
+  # Footprint creation. Include create_footprints in match_steps; current rasters remain available for masking and merging.
+  # match_create_footprints_image_field_name: image # Use the same field name in the seamline step
+  # match_create_footprints_output_layer: footprints
+  # match_create_footprints_band: 1 # One-based raster band whose validity mask defines the footprints
+  # match_create_footprints_eight_connected: true # false uses four-connected polygonization
+
+  # Footprint postprocessing. Include postprocess_footprints in match_steps; polygons and layer names flow to the seamline step.
+  # match_postprocess_footprints_input_polygons: null # Uses preceding footprint output; or /path/to/seamline_metadata.gpkg
+  # match_postprocess_footprints_input_layer: null # Inherits preceding footprint layer when using its polygons; or footprints for an explicit input
+  # match_postprocess_footprints_output_layer: footprints
+  # match_postprocess_footprints_edge_distance: 800 # Maximum hole-to-edge distance in projected CRS units; 0 disables edge cuts
+  # match_postprocess_footprints_hole_to_hole_distance: 800 # Maximum distance between original holes in one component; 0 disables hole-pair cuts
+  # match_postprocess_footprints_relative_edge_distance: null # Optional edge distance limit relative to sqrt(hole_area / pi)
+  # match_postprocess_footprints_cut_width: maximum_inscribed_circle # Positive integer | hole_size | maximum_inscribed_circle; pairs use the smaller width
+  # match_postprocess_footprints_cut_method: corridor # corridor | buffer
+  # match_postprocess_footprints_smoothing_radius: 240 # Inward smoothing radius in projected CRS units; 0 disables smoothing
+  # match_postprocess_footprints_simplify_tolerance: 120 # Maximum inward simplification deviation in projected CRS units; 0 disables simplification
+  # match_postprocess_footprints_simplify_area_weight: 0.5 # Area retention weight in [0, 1]
+  # match_postprocess_footprints_area_filter: null # Minimum component area in squared CRS units
+  # match_postprocess_footprints_area_rank: 1 # Largest N components; negative N keeps smallest abs(N); 0 or null keeps all
+
   # Seamlines
   # Select the seamline algorithm by including either `voronoi_center_seamline` or `weighted_seamline` in match_steps.
   # match_voronoi_center_seamline_aoi_path: /path/to/aoi.gpkg
-  # match_voronoi_center_seamline_vector_mask: [/path/to/footprints.gpkg, image]
+  # match_voronoi_center_seamline_input_polygons: null # Uses preceding footprint output, or creates footprints from current images; or /path/to/footprints.gpkg
+  # match_voronoi_center_seamline_input_layer: null # Inherits preceding footprint layer when using its polygons
+  # match_voronoi_center_seamline_output_layer: seamlines
   # match_voronoi_center_seamline_image_field_name: image
   # match_voronoi_center_seamline_min_point_spacing: 10
   # match_voronoi_center_seamline_min_cut_length: 0
   # match_voronoi_center_seamline_debug_vectors_path: /path/to/debug_vectors.gpkg
-  # Weighted seamline inputs. These pair nicely with `run_seamline_metadata: true` above.
+  # Weighted seamline inputs. Use preceding footprint output or provide an explicit path, e.g. from run_seamline_metadata above.
   # match_weighted_seamline_input_polygons: /path/to/seamline_metadata.gpkg
   # Rank functions support field placeholders plus Python expression operators: +, -, *, /, //, %, **, comparisons, and/or/not, parentheses, and math functions abs, min, max, round, sqrt, log, log10, exp, sin, cos, tan.
   # match_weighted_seamline_rank_function: "-{cloud_cover} + {sun_elevation}"

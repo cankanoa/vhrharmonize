@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping
 
 import geopandas as gpd
 from osgeo import gdal, ogr, osr
+from shapely import make_valid
 from shapely.affinity import affine_transform
 from shapely.wkt import loads as wkt_loads
 
@@ -68,7 +69,7 @@ def _valid_data_polygon_from_image(path: str, *, eight_connected: bool = True) -
 
     pixel_polygon = wkt_loads(best_geometry.ExportToWkt())
     dataset = None
-    return affine_transform(
+    geometry = affine_transform(
         pixel_polygon,
         (
             geotransform[1],
@@ -79,6 +80,11 @@ def _valid_data_polygon_from_image(path: str, *, eight_connected: bool = True) -
             geotransform[3],
         ),
     )
+    if not geometry.is_valid:
+        geometry = make_valid(geometry, method="structure", keep_collapsed=False)
+    if geometry.is_empty or not geometry.is_valid or geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+        raise ValueError(f"Cannot repair valid-data polygon: {path}")
+    return geometry
 
 
 def _calculate_seamline_metadata_geometry(
