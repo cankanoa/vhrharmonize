@@ -91,6 +91,7 @@ shared:
   # core:check_validity: true # true | false; default: true. Verify raster readability, TIFF bounds and JSON syntax.
   # core:validity_check_grid_size: 2048 # integer >= 0; default: 2048. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
   # core:log_to_console: true # true | false; default: true.
+  param:log_to_console: true # true | false; default: NA. Use this to pass logging preferences to the plugins.
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
   # Workflow-wide constants. They remain available to every scene and aggregate.
