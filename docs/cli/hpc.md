@@ -38,3 +38,5 @@ SpectralMatch stages require SpectralMatch 1.6+ on the cluster. Explicit raster 
 Multiple `import_files` steps accumulate scenes and metadata. HPC snapshots preserve the combined collection and disable the imports already evaluated locally. New files are not sent through earlier processing stages.
 
 Custom scene IDs remain unchanged during staging and restoration. An ID is rebased only when its value is itself an explicitly staged file path; IDs containing slashes or `~` are otherwise treated as ordinary identifiers.
+
+`core:processing_direction` is preserved in the staged workflow, including per-step overrides. Vertical scene processing uses the same file dependencies and collection barriers on the cluster as locally.

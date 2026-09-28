@@ -67,8 +67,8 @@ SpectralMatch algorithms are imported from the installed package. The WorldView 
 Every command uses `vhr <command> --config <yaml>`. Plugin options live in the
 workflow YAML. Enable each desired step with `core:run: true`; omitted steps default
 to disabled. Set directories through `import_files.param:output_dir` and
-`param:temp_dir`; the importer publishes them into `const` by default, or `var` with
-`param:directory_scope: var`. The default temp value `sys` creates a system temporary directory.
+`param:temp_dir`; the importer publishes output roots into `var` and the shared temporary root into `const` by default.
+Configure these independently with `param:output_dir_scope` and `param:temp_dir_scope` (`var` or `const`). The default temp value `sys` creates a system temporary directory.
 Plugins declare the context locations core uses for directory features.
 `shared.core:output_metadata_path` optionally appends final const/var snapshots to a
 YAML-selected JSON file; `core:delete_final_json_first` defaults to true and clears

@@ -22,7 +22,8 @@
 # returned:field reads a function result; collect:name gathers a field across scenes.
 # literal:text escapes a reserved prefix; returned:$ selects the complete result.
 # JSONata sees one object: {"const": {...}, "var": {...}}. Use const.name / var.name.
-# Aggregate var: assignments must be lists in scene order or dictionaries keyed by every scene ID.
+# var: assignments evaluate separately for each scene, including in aggregate steps.
+# Aggregate returned: assignments to var: map a list in scene order or a dictionary keyed by scene ID.
 # Each scene stores its own value; collect:name reads the current values in scene order.
 # Unquoted prefixes work in YAML. Use >- for expressions containing a colon followed by a space.
 # import_files resolves file-relative paths and publishes absolute directory roots.
@@ -30,7 +31,7 @@
 # File descriptor fields become scene variables; mul, source and scene_id are explicit mappings below.
 # Suffix assignments run before path expressions; disabled steps perform no assignments or I/O.
 # Image steps read current_image_paths before updating it; disabled steps retain the previous path.
-# Scene current_image_paths is one path; aggregate var.current_image_paths is the ordered list.
+# current_image_paths is one path per scene; aggregate function parameters use collect:current_image_paths.
 #
 # Context fields only reach functions through explicit param: links.
 # Precedence: per-step param > shared param > Python function default. core: controls are not function defaults.
@@ -39,6 +40,7 @@
 # Every processing plugin accepts these runner controls alongside its param: settings:
 #   core:run: false # true | false; default: false. Enable explicitly.
 #   core:scope: scene # scene | aggregate; default: plugin scope; scene setters always aggregate.
+#   core:processing_direction: vertical # horizontal | vertical; default: shared.core:processing_direction.
 #   core:requires: [] # path/list; default: []. Extra file dependencies, not function arguments.
 #   core:calculate_overviews: false # true | false; default: false. Selected raster outputs; requires shared.param:window_scales.
 #   core:reuse: true # true | false; default: shared.core:run_from_existing.
@@ -51,7 +53,7 @@ shared:
   plugin: shared
   core:run: true # true | false; default: false. Apply workflow-wide defaults.
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
-  core:output_metadata_path: expr:const.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
+  core:output_metadata_path: expr:var.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
   # Shared parameters are offered to every function that accepts them; no shared defaults exist.
   # Set shared values directly; per-step param: settings override them.
@@ -84,6 +86,7 @@ shared:
 
   # core:delete_temp_dir: false # true | false; default: false. Clean owned temporary outputs after success.
   # core:delete_temp_steps_proactively: true # true | false; default: true. Clean completed intermediates during processing.
+  # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
   # core:run_from_existing: true # true | false; default: true. Reuse required outputs at each step.
   # core:check_validity: true # true | false; default: true. Verify raster readability, TIFF bounds and JSON syntax.
   # core:validity_check_grid_size: 2048 # integer >= 0; default: 2048. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
@@ -102,9 +105,10 @@ import_files:
   core:run: true # true | false; default: false. Enable this step.
   # Later import_files steps add scenes and missing metadata fields; existing values and roots are preserved.
   # Output filenames are defined by YAML expressions; functions receive complete explicit paths.
-  param:output_dir: ../../processed # path; default: ./output, relative to the first matched file. Persistent products.
-  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the matched file.
-  # param:directory_scope: const # const | var; default: const. Use var for independent directories per scene.
+  param:output_dir: ../../processed # path; default: ./output, relative to each matched file. Persistent products.
+  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the first matched file by default.
+  # param:temp_dir_scope: const # const | var; default: const. Share one temporary root across scenes.
+  # param:output_dir_scope: var # const | var; default: var. Resolve an output root for each scene.
   # Sensor constants shared by all imported images.
   const:band_order: [BAND_C, BAND_B, BAND_G, BAND_Y, BAND_R, BAND_RE, BAND_N, BAND_N2]
   const:band_wavelengths_um: [0.4273, 0.4779, 0.5462, 0.6086, 0.6588, 0.7237, 0.8313, 0.9080]
@@ -428,9 +432,9 @@ cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
   param:input_image_path: var:current_image_paths # path; required.
-  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
+  var:cloudmask: expr:var.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
-  var:current_image_paths: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:current_image_paths: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_raster_path: var:current_image_paths # path; required. Or a path under const.temp_dir when only an intermediate.
   param:output_mask_path: var:cloudmask # path; required. Binary mask; may use const:temp_dir if not a deliverable.
   param:red_band_index: const:red_band_index # one-based integer; required. WorldView red.
@@ -472,7 +476,7 @@ alignment:
   param:moving_image_path: var:current_image_paths # path; required. Cached image can satisfy this dependency directly.
   param:fixed_image_path: const:reference_path # path; required when alignment runs.
   var:suffix: expr:var.suffix & '_aligned'
-  var:current_image_paths: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:current_image_paths: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:current_image_paths # path; required.
   # param:band_index: 0 # zero-based integer; default: 0. Registration metric band when per-image overrides are null.
   param:moving_band_index: 0 # zero-based integer | null; default: null -> band_index.
@@ -524,8 +528,8 @@ joint_coregistration:
   plugin: joint_coregistration
   core:run: true # true | false; default: false. Enable this step.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
-  var:suffix: expr:[$map(var.suffix, function($suffix) { $suffix & '_coreg' })]
-  var:current_image_paths: expr:[$map(var.basename, function($name, $i) { const.temp_dir & '/joint_coregistration/' & $string($i) & '_' & $name & var.suffix[$i] & '.tif' })]
+  var:suffix: expr:var.suffix & '_coreg'
+  var:current_image_paths: expr:const.temp_dir & '/joint_coregistration/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Folder (writes '$_Coregistered.tif'), '$' basename template, or list[str] matching input order and length; output paths must be unique and differ from inputs.
   # param:tie_feature_method: "orb" # orb; default: "orb". 'orb', currently the only supported tie-point detector.
   # param:tie_grid_spacing: 500.0 # number; default: 500.0. Positive CRS-unit distance between search-window centers in each pair's overlap; default 500.0; independent of local_model and local_grid_spacing.
@@ -574,7 +578,7 @@ seamline_metadata:
   param:image_paths: collect:current_image_paths # path list; required. Ordered across imported records.
   param:metadata_records: collect:footprint_metadata # JSON object list; required. Same length as image_paths.
   const:footprints: expr:const.temp_dir & '/seamline_metadata/seamline_metadata.gpkg'
-  param:output_path: const:footprints # path; required. Temporary input to seamlines; use const.output_dir to keep it as a deliverable.
+  param:output_path: const:footprints # path; required. Temporary input to seamlines; use a persistent path to keep it as a deliverable.
   param:layer: const:spectralmatch.polygon_layer # layer name; default: seamline_metadata. Previous example: footprints.
   param:image_field_name: const:spectralmatch.image_field_name # field name; default: image_path. Use the same field in SpectralMatch seamline options.
   # param:footprint_source: calculate_bounds # calculate_bounds | metadata; default: calculate_bounds. metadata uses mapped IMD corners; calculate_bounds polygonizes valid raster data.
@@ -594,8 +598,8 @@ global_regression:
   core:run: true # true | false; default: false. Enable this step.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
-  var:suffix: expr:[$map(var.suffix, function($suffix) { $suffix & '_global' })]
-  var:current_image_paths: expr:[$map(var.basename, function($name, $i) { const.temp_dir & '/global_regression/' & $string($i) & '_' & $name & var.suffix[$i] & '.tif' })]
+  var:suffix: expr:var.suffix & '_global'
+  var:current_image_paths: expr:const.temp_dir & '/global_regression/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
   # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
@@ -642,8 +646,8 @@ local_block_adjustment:
   core:run: true # true | false; default: false. Enable this step.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
-  var:suffix: expr:[$map(var.suffix, function($suffix) { $suffix & '_local' })]
-  var:current_image_paths: expr:[$map(var.basename, function($name, $i) { const.temp_dir & '/local_block_adjustment/' & $string($i) & '_' & $name & var.suffix[$i] & '.tif' })]
+  var:suffix: expr:var.suffix & '_local'
+  var:current_image_paths: expr:const.temp_dir & '/local_block_adjustment/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
   # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
@@ -768,8 +772,8 @@ mask_rasters:
   core:run: true # true | false; default: false. Enable this step.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
-  var:suffix: expr:[$map(var.suffix, function($suffix) { $suffix & '_masked' })]
-  var:current_image_paths: expr:[$map(var.basename, function($name, $i) { const.temp_dir & '/mask_rasters/' & $string($i) & '_' & $name & var.suffix[$i] & '.tif' })]
+  var:suffix: expr:var.suffix & '_masked'
+  var:current_image_paths: expr:const.temp_dir & '/mask_rasters/' & var.basename & var.suffix & '.tif'
   core:requires: const:spectralmatch.mask
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/seamline_mask.gpkg, image].
@@ -793,8 +797,10 @@ merge_rasters:
   core:run: true # true | false; default: false. Enable this step.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Defines input files from a glob path, folder, or list of paths.
-  param:output_image_path: expr:const.output_dir & '/mosaic.tif' # string; required. Output file, or output folder when output_tiles=True.
-  var:current_image_paths: expr:[$map(var.current_image_paths, function($image) { const.output_dir & '/mosaic.tif' })] # One final mosaic path per contributing scene.
+  const:mosaic_output_dirs: collect:output_dir # Explicitly collect scene roots for this one shared product.
+  const:mosaic_path: expr:const.mosaic_output_dirs[0] & '/mosaic.tif'
+  param:output_image_path: const:mosaic_path # string; required. One mosaic in the first scene's output directory; output_tiles=True uses a folder.
+  var:current_image_paths: const:mosaic_path # One final mosaic path per contributing scene.
   # param:output_tiles: false # true | false; default: false. Write tiles into a folder instead of one mosaic file.
   # param:cache: null # positive GB | null; default: null. GDAL cache size in GB, or None for the GDAL default. Inherits shared.param:cache when set.
   param:image_threads: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.

@@ -88,15 +88,17 @@ def import_files(
     create_metadata_json: dict | None = None,
     temp_dir: str = "sys",
     output_dir: str = "./output",
-    directory_scope: str = "const",
+    temp_dir_scope: str = "const",
+    output_dir_scope: str = "var",
     where=True,
 ) -> dict:
     """Import matching files and publish directory roots and plain scene objects.
 
     Relative paths resolve from each discovered file. Constant directory roots
     use the first file's directory (cwd when there are no matches). Use absolute
-    roots for a shared project directory, or directory_scope="var" for per-file
-    directories. The search glob itself is relative to the Python working directory.
+    roots for a shared project directory. Each directory has its own scope:
+    temp_dir_scope defaults to const and output_dir_scope defaults to var.
+    The search glob itself is relative to the Python working directory.
 
     Per-file metadata and filter expressions may be passed as literal:expr:... in
     YAML. They read var.file_path and imported fields, before YAML var assignments.
@@ -113,14 +115,16 @@ def import_files(
             Fields are added directly to each scene. Rules run in declaration order.
         temp_dir: Temporary directory path; sys creates a system temporary directory.
         output_dir: Persistent output directory, relative to the matched file.
-        directory_scope: const shares the first file's roots; var uses per-file roots.
+        temp_dir_scope: const (default) shares one temporary root; var uses per-file roots.
+        output_dir_scope: var (default) uses per-file output roots; const shares one root.
         where: Boolean or per-file expression controlling which scenes are imported.
     """
     _scene_id(scene_id)
     if not search_glob:
         raise ValueError("import_files.param:search_glob is required")
-    if directory_scope not in {"const", "var"}:
-        raise ValueError("directory_scope must be const or var")
+    for name, scope in (("temp_dir_scope", temp_dir_scope), ("output_dir_scope", output_dir_scope)):
+        if scope not in {"const", "var"}:
+            raise ValueError(f"{name} must be const or var")
     rules = _metadata_rules(create_metadata_json)
     patterns = search_glob if isinstance(search_glob, list) else [search_glob]
     files = sorted(
@@ -131,11 +135,15 @@ def import_files(
             if os.path.isfile(p)
         }
     )
-    published = {}
 
-    def directories(context, base_dir):
+    def directories(context, base_dir, scope):
         result = {}
-        for name, template in (("temp_dir", temp_dir), ("output_dir", output_dir)):
+        for name, template, selected_scope in (
+            ("temp_dir", temp_dir, temp_dir_scope),
+            ("output_dir", output_dir, output_dir_scope),
+        ):
+            if selected_scope != scope:
+                continue
             value = resolve(template, context)
             result[name] = (
                 tempfile.mkdtemp(prefix="vhr-")
@@ -144,16 +152,14 @@ def import_files(
             )
         return result
 
-    if directory_scope == "const":
-        base_dir = str(Path(files[0]).parent) if files else os.getcwd()
-        published = directories({}, base_dir)
+    base_dir = str(Path(files[0]).parent) if files else os.getcwd()
+    published = directories({}, base_dir, "const")
     scenes = []
     seen_ids = set()
     for filename in files:
         item = {"file_path": filename, "source_paths": [filename]}
         context = {"var": item}
-        if directory_scope == "var":
-            item.update(directories(context, str(Path(filename).parent)))
+        item.update(directories(context, str(Path(filename).parent), "var"))
         _create_metadata(item, rules)
         item["scene_id"] = _scene_id(resolve(scene_id, context, returned=item))
         if resolve(where, context, returned=item):

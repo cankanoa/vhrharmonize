@@ -54,7 +54,7 @@ shared:
   plugin: shared
   core:run: true
   # core:protect_source_files: true
-  core:output_metadata_path: expr:const.output_dir & '/processing.json'
+  core:output_metadata_path: expr:var.output_dir & '/processing.json'
   # core:delete_final_json_first: true
 
 import_files:
@@ -73,12 +73,12 @@ copy_products:
   const:copy_suffix: _copied
   param:input_path: var:image
   var:suffix: expr:var.suffix & const.copy_suffix
-  var:copied: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:copied: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_path: var:copied
   var:copied_bytes: returned:bytes
 ```
 
-Later steps can read `var:copied` and `var:copied_bytes`. JSONata sees `{"const": {...}, "var": {...}}`: constants belong to the workflow, variables to a scene. Scene and aggregate plugins can assign either scope, including from returned values. An adapter with `scope = "aggregate"` runs once; its `var:` assignments must map exactly one value to each scene. Both scopes support `collect:image` or `collect:$` after discovery. Scene-independent constants resolve once per step; constants derived separately by scene invocations must agree. See [assigning shared and scene values](#assigning-shared-and-scene-values) below. Disabled steps do nothing and export no values; all steps default to disabled.
+Later steps can read `var:copied` and `var:copied_bytes`. JSONata sees `{"const": {...}, "var": {...}}`: constants belong to the workflow, variables to a scene. Scene and aggregate plugins can assign either scope, including from returned values. An adapter with `scope = "aggregate"` runs once; its ordinary `var:` assignments still evaluate separately for each scene, and its parameters use `collect:` for scene values. Both scopes support `collect:image` or `collect:$` after discovery. Scene-independent constants resolve once per step; constants derived separately by scene invocations must agree. See [assigning shared and scene values](#assigning-shared-and-scene-values) below. Disabled steps do nothing and export no values; all steps default to disabled.
 
 ```bash
 vhr my_copy --config recipe.yml
@@ -157,7 +157,7 @@ Optional declarations:
 
 Returned-field selectors support dotted fields and `$` for the whole result. Directory selectors start with `const.` or `var.` and may point to a path or list of paths. Core resolves existing declared locations; it does not create context fields or invent directory defaults. The first available output root is the base for selected relative output arguments. Cleanup requires a populated temporary-root location; otherwise the engine raises an error even if cleanup is disabled for that run. Paths outside temporary roots are retained.
 
-`import_files` supplies directory defaults through its ordinary `temp_dir`, `output_dir` and `directory_scope` arguments. Its adapter registers `var.temp_dir`/`const.temp_dir` and `var.output_dir`/`const.output_dir`. Other plugins can publish completely different field names and declare those locations. Input arguments are passed unchanged by core: the importer resolves metadata and companions relative to each found file and returns absolute paths for later functions.
+`import_files` supplies directory defaults through its ordinary `temp_dir`, `output_dir`, `temp_dir_scope` (default `const`) and `output_dir_scope` (default `var`) arguments. Its adapter registers `var.temp_dir`/`const.temp_dir` and `var.output_dir`/`const.output_dir`. Other plugins can publish completely different field names and declare those locations. Input arguments are passed unchanged by core: the importer resolves metadata and companions relative to each found file and returns absolute paths for later functions.
 
 Final JSON saving is independent of plugin return selectors: `shared.core:output_metadata_path` resolves against the completed context and appends `{const, var}` to a JSON array. The same destination collects multiple completions; scene-specific destinations naturally produce separate files. `core:delete_final_json_first` defaults to `true`, replacing old contents on the first write to each resolved destination during a workflow run. See [final metadata](../configuration/workflow-config.md#final-metadata-json).
 
@@ -178,4 +178,4 @@ Only `plugin: shared` is a core-provided special implementation. It defines work
 
 ### Assigning shared and scene values
 
-Plugins need no extra declaration to write either scope through YAML. `const:` stores a shared JSON value; `var:` stores one value per scene. In aggregate steps, `var:` assignments must be lists matching scene count or dictionaries keyed by exactly the current scene IDs. Core distributes them in scene order and rejects unmappable results, including after a `returned:` assignment. `collect:name` reads all current scene values and can also be passed by scene steps. Scene invocations writing the same shared constant must agree; use `const:values: collect:name` to preserve different scene values as a shared list.
+Plugins need no extra declaration to write either scope through YAML. `const:` stores a shared JSON value; `var:` stores one value per scene. Ordinary `var:` assignments evaluate per scene in every step; literal lists and dictionaries remain intact per scene. Aggregate function parameters cannot directly reference `var`, including through JSONata; use `collect:`. Aggregate `returned:` assignments to `var:` must select lists matching scene count or dictionaries keyed by exactly the current scene IDs. Core distributes those results and rejects mismatches. `collect:name` reads all current scene values and can also be passed by scene steps. Scene invocations writing the same shared constant must agree; use `const:values: collect:name` to preserve different scene values as a shared list.

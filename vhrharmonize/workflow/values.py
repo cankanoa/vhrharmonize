@@ -15,6 +15,14 @@ from jsonata.utils import Utils
 
 UNSET = object()
 VAR_UNAVAILABLE = "var is unavailable until a plugin initializes scenes with scene_records_return"
+AGGREGATE_VAR = "Aggregate parameters have no single scene: use collect: to gather var values"
+
+
+class _NoScene(dict):
+    """JSON-compatible marker for an unavailable aggregate scene scope."""
+
+
+_NO_SCENE = _NoScene()
 
 
 def require_scene_variables(context):
@@ -29,6 +37,23 @@ class _BeforeScenes(dict):
         if key == "var":
             raise ValueError(VAR_UNAVAILABLE)
         return super().get(key, default)
+
+
+class _AggregateContext(dict):
+    def get(self, key, default=None):
+        if key == "var":
+            raise ValueError(AGGREGATE_VAR)
+        return super().get(key, default)
+
+
+def _contains_no_scene(value):
+    if isinstance(value, _NoScene):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_no_scene(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_no_scene(v) for v in value)
+    return False
 
 
 @dataclass(frozen=True)
@@ -205,18 +230,25 @@ def expression_names(source):
     return frozenset(names)
 
 
-def expression(source, context):
+def expression(source, context, *, aggregate=False):
     names = expression_names(source)
     if any(name.startswith("var.") for name in names):
         require_scene_variables(context)
+        if aggregate:
+            raise ValueError(AGGREGATE_VAR)
     if any(
         contains_pending(value) and any(matches_reference(ref, key) for ref in names)
         for key, value in dependency_values(context).items()
+        if not (aggregate and key.startswith("var."))
     ):
         raise Deferred(f"JSONata expression needs variables from a preceding function: {source}")
     try:
         data = available_context(context)
+        if aggregate and "var" in context:
+            data = _AggregateContext({"const": data["const"], "var": _NO_SCENE})
         value = _compile(source).evaluate(data if "var" in context else _BeforeScenes(data))
+        if _contains_no_scene(value):
+            raise ValueError(AGGREGATE_VAR)
     except Exception as exc:
         raise ValueError(f"Cannot evaluate JSONata expression {source!r}: {exc}") from exc
     if value is None:
@@ -226,12 +258,14 @@ def expression(source, context):
     return value if "var" in context else json.loads(json.dumps(value, allow_nan=False))
 
 
-def resolve(value, context, *, returned=UNSET, records=None):
+def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, returned_fields=None):
     if isinstance(value, list):
-        return [resolve(v, context, returned=returned, records=records) for v in value]
+        return [resolve(v, context, returned=returned, records=records,
+                        aggregate=aggregate, returned_fields=returned_fields) for v in value]
     if isinstance(value, dict):
         return {
-            k: resolve(v, context, returned=returned, records=records) for k, v in value.items()
+            k: resolve(v, context, returned=returned, records=records,
+                       aggregate=aggregate, returned_fields=returned_fields) for k, v in value.items()
         }
     if not isinstance(value, str):
         return value
@@ -243,8 +277,12 @@ def resolve(value, context, *, returned=UNSET, records=None):
     if kind in {"var", "const"}:
         if kind == "var":
             require_scene_variables(context)
+            if aggregate:
+                raise ValueError(AGGREGATE_VAR)
         return deepcopy(lookup(context[kind], text))
     if kind == "returned":
+        if returned_fields is not None:
+            return deepcopy(returned_fields[text])
         if returned is UNSET:
             raise Deferred("The current function has not returned yet")
         return deepcopy(lookup(returned, text))
@@ -254,7 +292,7 @@ def resolve(value, context, *, returned=UNSET, records=None):
             raise ValueError("collect: values require initialized scene records")
         return [deepcopy(lookup(record["var"], text)) for record in records]
     if kind == "expr":
-        return expression(text, context)
+        return expression(text, context, aggregate=aggregate)
     return value
 
 
@@ -317,8 +355,23 @@ def scene_values(value, scene_ids, *, name):
     )
 
 
+def _returned_scene_fields(template, returned, scene_ids, name):
+    """Distribute each selected batch return once, including nested assignments."""
+    if returned is UNSET:
+        return {}
+    if isinstance(template, (list, dict)):
+        fields = {}
+        for item in template.values() if isinstance(template, dict) else template:
+            fields.update(_returned_scene_fields(item, returned, scene_ids, name))
+        return fields
+    if isinstance(template, str) and template.startswith("returned:"):
+        selector = template[9:]
+        return {selector: scene_values(lookup(returned, selector), scene_ids, name=name)}
+    return {}
+
+
 def aggregate_variables(records):
-    """Expose common scene fields as ordered lists in aggregate expressions."""
+    """Internal columns for planning, checkpoints and directory bookkeeping."""
     if not records:
         return {}
     fields = set.intersection(*(set(record["var"]) for record in records))
@@ -376,26 +429,50 @@ def evaluate_settings(
             assign(current[kind], name, value)
             updates[qualified] = value
             continue
-        refs = {"var." + ref[8:] if ref.startswith("collect:") else ref for ref in references(template)}
+        template_refs = references(template)
+        refs = {"var." + ref[8:] if ref.startswith("collect:") else ref for ref in template_refs}
         after = uses_returned(template) or any(
             matches_reference(ref, name) for ref in refs for name in post
         )
         if kind == "param" and after:
             raise ValueError(f"param:{name} cannot depend on this function's returned values")
-        try:
-            value = resolve(template, current, records=records, returned=returned)
-        except Deferred:
-            if kind in {"var", "const"}:
-                value = Pending(kind + "." + name)
-            elif planning:
-                value = Pending(kind + "." + name)
-            else:
+
+        def evaluate(scope, *, returned_fields=None, batch=False):
+            try:
+                return resolve(template, scope, records=records, returned=returned,
+                               aggregate=batch, returned_fields=returned_fields)
+            except Deferred:
+                if kind in {"var", "const"} or planning:
+                    return Pending(qualified)
                 raise
+
+        if aggregate and records is not None and kind == "var":
+            fields = _returned_scene_fields(template, returned, scene_ids, key)
+            value = [
+                evaluate({"const": current["const"], "var": record["var"]},
+                         returned_fields={field: items[i] for field, items in fields.items()} if fields else None)
+                for i, record in enumerate(records)
+            ]
+        elif aggregate and kind == "const" and (
+            any(ref.startswith("var.") for ref in template_refs)
+            or "var" in current and template_refs == {"*"}
+        ):
+            require_scene_variables(current)
+            if not records:
+                raise ValueError(f"{key} needs a scene; use collect: for an empty collection")
+            values = [evaluate({"const": current["const"], "var": r["var"]}) for r in records]
+            if contains_pending(values):
+                value = Pending(qualified)
+            elif any(item != values[0] for item in values[1:]):
+                raise ValueError(f"{key} has conflicting scene values; use collect: for a shared list")
+            else:
+                value = values[0]
+        else:
+            value = evaluate(current, batch=bool(aggregate))
         if kind in {"var", "const"}:
             if after:
                 post.add(kind + "." + name.split(".")[0])
             if kind == "var" and records is not None and aggregate:
-                value = scene_values(value, scene_ids, name=key)
                 update_scene_variables(records, {qualified: value}, scene_ids)
                 current["var"] = aggregate_variables(records)
             else:

@@ -30,6 +30,7 @@ STEP_CONTROLS = {
     "calculate_overviews",
     "required",
     "requires",
+    "processing_direction",
 }
 DEFAULT_SHARED = {
     "protect_source_files": True,
@@ -43,6 +44,7 @@ DEFAULT_SHARED = {
     "log_to_console": True,
     "concurrent_processing": 1,
     "concurrent_processing_backend": "process_pool",
+    "processing_direction": "vertical",
 }
 SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler_address", "dask_scheduler_file"}
 BOOLEANS = {
@@ -96,6 +98,8 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 )
             if name == "scope" and value not in {"scene", "aggregate"}:
                 raise ValueError("core:scope must be scene or aggregate")
+            if name == "processing_direction" and value not in ("horizontal", "vertical"):
+                raise ValueError("core:processing_direction must be horizontal or vertical")
             if name == "validity_check_grid_size" and (
                 not isinstance(value, int) or isinstance(value, bool) or value < 0
             ):

@@ -101,9 +101,10 @@ def test_later_import_merges_nested_metadata_and_preserves_constants(tmp_path):
     assert set(first["source_paths"]) <= workflow.protected_paths
     assert workflow.context["const"] == {
         "temp_dir": str(tmp_path / "work"),
-        "output_dir": str(tmp_path / "out"),
         "calibration": {"gain": 5},
     }
+    assert first["output_dir"] == str(tmp_path / "out")
+    assert second["output_dir"] == str(tmp_path / "ignored_out")
     assert all(r["context"]["const"] == workflow.context["const"] for r in records)
 
 
@@ -127,7 +128,8 @@ def test_empty_or_disabled_later_import_keeps_existing_scenes(tmp_path, enabled)
     assert len(records) == 1 and records[0]["context"]["var"]["value"] == 7
 
 
-def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path, monkeypatch):
+@pytest.mark.parametrize("direction", ["horizontal", "vertical"])
+def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path, monkeypatch, direction):
     calls, seen = [], []
     for name in ("a", "b", "c"):
         (tmp_path / f"{name}.txt").write_text(name)
@@ -171,6 +173,7 @@ def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path,
     }
     # Use a plain Python header rather than sum's positional-only argument.
     install_function(monkeypatch, "sum_scores", lambda iterable: sum(iterable), scope="aggregate")
+    recipe["shared"]["core:processing_direction"] = direction
     first = Workflow(recipe)
     assert first.counts()["consume"]["pending"] == 1
     assert not calls
@@ -224,7 +227,8 @@ def test_var_directory_roots_survive_reimport_and_new_scenes_get_own_roots(tmp_p
             tmp_path / "a/image.txt",
             tmp_path,
             **{
-                "param:directory_scope": "var",
+                "param:temp_dir_scope": "var",
+                "param:output_dir_scope": "var",
                 "param:temp_dir": "first",
                 "param:output_dir": "products",
             },
@@ -233,7 +237,8 @@ def test_var_directory_roots_survive_reimport_and_new_scenes_get_own_roots(tmp_p
             tmp_path / "*/image.txt",
             tmp_path,
             **{
-                "param:directory_scope": "var",
+                "param:temp_dir_scope": "var",
+                "param:output_dir_scope": "var",
                 "param:temp_dir": "later",
                 "param:output_dir": "new_products",
             },

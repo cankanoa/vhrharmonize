@@ -7,7 +7,7 @@ from pathlib import Path
 from vhrharmonize.plugins.base import INPUT_PATH_FEATURES, OUTPUT_PATH_FEATURES
 from .config import step_settings, shared_blocks
 from .engine import Workflow, _within, _required_arguments
-from .values import contains_pending, lookup, evaluate_settings, resolve, Deferred, Pending, path
+from .values import contains_pending, lookup, evaluate_settings, resolve, Deferred, Pending, path, scene_values
 from .paths import directory_bindings
 
 
@@ -180,10 +180,15 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
     def materialize(node, key, value, *, file_value=False, transfer=True):
         settings = step_settings(staged, node.step)
         value = rewrite(value) if transfer else value
-        if node.record is None:
+        name = f"staged_{node.step_index}_{key.replace(':','_').replace('.','_')}"
+        if node.record is None and key.startswith("var:"):
+            values = scene_values(value, [r["id"] for r in records], name=key)
+            for record, item in zip(records, values):
+                record["context"]["var"][name] = item
+            settings[key] = "var:" + name
+        elif node.record is None:
             settings[key] = _literal(value)
         else:
-            name = f"staged_{node.step_index}_{key.replace(':','_').replace('.','_')}"
             records[node.record]["context"]["var"][name] = value
             settings[key] = "var:" + name
             if file_value:

@@ -14,12 +14,11 @@ from workflow_helpers import import_settings, install_function, stage, transfer
 def test_ordered_collect_reads_before_and_after_assignment():
     records = [{"var": {"image": "a"}}, {"var": {"image": "b"}}]
     params, updates, context, _ = evaluate_settings(
-        {"param:before": "collect:image", "var:image": {"B": "new-b", "A": "new-a"},
-         "param:after": "collect:image", "param:expression": "expr:var.image"},
+        {"param:before": "collect:image", "var:image": "expr:'new-' & var.image",
+         "param:after": "collect:image"},
         {"var": {}, "const": {}}, records=records, scene_ids=["A", "B"],
     )
-    assert params == {"before": ["a", "b"], "after": ["new-a", "new-b"],
-                      "expression": ["new-a", "new-b"]}
+    assert params == {"before": ["a", "b"], "after": ["new-a", "new-b"]}
     assert updates["var.image"] == ["new-a", "new-b"]
     assert records[0]["var"]["image"] == "a"
 
@@ -27,14 +26,63 @@ def test_ordered_collect_reads_before_and_after_assignment():
 @pytest.mark.parametrize("value", [[], [1], [1, 2, 3], {"A": 1}, {"A": 1, "C": 2}, 7])
 def test_invalid_aggregate_assignment_is_rejected(value):
     with pytest.raises(ValueError, match="var:image must map exactly 2 scenes"):
-        evaluate_settings({"var:image": value}, {"const": {}, "var": {}},
-                          records=[{"var": {}}, {"var": {}}], scene_ids=["A", "B"])
+        evaluate_settings({"var:image": "returned:$"}, {"const": {}, "var": {}},
+                          records=[{"var": {}}, {"var": {}}], scene_ids=["A", "B"], returned=value)
 
 
 def test_returned_collect_cannot_supply_current_function_input():
     with pytest.raises(ValueError, match="cannot depend on this function's returned"):
         evaluate_settings({"var:image": "returned:$", "param:input_images": "collect:image"},
                           {"const": {}, "var": {}}, records=[{"var": {}}], scene_ids=["A"])
+
+
+@pytest.mark.parametrize("template", [
+    "var:image", "var:$", "expr:var.image", "expr:$.var.image",
+    "expr:$lookup($, 'var').image", "expr:$lookup($, $join(['v', 'ar'])).image",
+    "expr:$", {"nested": ["var:image"]},
+])
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_aggregate_parameters_require_explicit_collection(template, count):
+    with pytest.raises(ValueError, match="use collect:"):
+        evaluate_settings({"param:images": template}, {"const": {}, "var": {}},
+                          records=[{"var": {"image": "a"}} for _ in range(count)])
+
+
+@pytest.mark.parametrize("value", [7, [1, 2, 3], {"nested": ["a", "b"]}])
+def test_literal_assignment_is_copied_to_each_scene(value):
+    params, _, _, _ = evaluate_settings(
+        {"var:value": value, "param:values": "collect:value"}, {"const": {}, "var": {}},
+        records=[{"var": {}}, {"var": {}}],
+    )
+    assert params["values"] == [value, value]
+
+
+def test_nested_batch_returns_map_before_scene_expressions():
+    records = [{"var": {"label": "a"}}, {"var": {"label": "b"}}]
+    _, updates, _, _ = evaluate_settings(
+        {"var:result": {"score": "returned:scores", "label": "var:label"},
+         "var:adjusted": "expr:var.result.score + 1"},
+        {"const": {}, "var": {}}, records=records, scene_ids=["A", "B"],
+        returned={"scores": {"B": 20, "A": 10}},
+    )
+    assert updates["var.result"] == [{"score": 10, "label": "a"}, {"score": 20, "label": "b"}]
+    assert updates["var.adjusted"] == [11, 21]
+
+
+def test_collect_assignment_explicitly_stores_whole_list_in_each_scene():
+    _, updates, _, _ = evaluate_settings(
+        {"var:neighbors": "collect:name"}, {"const": {}, "var": {}},
+        records=[{"var": {"name": "a"}}, {"var": {"name": "b"}}],
+    )
+    assert updates["var.neighbors"] == [["a", "b"], ["a", "b"]]
+
+
+def test_constants_and_whole_context_work_before_scene_initialization():
+    params, updates, _, _ = evaluate_settings(
+        {"param:context": "expr:$", "const:snapshot": "expr:$"},
+        {"const": {"gain": 2}}, aggregate=True,
+    )
+    assert params["context"] == updates["const.snapshot"] == {"const": {"gain": 2}}
 
 
 @pytest.mark.parametrize("returned", [False, True])
@@ -57,9 +105,9 @@ def test_scene_batch_scene_roundtrip_and_hpc(tmp_path, monkeypatch, returned, ma
 
     install_function(monkeypatch, "batch", batch, scope="aggregate",
                      input_paths={"input_images"}, output_paths={"output_images"})
-    value = dict(zip(reversed(sources), reversed(outputs))) if mapping else outputs
     assignment = {"param:output_images": outputs, "var:image": "returned:$"} if returned else {
-        "var:image": value, "param:output_images": "collect:image",
+        "var:image": "expr:const.temp_dir & '/' & var.basename & '.txt'",
+        "param:output_images": "collect:image",
     }
     recipe = {
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
@@ -99,7 +147,7 @@ def test_final_metadata_uses_aggregate_updated_scene_values(tmp_path):
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
                    "core:output_metadata_path": str(destination)},
         "files": import_settings(source, tmp_path),
-        "update": {"core:run": True, "core:scope": "aggregate", "var:score": [9]},
+        "update": {"core:run": True, "core:scope": "aggregate", "var:score": 9},
     }
     Workflow(recipe).run()
     assert json.loads(destination.read_text())[0]["var"]["score"] == 9
@@ -109,14 +157,13 @@ def test_nested_assignments_preserve_each_scenes_other_fields():
     records = [{"var": {"settings": {"gain": 1, "label": "a"}}},
                {"var": {"settings": {"gain": 2, "label": "b"}}}]
     params, _, context, _ = evaluate_settings(
-        {"var:settings.gain": [3, 4], "param:settings": "collect:settings"},
+        {"var:settings.gain": "expr:var.settings.gain + 2", "param:settings": "collect:settings"},
         {"var": {}, "const": {}}, records=records, scene_ids=["a", "b"],
     )
     assert params["settings"] == [{"gain": 3, "label": "a"}, {"gain": 4, "label": "b"}]
 
 
-@pytest.mark.parametrize("reference", ["var:image.path", "collect:image.path"])
-def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch, reference):
+def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch):
     sources = []
     for name in ("a", "b"):
         source = tmp_path / "source" / f"{name}.txt"
@@ -138,7 +185,7 @@ def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch,
                   "var:image": {"path": "returned:file_path", "label": "original"}},
         "batch": {"plugin": "batch", "core:run": True,
                   "param:input_images": "collect:image.path",
-                  "var:image.path": ["a.txt", "b.txt"], "param:output_images": reference},
+                  "var:image.path": "expr:var.basename & '.txt'", "param:output_images": "collect:image.path"},
         "inspect": {"plugin": "inspect", "core:run": True, "param:image": "var:image.path"},
     }
     workflow = Workflow(recipe)

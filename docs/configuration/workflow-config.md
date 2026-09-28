@@ -11,7 +11,7 @@ shared:
   plugin: shared
   core:run: true
   param:epsg: 6635
-  core:output_metadata_path: expr:const.output_dir & '/processing.json'
+  core:output_metadata_path: expr:var.output_dir & '/processing.json'
   # core:delete_final_json_first: true
   const:reference_path: /data/reference.tif
   const:band_wavelengths_um: [0.4273, 0.4779, 0.5462]
@@ -23,7 +23,8 @@ import_files:
   param:search_glob: /data/images/*.tif
   param:output_dir: ../output
   # param:temp_dir: sys
-  # param:directory_scope: const
+  # param:temp_dir_scope: const
+  # param:output_dir_scope: var
   var:mul: returned:file_path
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:suffix: ""
@@ -38,7 +39,7 @@ alignment:
   param:moving_image_path: var:mul
   param:fixed_image_path: const:reference_path
   var:suffix: expr:var.suffix & '_aligned'
-  var:aligned: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:aligned: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:aligned
 ```
 
@@ -88,7 +89,11 @@ Any initialized scene or aggregate step can assign both `var:` and `const:`. The
 
 Within a scene step, `collect:` reads all scenes as they stood at the start of that step, so each invocation receives the same list.
 
-A scene assignment writes that scene's `var` value directly. An **aggregate `var:` assignment must supply exactly one value per scene**: either a list in scene order, or a dictionary whose keys exactly match the internal scene IDs. Dictionaries are reordered by those IDs, not insertion order. Incorrect lengths, missing/extra IDs and scalar assignments raise `ValueError`. Each mapped item can itself be any JSON value. Dotted assignments update the selected field while retaining each scene's other fields. Aggregate `var:name` references and JSONata `var.name` expose the ordered list of scene values.
+**Ordinary `var:` assignments always evaluate separately for each scene**, regardless of `core:scope`. Both `var:name` and JSONata `var.name` refer to that scene's value. A literal list or object is stored intact in each scene; it is not automatically split. Dotted assignments retain the scene's other fields. `core:scope` determines how often the function runs, not how these assignments evaluate.
+
+Aggregate function parameters have no selected scene. Direct `var:` references, including inside JSONata expressions or nested parameters, raise `ValueError`; use `collect:name` or `const:name` instead. To transform a collection with JSONata, explicitly collect it into a constant first and reference that constant in the expression.
+
+An aggregate **`returned:` value assigned to `var:`** is distributed: the selected return field must be a list matching scene count or a dictionary keyed by exactly the current scene IDs. Incorrect lengths, missing/extra IDs and scalar returns raise `ValueError`. Each mapped item may itself be any JSON value. This also applies to returned selectors nested inside a scene assignment; subsequent expressions read that scene's mapped result.
 
 Shared constants are arbitrary JSON values and have no scene-count requirement. Scene-independent constant expressions resolve once per enabled step (including with zero scenes), preserving the existing behavior of `const:scale: expr:const.scale + 1`. Constants derived from individual scene variables or function returns are allowed; scene invocations must agree on their shared value or core raises `ValueError`. Use `collect:` to retain differing values as a shared list, or `var:` to keep them per scene. Disabled steps make no assignments.
 
@@ -101,13 +106,13 @@ match:
   plugin: global_regression
   core:run: true
   param:input_images: collect:current_image_paths
-  var:current_image_paths: expr:[$map(var.basename, function($name) { const.temp_dir & '/matched/' & $name & '.tif' })]
+  var:current_image_paths: expr:const.temp_dir & '/matched/' & var.basename & '.tif'
   param:output_images: collect:current_image_paths
 ```
 
 The first collection reads old paths and the second reads the replacements. Later scene steps use `param:input_path: var:current_image_paths` to receive their single path. Returned assignments use the same count/ID validation after execution; known output expressions allow planning and HPC staging before execution.
 
-Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by [jsonata-python](https://github.com/rayokota/jsonata-python). JSONata sees both scopes: `expr:const.output_dir & '/' & var.basename & '.tif'`. Use `&` for strings and JSONata functions such as `$map`, `$lookup`, `$replace` and `$substring`. Python comprehensions and function calls are not supported.
+Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by [jsonata-python](https://github.com/rayokota/jsonata-python). JSONata sees both scopes: `expr:var.output_dir & '/' & var.basename & '.tif'`. Use `&` for strings and JSONata functions such as `$map`, `$lookup`, `$replace` and `$substring`. Python comprehensions and function calls are not supported.
 
 Assignments resolve in declaration order and may update an existing value, such as `var:suffix: expr:var.suffix & '_aligned'`. Function parameters see preceding assignments. `returned:` assignments and their dependents take effect after the function returns. A function parameter cannot depend on that same invocation's result; place its input reference before the return assignment. An explicitly passed scope snapshot contains the values at its parameter’s position in the settings. Missing fields or undefined expression results raise `ValueError`; JSON null remains `None`. JSONata's `??` supplies a default for a missing field.
 
@@ -155,14 +160,15 @@ Checkpoint files named `<output>.context.json` preserve returned values and depe
 
 `import_files` is an ordinary `FunctionPlugin` wrapping `import_files(...)`. It declares `scene_records_return = "scenes"`; any plugin can declare a returned field containing a list of plain dictionaries to establish scenes. The adapter selects whether to replace or merge them. `import_files` uses merge mode. No plugin is required to be first. Before any plugin establishes scenes, enabled functions run once using ordinary parameters and constants. Reading or assigning `var` raises `ValueError`, including through JSONata or `collect:`. The context contains only `const` at this point, so `expr:$` still works. Once scenes are established, scene functions run per record and aggregate functions run once. An initially empty list establishes zero scenes. A later empty import preserves existing scenes. See [adding plugins](../getting-started/adding-plugins.md#creating-or-replacing-scenes) for the contract and optional declarations.
 
-The import function returns `{"const": {...}, "scenes": [...]}`. Its adapter publishes the directory constants. Each scene contains `scene_id`, `file_path`, `source_paths` and the fields named in `create_metadata_json`. With `param:directory_scope: var`, it also contains `temp_dir` and `output_dir`. Each dictionary becomes a scene's `var` object directly. For example:
+The import function returns `{"const": {...}, "scenes": [...]}`. By default, its adapter publishes `temp_dir` into `const`. Each scene contains `scene_id`, `file_path`, `source_paths`, `output_dir` and the fields named in `create_metadata_json`. Each directory can independently be published into `var` or `const` using `temp_dir_scope` and `output_dir_scope`. Each dictionary becomes a scene's `var` object directly. For example:
 
 ```json
 {
-  "const": {"temp_dir": "/tmp/vhr-example", "output_dir": "/data/output"},
+  "const": {"temp_dir": "/tmp/vhr-example"},
   "scenes": [{
     "scene_id": "/data/scene.TIF",
     "file_path": "/data/scene.TIF",
+    "output_dir": "/data/output",
     "source_paths": ["/data/scene.TIF", "/data/scene.RPB", "/data/scene.IMD"],
     "rpc": ["/data/scene.RPB"],
     "metadata": {"IMAGE_1": {"cloudCover": 0.1}}
@@ -227,18 +233,18 @@ additional_images:
   param:scene_id: literal:expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:additional_image: returned:file_path
   param:temp_dir: const:temp_dir
-  param:output_dir: const:output_dir
+  param:output_dir: /data/products
 ```
 
 Imports build on the existing context. New IDs add new scenes; matching IDs merge into the existing scene without duplicating it. The example above matches filenames across two folders. Existing values win, including lists and nulls; nested objects gain missing fields. Per-import `var:` mappings initialize new scenes and missing fields without resetting existing values such as a processed path or suffix. Previously completed or cached function returns remain available. Source-protection path lists accumulate all imported inputs. An empty import does not clear the scene list. When different paths share an ID, the original `file_path` stays intact. Use a new alias such as `var:additional_image: returned:file_path` to retain the newly imported path.
 
-Returned directory constants fill missing fields; they do not replace established roots. Explicit YAML `const:` assignments still update constants using the normal assignment rules. Pass existing directory constants as ordinary parameters when reusing those roots, as above. For per-scene roots, use `param:directory_scope: var`; reimported scenes keep their roots and new scenes receive their own.
+Returned directory constants fill missing fields; they do not replace established roots. Explicit YAML `const:` assignments still update constants using the normal assignment rules. Pass existing directory constants as ordinary parameters when reusing those roots, as above. Output roots are per-scene by default; use `param:temp_dir_scope: var` for per-scene temporary roots too. Reimported scenes keep their roots and new scenes receive their own.
 
 All subsequent scene steps process the combined collection. New scenes do not run earlier steps, so downstream parameters must be available on both existing and new scenes. Imports that depend on unfinished work execute at their position and rebuild the remaining plan. HPC preparation can stage multiple imports when their files and preceding required results are already available; unresolved later discovery remains a preparation error. `file_source` only copies files and its companions; it does not establish or replace scenes.
 
 ### Directory roots
 
-Directory defaults belong to `import_files`: `param:temp_dir` defaults to `sys`, `param:output_dir` to `./output`, and `param:directory_scope` to `const`. `sys` creates a unique system temporary directory; other values are resolved as paths. Constant roots resolve relative to the first discovered file's parent (the working directory if no files match). With `directory_scope: var`, roots resolve separately for each file and are returned in that scene's variable object. Use absolute roots for a shared project location. An explicit temp path allows reuse across runs.
+Directory defaults belong to `import_files`: `param:temp_dir` defaults to `sys`, `param:output_dir` to `./output`, `param:temp_dir_scope` to `const`, and `param:output_dir_scope` to `var`. Each scope accepts `const` or `var` independently. `sys` creates a unique system temporary directory; other values are resolved as paths. Constant roots resolve relative to the first discovered file's parent (the working directory if no files match). A directory with scope `var` resolves separately for each file and is returned in that scene's variable object. The defaults therefore provide one shared `const.temp_dir` and per-scene `var.output_dir` values. Use absolute roots for a shared project location. An explicit temp path allows reuse across runs. For one aggregate product, explicitly collect roots using `const:output_dirs: collect:output_dir`, then select `const.output_dirs[0]` in the output expression, as the WorldView mosaic does.
 
 Core does not reserve `temp_dir` or `output_dir` as variable names. The import adapter declares `temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")` and `output_directory_context_paths = ("var.output_dir", "const.output_dir")`. Other plugins can register arbitrary nested locations and populate them using returned dictionaries or YAML assignments. Declared fields may contain a path or list of roots. Missing fields are not invented. A plugin selecting `output_temporary_cleanup_paths` requires an established temporary-root location and value; otherwise planning/execution raises `ValueError`. This requirement applies even when automatic deletion is disabled. Relative declared roots normalize from the YAML directory; the importer has already made its own returned paths absolute.
 
@@ -256,7 +262,7 @@ shared:
   # core:delete_final_json_first: true      # true | false; default: true.
 ```
 
-Define `var:report_path` in an enabled plugin, for example `expr:const.output_dir & '/' & var.basename & '.json'`. A constant destination such as `/data/results/processing.json` combines scenes in one file. Relative destinations resolve from the YAML directory.
+Define `var:report_path` in an enabled plugin, for example `expr:var.output_dir & '/' & var.basename & '.json'`. A constant destination such as `/data/results/processing.json` combines scenes in one file. Relative destinations resolve from the YAML directory.
 
 Each completion of the last needed step appends its combined `{const, var}` context to a JSON array. A scene step writes as each scene finishes, including when its output is reused from cache. A final aggregate step writes one entry per scene using the aggregate's final constants; a workflow without scenes writes its const context. Discovery-only runs export their imported scenes. Different resolved paths produce separate files naturally.
 
@@ -321,7 +327,7 @@ Filename accumulation is explicit scene state: `var:suffix: expr:var.suffix & '_
 
 All steps default to disabled. `core:run: false` does nothing: no adapter loading, value resolution, assignments, cache restoration, processing, transfers or cleanup. Downstream inputs must explicitly reference an enabled step or an imported file. A plugin-only CLI command keeps enabled upstream names and reuses their files, but does not compute upstream processing steps.
 
-Per-step controls are `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:required` and `core:requires`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
+Per-step controls are `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:required`, `core:requires` and `core:processing_direction`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
 
 Shared runner controls are:
 
@@ -336,6 +342,7 @@ Shared runner controls are:
 | `delete_temp_dir` | `false` |
 | `delete_temp_steps_proactively` | `true` |
 | `log_to_console` | `true` |
+| `processing_direction` | `vertical` |
 | `concurrent_processing` | `1` |
 | `concurrent_processing_backend` | `process_pool` |
 | `dask_scheduler_address`, `dask_scheduler_file` | unset |
@@ -346,18 +353,39 @@ The planner follows file and runtime-variable dependencies backward from deliver
 
 Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under `const.temp_dir`**. It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
 
+### Horizontal and vertical execution
+
+`core:processing_direction` accepts `horizontal` or `vertical` (default) in shared settings and on individual steps. A step setting overrides the shared setting. Horizontal execution completes a step across all required scenes before moving on. Consecutive vertical scene steps let each scene advance as its own preceding work finishes; with one worker, one scene completes that section before the next starts. With multiple workers, a fast scene can advance while another scene is still upstream.
+
+```yaml
+shared:
+  plugin: shared
+  core:run: true
+  core:processing_direction: vertical
+  core:concurrent_processing: 4
+
+# A particular step can request a full synchronization point:
+check_images:
+  core:run: true
+  core:processing_direction: horizontal
+```
+
+Core synchronizes automatically at `collect:` reads, aggregate calls, scene-setting plugins, and steps returning or deriving shared constants that are unavailable until execution. Scene invocations must agree on shared values before later steps consume them. Explicit horizontal steps also synchronize. Disabled steps do not interrupt a vertical section. Within a vertical section, declared file and value dependencies are still enforced, including dependencies on another scene. Static filename/constant assignments do not force an extra synchronization point.
+
+`core:scope` remains independent: it selects one function call per scene or one aggregate call. `processing_direction` only changes scheduling. The process-pool worker limit applies across the whole vertical section; Dask uses cluster capacity and gives downstream tasks higher priority. Cached outputs still skip unnecessary work, and temporary files are removed only after their required consumers finish and cached contexts have been restored. HPC staging preserves the selected direction.
+
 ## Aggregates and concurrency
 
 An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, checkpoints and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
 
-Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file. Each step completes before the next begins. Aggregate functions manage their internal parallelism. SpectralMatch inherits supported shared `param:` settings; no adapter translates core worker counts or scheduler settings into native parameters.
+Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file when work must run. Horizontal processing completes each step before the next begins; vertical processing advances scenes independently between synchronization points. Aggregate functions manage their internal parallelism. SpectralMatch inherits supported shared `param:` settings; no adapter translates core worker counts or scheduler settings into native parameters.
 
 See [Adding plugins](../getting-started/adding-plugins.md) for registration and [HPC execution](../cli/hpc.md) for staging.
 
 
 ## Individual SpectralMatch functions
 
-`setup_spectralmatch` in the WorldView example is an ordinary pluginless aggregate step. It collects images and keeps the image list, filename suffix and polygon identifiers needed by later stages. Ordinary settings are direct `param:` entries under `shared`, inherited automatically by functions that accept them. The enabled example runs matching, footprint generation, Markov seamlines and masking, with `merge_rasters` last. Alternative stages remain fully commented with their parameter catalogs. Disabled steps leave the current image list and suffix unchanged. Copy a step under another name to invoke the same plugin again.
+`setup_spectralmatch` in the WorldView example is an ordinary pluginless aggregate step. It defines shared polygon identifiers. Each image keeps its path and filename suffix in `var`; batch functions receive paths through `collect:`. Ordinary settings are direct `param:` entries under `shared`, inherited automatically by functions that accept them. The enabled example runs matching, footprint generation, Markov seamlines and masking, with `merge_rasters` last. Alternative stages remain fully commented with their parameter catalogs. Disabled steps leave the current image list and suffix unchanged. Copy a step under another name to invoke the same plugin again.
 
 ```yaml
 shared:

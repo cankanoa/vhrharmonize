@@ -11,6 +11,7 @@ def import_settings(source, tmp_path):
         "plugin": "import_files",
         "core:run": True,
         "param:search_glob": str(source),
+        "param:output_dir_scope": "const",
         "var:mul": "returned:file_path",
         "var:basename": r"expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')",
         "var:filename": "expr:$split(var.file_path, '/')[-1]",

@@ -264,6 +264,8 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
         },
         "files": {
             **import_settings(source, tmp_path),
+            "param:output_dir_scope": "var",
+            "param:output_dir": str(tmp_path / "output"),
             "var:current_image_paths": "returned:file_path",
             "var:footprint_metadata": {"quality": 10},
         },

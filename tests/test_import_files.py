@@ -17,11 +17,40 @@ def test_minimal_return_without_metadata_and_explicit_directory_arguments(tmp_pa
     assert import_files(str(source), temp_dir="work", output_dir="products") == {
         "const": {
             "temp_dir": str(tmp_path / "work"),
-            "output_dir": str(tmp_path / "products"),
         },
-        "scenes": [expected],
+        "scenes": [{**expected, "output_dir": str(tmp_path / "products")}],
     }
     assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("temp_scope", ["const", "var"])
+@pytest.mark.parametrize("output_scope", ["const", "var"])
+def test_directory_scopes_are_independent(tmp_path, temp_scope, output_scope):
+    for name in ("a", "b"):
+        source = tmp_path / name / "image.tif"
+        source.parent.mkdir()
+        source.touch()
+    result = import_files(
+        str(tmp_path / "*/image.tif"), temp_dir="work", output_dir="products",
+        temp_dir_scope=temp_scope, output_dir_scope=output_scope,
+    )
+    for field, folder, scope in (
+        ("temp_dir", "work", temp_scope), ("output_dir", "products", output_scope),
+    ):
+        if scope == "const":
+            assert result["const"][field] == str(tmp_path / "a" / folder)
+            assert all(field not in scene for scene in result["scenes"])
+        else:
+            assert field not in result["const"]
+            assert [scene[field] for scene in result["scenes"]] == [
+                str(tmp_path / name / folder) for name in ("a", "b")
+            ]
+
+
+@pytest.mark.parametrize("parameter", ["temp_dir_scope", "output_dir_scope"])
+def test_invalid_directory_scope_fails_without_matches(tmp_path, parameter):
+    with pytest.raises(ValueError, match=f"{parameter} must be const or var"):
+        import_files(str(tmp_path / "missing*.tif"), **{parameter: "invalid"})
 
 
 def test_rules_decode_metadata_and_resolve_relative_absolute_and_home_patterns(
@@ -58,7 +87,7 @@ def test_rules_decode_metadata_and_resolve_relative_absolute_and_home_patterns(
         temp_dir="work",
         where="expr:var.metadata.cloud_cover < 0.5",
     )
-    assert returned["scenes"] == [scene]
+    assert returned["scenes"] == [{**scene, "output_dir": str(tmp_path / "output")}]
     assert (
         import_files(
             str(source),
@@ -105,7 +134,7 @@ def test_metadata_missing_invalid_or_multiple_paths_raise_in_python_api(tmp_path
 
 
 @pytest.mark.parametrize(
-    "name", ["metadata_import", "companions", "constants", "metadata_output", "append_to_name"]
+    "name", ["metadata_import", "companions", "constants", "metadata_output", "append_to_name", "directory_scope"]
 )
 def test_removed_arguments_are_rejected_by_python_and_workflow(tmp_path, name):
     source = tmp_path / "scene.TIF"
@@ -142,7 +171,8 @@ def test_scene_roots_resolve_per_file_without_derived_return_fields(tmp_path):
         (tmp_path / name / "scene.TIF").touch()
     result = import_files(
         str(tmp_path / "*/scene.TIF"),
-        directory_scope="var",
+        temp_dir_scope="var",
+        output_dir_scope="var",
         temp_dir="expr:'./work/' & $split(var.file_path, '/')[-1]",
         output_dir=".",
     )

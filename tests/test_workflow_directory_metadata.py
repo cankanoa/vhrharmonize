@@ -160,7 +160,8 @@ def test_import_resolves_relative_paths_and_can_publish_scene_roots(tmp_path):
         (directory / "document.json").write_text('{"gain": 2}')
     returned = import_files(
         str(tmp_path / "*/image.tif"),
-        directory_scope="var",
+        temp_dir_scope="var",
+        output_dir_scope="var",
         temp_dir="work",
         output_dir="products",
         create_metadata_json={"metadata": {"to_json": "document.json"}},

@@ -135,7 +135,7 @@ def test_shared_arguments_precedence_and_context_snapshots(recipe, monkeypatch):
         }), "plugin": 'inspect'}})
     workflow = Workflow(recipe)
     workflow.run()
-    assert observed == [("shared", 1, "scene")] * 2 + [("explicit", 1, "scene")] * 2
+    assert observed == [("shared", 1, "scene"), ("explicit", 1, "scene")] * 2
     assert workflow.context["const"]["options"] == {"gain": 1}
     assert all(r["context"]["const"]["options"] == {"gain": 1} for r in workflow.records)
 
@@ -366,7 +366,7 @@ def test_static_scene_constants_do_not_require_running_cached_functions(recipe, 
 def test_import_constants_can_collect_newly_mapped_scenes(recipe, value):
     recipe["import_files"]["const:label"] = value
     workflow = Workflow(recipe)
-    assert workflow.context["const"]["label"] == ["same", "same"]
+    assert workflow.context["const"]["label"] == (["same", "same"] if value == "collect:basename" else "same")
 
 
 def test_old_meta_assignment_is_rejected(recipe):

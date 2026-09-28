@@ -324,6 +324,7 @@ def test_dask_executes_required_records_in_yaml_order(pipeline, make_test_raster
     config["shared"].update(
         {
             "core:concurrent_processing_backend": "dask",
+            "core:processing_direction": "horizontal",
             "core:dask_scheduler_address": "tcp://scheduler:8786",
         }
     )

@@ -35,7 +35,7 @@ def test_id_parameter_reads_parsed_metadata_before_filtering(tmp_path):
     assert scene["scene_id"] == "acquisition-17"
     assert import_files(
         str(source), **arguments, temp_dir="temp", where="expr:var.scene_id = 'acquisition-17'"
-    )["scenes"] == [scene]
+    )["scenes"] == [{**scene, "output_dir": str(tmp_path / "output")}]
     assert import_file(str(source), scene_id="my-explicit-id")["scene_id"] == "my-explicit-id"
 
 

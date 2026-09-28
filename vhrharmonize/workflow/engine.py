@@ -243,8 +243,11 @@ class Workflow:
             if step.get("scope", "aggregate") != "aggregate":
                 raise ValueError("Scene-setting plugins run once with aggregate scope")
             settings = self._settings(step, plugin)
+            scene_records = [r["context"] for r in self.records] if "var" in self.initial_context else None
+            scene_ids = [r["id"] for r in self.records]
             params, updates, current, _ = evaluate_settings(
-                settings, self.initial_context, planning=True
+                settings, self.initial_context, planning=True,
+                aggregate=True, records=scene_records, scene_ids=scene_ids,
             )
             self._normalize_directories(current)
             frozen = {
@@ -253,7 +256,8 @@ class Workflow:
                 if not contains_pending(value)
             }
             params, _, current, _ = evaluate_settings(
-                settings, self.initial_context, constants=frozen, planning=True
+                settings, self.initial_context, constants=frozen, planning=True,
+                aggregate=True, records=scene_records, scene_ids=scene_ids,
             )
             # Defaults and normalized directory roots are also available to parameters.
             self._normalize_directories(current)
@@ -269,6 +273,7 @@ class Workflow:
                     if plugin.aliases.get(key, key) in accepted
                 },
                 available_context(current),
+                aggregate=True, records=scene_records,
             )
             features = plugin.file_features()
             for name in file_parameter_names(features, "input") | file_parameter_names(
@@ -279,7 +284,8 @@ class Workflow:
             params = _arguments(features, params, current, settings, self.config_dir)
             returned = plugin.run(params=params, shared=shared)
             _, _, current, _ = evaluate_settings(
-                settings, self.initial_context, returned=returned, constants=frozen
+                settings, self.initial_context, returned=returned, constants=frozen,
+                aggregate=True, records=scene_records, scene_ids=scene_ids,
             )
             self._update_scenes(plugin, step, returned, current)
             self.preflight_steps.add(index)
@@ -428,6 +434,7 @@ class Workflow:
         self.constant_values = {}
         self.constant_steps = {}
         self.scene_constant_writes = {}
+        self._restored_nodes = set()
         self.context = deepcopy(self.initial_context)
         producers = [{} for _ in self.records]
         constant_producers, paths, path_producers = {}, {}, {}
@@ -520,7 +527,10 @@ class Workflow:
                     if name not in params:
                         if name in self.shared:
                             try:
-                                params[name] = resolve(self.shared[name], current)
+                                params[name] = resolve(
+                                    self.shared[name], current, records=step_records,
+                                    aggregate=record_index is None,
+                                )
                             except Deferred:
                                 params[name] = Pending(name)
                 roots = self._normalize_directories(
@@ -890,6 +900,7 @@ class Workflow:
         )
         plugin = load_plugin(node.step["plugin"])
         if not node.dynamic_names and not plugin.scene_records_return:
+            self._restored_nodes.add(node.index)
             return
         checkpoint = self._checkpoint_context(node)
         if checkpoint is not None:
@@ -910,6 +921,7 @@ class Workflow:
             self._publish_values(node, {k: updates[k] for k in node.dynamic_names})
             if plugin.scene_records_return:
                 self._scene_result = (node, returned)
+        self._restored_nodes.add(node.index)
 
     def _checkpoint_context(self, node):
         try:
@@ -989,7 +1001,9 @@ class Workflow:
             required=("temp_dir",) if node.file_features["output_temporary_cleanup_paths"] else (),
         )
         node.runtime_directory_context = deepcopy(context)
-        shared = resolve(self.shared, context) if node.step["plugin"] is not None else {}
+        shared = resolve(
+            self.shared, context, records=self._record_values(node), aggregate=node.record is None
+        ) if node.step["plugin"] is not None else {}
         file_names = file_parameter_names(node.file_features, "input") | file_parameter_names(
             node.file_features, "output"
         )
@@ -1132,6 +1146,8 @@ class Workflow:
         for node in self.nodes:
             if node.status not in {"completed", "loaded"}:
                 continue
+            if node.status == "loaded" and node.index not in self._restored_nodes:
+                continue
             outputs = set(node.paths(*OUTPUT_PATH_FEATURES))
             consumers = [
                 n
@@ -1143,7 +1159,10 @@ class Workflow:
                 )
             ]
             # A temporary terminal result is retained for its caller.
-            if not consumers or any(n.status not in {"completed", "loaded"} for n in consumers):
+            if not consumers or any(
+                n.status != "completed" and (n.status != "loaded" or n.index not in self._restored_nodes)
+                for n in consumers
+            ):
                 continue
             files = [
                 p
@@ -1281,12 +1300,184 @@ class Workflow:
         self._build(step_index + 1)
         self.plan()
 
+    def _run_horizontal_step(self, step_index, workers, backend):
+        self._prepare_constants(step_index)
+        nodes = [node for node in self.nodes if node.step_index == step_index and node.needed]
+        for node in nodes:
+            if node.status == "loaded":
+                self._restore(node)
+                self._save_final_metadata(node)
+        pending = [node for node in nodes if node.status == "processing"]
+        if not pending:
+            self._advance_scenes(step_index)
+            return
+        payloads = [(node, self._payload(node)) for node in pending]
+        if backend == "dask" and pending[0].record is not None:
+            from dask.distributed import Client, as_completed as dask_completed
+
+            if workers != 1:
+                raise ValueError("Use concurrent_processing: 1 with Dask")
+            address = self.controls.get("dask_scheduler_address")
+            scheduler_file = self.controls.get("dask_scheduler_file")
+            if not address and not scheduler_file:
+                raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
+            with (
+                Client(address) if address else Client(scheduler_file=scheduler_file)
+            ) as client:
+                futures = {
+                    client.submit(_execute, payload, pure=False): node
+                    for node, payload in payloads
+                }
+                try:
+                    for future in dask_completed(futures):
+                        self._finish(futures[future], future.result())
+                finally:
+                    client.cancel(list(futures))
+        elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
+            with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as executor:
+                futures = {
+                    executor.submit(_execute, payload): node for node, payload in payloads
+                }
+                try:
+                    for future in as_completed(futures):
+                        self._finish(futures[future], future.result())
+                finally:
+                    for future in futures:
+                        future.cancel()
+        else:
+            for node, payload in payloads:
+                self._finish(node, _execute(payload))
+        if self.controls["log_to_console"]:
+            print(f"[{pending[0].step['name']}] Completed {len(pending)}/{len(nodes)}")
+        self._cleanup()
+        self._advance_scenes(step_index)
+
+    def _can_run_vertical(self, step_index):
+        step = self.steps[step_index]
+        if not step["run"] or step.get("processing_direction", self.controls["processing_direction"]) != "vertical":
+            return False
+        nodes = [n for n in self.nodes if n.step_index == step_index and n.needed]
+        if not nodes or any(n.record is None for n in nodes):
+            return False
+        if any(ref.startswith("collect:") for ref in references([step["settings"], self.shared])):
+            return False
+        bindings = self.constant_steps.get(step_index)
+        if bindings is not None and contains_pending(bindings.planned):
+            return False
+        # All scene invocations must agree on a returned shared value before
+        # another step can use it. Static constants already have planned values.
+        return not any(name.startswith("const.") for n in nodes for name in n.dynamic_names)
+
+    def _run_vertical_steps(self, start, end, workers, backend):
+        nodes = [n for n in self.nodes if start <= n.step_index < end and n.needed]
+        indices = {n.index for n in nodes}
+        dependencies, previous = {}, {}
+        for node in nodes:
+            dependencies[node.index] = node.dependencies & indices
+            if node.record in previous:
+                dependencies[node.index].add(previous[node.record])
+            previous[node.record] = node.index
+        prepared, completed = set(), {n.index for n in nodes if n.status == "completed"}
+        waiting = {n.index: n for n in nodes if n.index not in completed}
+        running = {}
+        totals = {
+            index: sum(n.status == "processing" for n in nodes if n.step_index == index)
+            for index in range(start, end)
+        }
+        finished = {index: 0 for index in totals}
+
+        def finish(node, result):
+            self._finish(node, result)
+            completed.add(node.index)
+            self._cleanup()
+            finished[node.step_index] += 1
+            if self.controls["log_to_console"] and finished[node.step_index] == totals[node.step_index]:
+                total = sum(n.step_index == node.step_index for n in nodes)
+                print(f"[{node.step['name']}] Completed {finished[node.step_index]}/{total}")
+
+        def schedule(submit=None, next_completed=None, limit=1):
+            while waiting or running:
+                ready = sorted(
+                    (n for n in waiting.values() if dependencies[n.index] <= completed),
+                    key=lambda n: (-n.step_index, n.record),
+                )
+                progressed = False
+                for node in ready:
+                    if submit is not None and node.status != "loaded" and len(running) >= limit:
+                        continue
+                    if node.step_index not in prepared:
+                        self._prepare_constants(node.step_index)
+                        prepared.add(node.step_index)
+                    del waiting[node.index]
+                    progressed = True
+                    if node.status == "loaded":
+                        self._restore(node)
+                        self._save_final_metadata(node)
+                        completed.add(node.index)
+                        self._cleanup()
+                    elif submit is None:
+                        finish(node, _execute(self._payload(node)))
+                    else:
+                        running[submit(node, self._payload(node))] = node
+                    # Reconsider downstream nodes immediately instead of filling
+                    # the queue with every scene's upstream work first.
+                    break
+                if progressed:
+                    continue
+                if running:
+                    future = next_completed(running)
+                    finish(running.pop(future), future.result())
+                elif waiting:
+                    raise RuntimeError("Vertical processing cannot satisfy the remaining scene dependencies")
+
+        if not any(totals.values()):
+            schedule()
+        elif backend == "dask":
+            from dask.distributed import Client, as_completed as dask_completed
+
+            if workers != 1:
+                raise ValueError("Use concurrent_processing: 1 with Dask")
+            address = self.controls.get("dask_scheduler_address")
+            scheduler_file = self.controls.get("dask_scheduler_file")
+            if not address and not scheduler_file:
+                raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
+            with (Client(address) if address else Client(scheduler_file=scheduler_file)) as client:
+                try:
+                    schedule(
+                        lambda node, payload: client.submit(
+                            _execute, payload, pure=False, priority=node.step_index
+                        ),
+                        lambda futures: next(iter(dask_completed(futures))),
+                        limit=len(previous),
+                    )
+                finally:
+                    client.cancel(list(running))
+        elif workers > 1 and len(previous) > 1:
+            with ProcessPoolExecutor(max_workers=min(workers, len(previous))) as executor:
+                try:
+                    schedule(
+                        lambda node, payload: executor.submit(_execute, payload),
+                        lambda futures: next(as_completed(futures)),
+                        limit=workers,
+                    )
+                finally:
+                    for future in running:
+                        future.cancel()
+        else:
+            schedule()
+        # All cached contexts in this segment have been restored before cleanup.
+        self._cleanup()
+
     def run(self):
         self.plan()
         self._executing = True
         if self.controls["log_to_console"]:
             print(f"[workflow] Discovered {len(self.records)} input records")
+            disabled_steps = {step["name"] for step in self.steps if not step["run"]}
             for step, counts in self.counts().items():
+                if step in disabled_steps:
+                    print(f"{step}: run:false")
+                    continue
                 if counts.get("pending"):
                     print(f"{step}: pending scene discovery")
                     continue
@@ -1300,57 +1491,19 @@ class Workflow:
         backend = self.controls["concurrent_processing_backend"]
         if backend not in {"process_pool", "dask"}:
             raise ValueError("concurrent_processing_backend must be process_pool or dask")
-        for step_index in range(self.start_index, len(self.steps)):
-            self._prepare_constants(step_index)
-            nodes = [node for node in self.nodes if node.step_index == step_index and node.needed]
-            for node in nodes:
-                if node.status == "loaded":
-                    self._restore(node)
-                    self._save_final_metadata(node)
-            pending = [node for node in nodes if node.status == "processing"]
-            if not pending:
-                self._advance_scenes(step_index)
-                continue
-            payloads = [(node, self._payload(node)) for node in pending]
-            if backend == "dask" and pending[0].record is not None:
-                from dask.distributed import Client, as_completed as dask_completed
-
-                if workers != 1:
-                    raise ValueError("Use concurrent_processing: 1 with Dask")
-                address = self.controls.get("dask_scheduler_address")
-                scheduler_file = self.controls.get("dask_scheduler_file")
-                if not address and not scheduler_file:
-                    raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
-                with (
-                    Client(address) if address else Client(scheduler_file=scheduler_file)
-                ) as client:
-                    futures = {
-                        client.submit(_execute, payload, pure=False): node
-                        for node, payload in payloads
-                    }
-                    try:
-                        for future in dask_completed(futures):
-                            self._finish(futures[future], future.result())
-                    finally:
-                        client.cancel(list(futures))
-            elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
-                with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as executor:
-                    futures = {
-                        executor.submit(_execute, payload): node for node, payload in payloads
-                    }
-                    try:
-                        for future in as_completed(futures):
-                            self._finish(futures[future], future.result())
-                    finally:
-                        for future in futures:
-                            future.cancel()
+        step_index = self.start_index
+        while step_index < len(self.steps):
+            if self._can_run_vertical(step_index):
+                end = step_index + 1
+                while end < len(self.steps):
+                    if self.steps[end]["run"] and not self._can_run_vertical(end):
+                        break
+                    end += 1
+                self._run_vertical_steps(step_index, end, workers, backend)
+                step_index = end
             else:
-                for node, payload in payloads:
-                    self._finish(node, _execute(payload))
-            if self.controls["log_to_console"]:
-                print(f"[{pending[0].step['name']}] Completed {len(pending)}/{len(nodes)}")
-            self._cleanup()
-            self._advance_scenes(step_index)
+                self._run_horizontal_step(step_index, workers, backend)
+                step_index += 1
         # A discovery-only workflow can still export its imported scenes.
         if not self.nodes and not self._exported_nodes and self.records:
             for record in self.records:
