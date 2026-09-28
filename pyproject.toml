@@ -27,7 +27,7 @@ maintainers = [
     {name = "Joseph Emile Honour Percival", email = "ipercival@gmail.com"}
 ]
 keywords = ['Remote sensing', 'Satellite imagery', 'Image preprocessing', 'Orthorectification', 'Pansharpening', 'Atmospheric correction', 'RPC refinement', 'WorldView', 'Python automation', 'Raster processing', 'Multispectral imagery']
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -41,6 +41,7 @@ dependencies = [
     "geopandas>=1.0.1",
     "shapely>=2.1",
     "pyyaml",
+    "jsonata-python>=0.7.0,<0.8",
     "requests>=2.32.3",
     "pyproj>=3.7",
     "tqdm",
@@ -85,7 +86,7 @@ pansharpen = [
 ]
 
 spectralmatch = [
-    "spectralmatch"
+    "spectralmatch>=1.6,<2"
 ]
 
 align = [
@@ -109,7 +110,7 @@ defaults = [
     "requests>=2.32.3",
     "Py6S",
     "orthority>=0.5.1",
-    "spectralmatch>=1.5,<2",
+    "spectralmatch>=1.6,<2",
     "coregix"
 ]
 
@@ -121,7 +122,7 @@ all = [
     "Py6S",
     "envipyengine>=1.0.9",
     "orthority>=0.5.1",
-    "spectralmatch",
+    "spectralmatch>=1.6,<2",
     "coregix"
 ]
 
@@ -134,13 +135,36 @@ dask = [
 "Source" = "https://github.com/cankanoa/vhrharmonize"
 
 [project.scripts]
-vhr-worldview = "vhrharmonize.cli.worldview:main"
-vhr-hpc = "vhrharmonize.slurm:main"
-vhr-fetch-modis-water-vapor = "vhrharmonize.cli.modis_water_vapor:main"
-vhr-cloudmask-raster = "vhrharmonize.cli.cloudmask:main"
-vhr-pansharpen-orthos = "vhrharmonize.cli.pansharpen:main"
-vhr-align-image-pair = "vhrharmonize.cli.align_image_pair:main"
-vhr-py6s = "vhrharmonize.cli.py6s:main"
-vhr-flaash = "vhrharmonize.cli.flaash:main"
-vhr-orthorectification = "vhrharmonize.cli.orthorectification:main"
-vhr-spectralmatch = "vhrharmonize.cli.spectralmatch:main"
+vhr = "vhrharmonize.cli.main:main"
+
+[project.entry-points."vhrharmonize.plugins"]
+import_files = "vhrharmonize.plugins.import_files:ImportFiles"
+restore_scenes = "vhrharmonize.plugins.restore_scenes:RestoreScenes"
+file_source = "vhrharmonize.plugins.file_source:FileSource"
+fetch_atmosphere = "vhrharmonize.plugins.fetch_atmosphere:FetchAtmosphere"
+fetch_dem = "vhrharmonize.plugins.fetch_dem:FetchDEM"
+atmospheric_correction = "vhrharmonize.plugins.atmospheric_correction:AtmosphericCorrection"
+orthorectification = "vhrharmonize.plugins.orthorectification:Orthorectification"
+pansharpen = "vhrharmonize.plugins.pansharpen:Pansharpen"
+cloud_mask = "vhrharmonize.plugins.cloud_mask:CloudMask"
+alignment = "vhrharmonize.plugins.alignment:Alignment"
+seamline_metadata = "vhrharmonize.plugins.seamline_metadata:SeamlineMetadata"
+joint_coregistration = "vhrharmonize.plugins.joint_coregistration:JointCoregistration"
+global_regression = "vhrharmonize.plugins.global_regression:GlobalRegression"
+local_block_adjustment = "vhrharmonize.plugins.local_block_adjustment:LocalBlockAdjustment"
+align_rasters = "vhrharmonize.plugins.align_rasters:AlignRasters"
+create_footprints = "vhrharmonize.plugins.create_footprints:CreateFootprints"
+postprocess_footprints = "vhrharmonize.plugins.postprocess_footprints:PostprocessFootprints"
+voronoi_center_seamline = "vhrharmonize.plugins.voronoi_center_seamline:VoronoiCenterSeamline"
+weighted_seamline = "vhrharmonize.plugins.weighted_seamline:WeightedSeamline"
+markov_triangles = "vhrharmonize.plugins.markov_triangles:MarkovTriangles"
+mask_rasters = "vhrharmonize.plugins.mask_rasters:MaskRasters"
+merge_rasters = "vhrharmonize.plugins.merge_rasters:MergeRasters"
+merge_vectors = "vhrharmonize.plugins.merge_vectors:MergeVectors"
+band_math = "vhrharmonize.plugins.band_math:BandMath"
+create_cloud_mask_with_omnicloudmask = "vhrharmonize.plugins.create_cloud_mask_with_omnicloudmask:CreateCloudMaskWithOmnicloudmask"
+process_raster_values_to_vector_polygons = "vhrharmonize.plugins.process_raster_values_to_vector_polygons:ProcessRasterValuesToVectorPolygons"
+compute_overviews = "vhrharmonize.plugins.compute_overviews:ComputeOverviews"
+search_paths = "vhrharmonize.plugins.search_paths:SearchPaths"
+create_paths = "vhrharmonize.plugins.create_paths:CreatePaths"
+match_paths = "vhrharmonize.plugins.match_paths:MatchPaths"

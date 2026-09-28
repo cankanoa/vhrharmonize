@@ -11,8 +11,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box
 
 from vhrharmonize.io.geospatial import get_image_percentile_value
-from vhrharmonize.providers.standardized import StandardizedMetadata, materialize_scene_bounds
-from vhrharmonize.providers.worldview import WorldViewMetadata
+from vhrharmonize.io.metadata import materialize_geometry
 
 
 CORNERS = {
@@ -24,41 +23,16 @@ CORNERS = {
 
 
 class SceneBoundsTests(unittest.TestCase):
-    def test_corners_preserve_footprint_instead_of_rectangular_envelope(self):
-        raw = {"BAND_C": dict(CORNERS), "BAND_B": dict(CORNERS)}
-        original = deepcopy(raw)
-        polygon = materialize_scene_bounds(raw)
-        self.assertIsInstance(polygon, Polygon)
-        self.assertEqual(list(polygon.exterior.coords)[:4], [
-            (CORNERS[f"{corner}Lon"], CORNERS[f"{corner}Lat"])
-            for corner in ("UL", "UR", "LR", "LL")
-        ])
+    def test_geojson_footprint_and_reprojection(self):
+        geometry = {"type": "Polygon", "coordinates": [[[CORNERS[f"{corner}Lon"], CORNERS[f"{corner}Lat"]] for corner in ("UL", "UR", "LR", "LL", "UL")]]}
+        original = deepcopy(geometry)
+        polygon = materialize_geometry(geometry)
         self.assertLess(polygon.area, box(*polygon.bounds).area)
-        self.assertEqual(raw, original)
-        projected = materialize_scene_bounds(raw, epsg=32605)
+        self.assertEqual(geometry, original)
+        projected = materialize_geometry(geometry, epsg=32605)
         x, y = Transformer.from_crs(4326, 32605, always_xy=True).transform(CORNERS["ULLon"], CORNERS["ULLat"])
         self.assertAlmostEqual(projected.exterior.coords[0][0], x)
         self.assertAlmostEqual(projected.exterior.coords[0][1], y)
-
-    def test_missing_bounds_do_not_prevent_metadata_loading(self):
-        metadata = StandardizedMetadata.from_worldview_metadata(
-            WorldViewMetadata(imd_file="scene.IMD", photo_basename=None, raw_metadata={"IMAGE_1": {"satId": "WV03"}})
-        )
-        self.assertEqual(metadata.sensor_id, "WV03")
-        with self.assertRaisesRegex(ValueError, "no scene corner"):
-            materialize_scene_bounds(metadata.source_metadata)
-
-    def test_bad_and_inconsistent_corners_fail_when_requested(self):
-        for values, message in [
-            ({"ULLon": 0}, "Incomplete"),
-            (dict(CORNERS, ULLat=float("nan")), "Invalid"),
-            (dict(CORNERS, ULLat=100), "Invalid"),
-            ({key: 0 for key in CORNERS}, "valid polygon"),
-        ]:
-            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                materialize_scene_bounds({"BAND_C": values})
-        with self.assertRaisesRegex(ValueError, "disagree"):
-            materialize_scene_bounds({"BAND_C": CORNERS, "BAND_B": dict(CORNERS, ULLon=-150)})
 
     def test_dem_sampling_reprojects_in_memory_geometry(self):
         with TemporaryDirectory() as directory:

@@ -1,5 +1,5 @@
 site_name: vhrharmonize
-site_description: WorldView preprocessing library and CLI documentation
+site_description: Sensor-neutral imagery preprocessing library and CLI documentation
 site_url: https://vhrharmonize.sefa.ai/
 repo_url: https://github.com/cankanoa/vhrharmonize
 repo_name: cankanoa/vhrharmonize
@@ -12,34 +12,35 @@ nav:
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
+      - Adding Plugins: getting-started/adding-plugins.md
       - Contributing: getting-started/contributing.md
   - CLI:
-      - vhr-worldview: cli/vhr-worldview.md
-      - vhr-fetch-modis-water-vapor: cli/vhr-fetch-modis-water-vapor.md
-      - vhr-flaash: cli/vhr-flaash.md
-      - vhr-cloudmask-raster: cli/vhr-cloudmask-raster.md
-      - vhr-pansharpen-orthos: cli/vhr-pansharpen-orthos.md
-      - vhr-align-image-pair: cli/vhr-align-image-pair.md
-      - vhr-orthorectification: cli/vhr-orthorectification.md
-      - vhr-spectralmatch: cli/vhr-spectralmatch.md
-      - vhr-py6s: cli/vhr-py6s.md
+      - Commands: cli/commands.md
+      - Workflow: cli/workflow.md
+      - HPC: cli/hpc.md
   - Configuration:
-      - WorldView Config: configuration/worldview-config.md
+      - Workflow Configuration: configuration/workflow-config.md
   - Pre-Processing Steps:
       - Py6S: pre-processing-steps/py6s.md
-      - WorldView Pipeline: pre-processing-steps/worldview-pipeline.md
+      - Plugin Workflow: pre-processing-steps/workflow.md
   - API Reference:
       - io.geospatial: api/io-geospatial.md
       - io.workflow_utils: api/io-workflow-utils.md
-      - preprocess.alignment: api/preprocess-alignment.md
-      - preprocess.atmospheric_correction: api/preprocess-atmospheric-correction.md
-      - preprocess.cloudmasking: api/preprocess-cloudmasking.md
-      - preprocess.helpers: api/preprocess-helpers.md
-      - preprocess.orthorectification: api/preprocess-orthorectification.md
-      - preprocess.pansharpening: api/preprocess-pansharpening.md
-      - preprocess.spectralmatch: api/preprocess-spectralmatch.md
-      - providers.standardized: api/providers-standardized.md
-      - providers.worldview: api/providers-worldview.md
+      - plugins.alignment: api/plugins-alignment.md
+      - plugins.atmospheric_correction: api/plugins-atmospheric-correction.md
+      - plugins.cloud_mask: api/plugins-cloud-mask.md
+      - io.logging: api/io-logging.md
+      - plugins.orthorectification: api/plugins-orthorectification.md
+      - plugins.pansharpen: api/plugins-pansharpen.md
+      - SpectralMatch functions: api/plugins-spectralmatch.md
+      - io.metadata: api/io-metadata.md
+      - workflow.engine: api/workflow-engine.md
+      - workflow.api: api/workflow-api.md
+      - slurm: api/slurm.md
+      - plugins.fetch_atmosphere: api/plugins-fetch-atmosphere.md
+      - plugins.fetch_dem: api/plugins-fetch-dem.md
+      - plugins.seamline_metadata: api/plugins-seamline-metadata.md
+      - cli.functions: api/cli-functions.md
 
 theme:
   name: material

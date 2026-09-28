@@ -1,388 +1,811 @@
 # This file has arguments to process WorldView-3 B1 images and brief setup instructions below.
-
-# 1. To install the required system level libraries run:
-  # `conda create -n vhrharmonize -c conda-forge gdal sixs python=3.11`
-  # `conda activate vhrharmonize`
-
-# 2. To install the library, depending on if you are installing from pip or source:
-  # From source: `pip install -e ".[defaults]"`
-  # From pip: `pip install vhrharmonize[defaults]`
-
-# 3. Set the arguments in this yml file
-
-# 4. To process images:
-  # Navigate to the folder with this yml file (may need to be changed): `cd configs`
-  # Run: `vhr-worldview --config-yaml example.worldview.yml`
+# WorldView naming, metadata standardization and calibration are defined here.
+#
+# 1. Install the required system libraries:
+#    conda create -n vhrharmonize -c conda-forge gdal sixs python=3.11
+#    conda activate vhrharmonize
+# 2. Install the library:
+#    From source: pip install -e ".[defaults]"
+#    From PyPI: pip install "vhrharmonize[defaults]"
+# 3. Set the paths, metadata mappings and non-default arguments below.
+# 4. From the repository: vhr workflow --config configs/example.worldview.yml
+#    From this folder: vhr workflow --config example.worldview.yml
+#    Preview pending work by adding --dry-run.
+#
+# Commented options show defaults or optional examples. "default: shared.X" means
+# the workflow inherits X; "Python:" gives the standalone function default when different.
+# Do not uncomment every option: choose the method/steps you need and edit their values.
+# Top-level keys are unique step names. plugin: selects the implementation; steps run in declaration order.
+# Keys: param:name passes a function argument; var:name assigns a scene variable;
+# const:name assigns a workflow-wide variable; core:name controls execution.
+# Values: var:name/const:name read those scopes; expr:... evaluates JSONata;
+# returned:field reads a function result; collect:name gathers a field across scenes.
+# literal:text escapes a reserved prefix; returned:$ selects the complete result.
+# JSONata sees one object: {"const": {...}, "var": {...}}. Use const.name / var.name.
+# Scene steps may define const: from literals or constants; never from var:/collect:/returned:.
+# Constant expressions see only the const object and resolve once per step, before processing images.
+# Unquoted prefixes work in YAML. Use >- for expressions containing a colon followed by a space.
+# import_files resolves file-relative paths and publishes absolute directory roots.
+# Pass absolute input paths to processing functions. Output paths must be unique.
+# File descriptor fields become scene variables; mul, source and scene_id are explicit mappings below.
+# Suffix assignments run before path expressions; disabled steps perform no assignments or I/O.
+# Consumers must explicitly reference a name from an enabled step or import_files.
+#
+# Context fields only reach functions through explicit param: links.
+# Precedence: per-step param > shared param > Python function default. core: controls are not function defaults.
+# Each plugin independently selects paths for core file features in its Python adapter.
+# The controls below enable those selected features; they do not select additional paths.
+# Every processing plugin accepts these runner controls alongside its param: settings:
+#   core:run: false # true | false; default: false. Enable explicitly.
+#   core:scope: scene # scene | aggregate; default: plugin scope; scene setters always aggregate.
+#   core:requires: [] # path/list; default: []. Extra file dependencies, not function arguments.
+#   core:calculate_overviews: false # true | false; default: false. Selected raster outputs; requires shared.param:window_scales.
+#   core:reuse: true # true | false; default: shared.core:run_from_existing.
+#   core:check_validity: true # true | false; default: shared.core:check_validity.
+#   core:required: false # true | false; default: false. Require even an otherwise unused temporary product.
+# Requested non-temp outputs are deliverables. A valid cached downstream output stops
+# upstream recomputation; missing intermediate temporary files do not prevent resume.
 
 shared:
-  input_file_glob:
-    - file_source: /path/to/worldview_bundle_root/**/*.TIF # Raw source inputs; should match both MUL and PAN images.
-  # input_file_glob:
-  #   - cloud_mask: "/path/to/multiline/worldivew/image/search/**/@(\
-  # 17DEC08211835-[MP]1BS-016445318010_01_P011*|\
-  # 19SEP09211403-[MP]1BS-200011908666_01_P001*\
-  # )_cloudmasked.TIF" # Already completed cloud-mask inputs.
-  output_dir: ../../processed # Relative output paths resolve from the MUL image folder. If unset, defaults to ../Processed from that folder
-  epsg: 0000 # Projected epsg code for output products; for example 6635 for Hawaii Island
-  
-  concurrent_processing_backend: process_pool # process_pool | dask. Dask uses a running scheduler that can be setup. Search for "When dask is enabled" in the config files for all params to enable dask.
-  concurrent_processing: 1 # Local process count or num_cpu for process_pool; must be 1 for dask because the cluster controls concurrency
-  # dask_scheduler_file: ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json # Enable for dask connection
-  # dask_scheduler_address: tcp://scheduler-host:8786 # Alternative Dask connection
-  
-  dem_file_path: /path.tif  # /path/to/dem.tif or "online" to fetch from opentopography (must set API key). The DEM should be in WGS84 ellipsoidal-height and can be downloaded from https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
-  # dem_online_api_key: your-opentopography-api-key # Or set OPENTOPOGRAPHY_API_KEY in the environment
-  # dem_online_source: SRTMGL1_Ellip
-  # dem_online_api_endpoint: https://portal.opentopography.org/API/globaldem
-  # dem_online_timeout_s: 120.0
+  plugin: shared
+  core:run: true # true | false; default: false. Apply workflow-wide defaults.
+  # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
+  core:output_metadata_path: expr:const.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
+  # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
+  # Function defaults are offered to every plugin that accepts the parameter.
+  # Set shared values directly; per-step param: settings override them.
+  param:window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # increasing integer list; required for VHR core overviews.
+  param:epsg: 6635 # EPSG integer; default: unset. Projected output CRS; 6635 is Hawaii Island.
+  # param:custom_nodata_value: null # number | null; default: null, preserve source NoData. Example override: -9999.
+  # param:output_dtype: float32 # raster dtype; default: function/source dtype. Example override: int16.
+  # param:concurrent_processing_backend: process_pool # process_pool | dask; default: function default. Single-file merge overrides this with null.
 
-  #temp_dir: /temp/folder # If unset, it defaults to creating a system temp dir
-  delete_temp_dir: true # Remove workflow temp directories after successful completion
-  delete_temp_steps_proactively: false # Remove individual completed-scene temp files during processing; independent of delete_temp_dir
-  nodata_value: -9999 # Shared nodata value used by raster-writing steps
-  dtype: int16 # Shared output dtype for raster-writing steps
-  log_to_console: true
-  overview_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Common overview pyramid levels. Required when any calculate_overviews_* option is true
-  skip_existing: true # Skip the whole scene only if all requested non-temp outputs already exist
-  skip_existing_check_validity: true # Before skipping a whole scene, verify raster readability and JSON syntax
-  run_from_existing: true # At each step, if the expected output exists, reuse it instead of rerunning that step
-  run_from_existing_check_validity: true # Before reusing a step output, verify raster readability and JSON syntax
-  validity_check_grid_size: 2048 # If validity checks above are enabled, this is an additional check for actual valid pixels: 0 disables pixel sampling; 1 checks every pixel; N samples one pixel per NxN grid cell
-  max_cloud_cover_to_process: 75 # Skip scenes whose cloud cover percent exceeds this threshold
+  # Common SpectralMatch function options also use ordinary shared parameters.
+  param:window_size: 1024 # positive integer | null; default: null, native block size. Processing/output tile size.
+  param:image_threads: 1 # cpu | positive integer | null; default: null. Single-file merge overrides this with null.
+  param:io_threads: 1 # cpu | positive integer | null; default: null. Raster IO workers.
+  param:tile_threads: 1 # cpu | positive integer | null; default: null. Window workers.
+  # param:cache: null # positive GB | null; default: null, existing GDAL cache.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. With Dask, set image_threads: null.
+  # Also set seamline_metadata.param:dask_scheduler_file/address for its VHR Dask workers.
+  # param:calculation_dtype: float32 # raster dtype; default: float32.
+  # param:save_as_cog: false # true | false; default: false.
+  # param:debug_logs: false # true | false; default: false.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: no. Native reuse; core reuse is separate.
+  # VHR calculates overviews after the selected steps. Leave native build_overviews unset.
 
-workflow:
-  # File source
-  run_file_source: false # Copy source WorldView bundle files before processing
-  save_file_source: $temp/file_source
-  calculate_overviews_file_source: false
+  # core:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
+  # core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Must be 1 for Dask.
+  # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.
+  # core:dask_scheduler_file: ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json # path | null; default: null.
+  # core:dask_scheduler_address: tcp://scheduler-host:8786 # address | null; default: null. Alternative to scheduler_file.
 
-  # Atmospheric correction
-  run_atmospheric_correction: true
-  atmospheric_correction_output_suffix: _py6s # Filename suffix for this step
-  save_atmospheric_correction: $temp/atmospheric_correction # $temp/folder | $output/folder | ./custom/relative/to/input | /custom/absolute | relative/to/pwd
-  calculate_overviews_atmospheric_correction: false # Weather or not to calculate overviews for this step
-  run_fetch_atmosphere: true
-  fetch_atmosphere_output_suffix: _atmosphere # Filename suffix for fetched atmosphere JSON
-  save_fetch_atmosphere: $temp/fetch_atmosphere
+  # core:delete_temp_dir: false # true | false; default: false. Clean owned temporary outputs after success.
+  # core:delete_temp_steps_proactively: false # true | false; default: false. Clean completed intermediates during processing.
+  # core:run_from_existing: true # true | false; default: true. Reuse required outputs at each step.
+  # core:check_validity: true # true | false; default: true. Verify raster readability, TIFF bounds and JSON syntax.
+  core:validity_check_grid_size: 2048 # integer >= 0; default: 0. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
+  # core:log_to_console: true # true | false; default: true.
+  # Any function setting can be shared here; a matching per-step setting overrides it.
 
-  # Orthorectification
-  run_orthorectification: true
-  orthorectification_output_suffix: _ortho # Filename suffix for orthorectified multispectral output
-  orthorectification_pan_output_suffix: _pan_ortho # Filename suffix for orthorectified panchromatic output
-  save_orthorectification: $temp/orthorectification
-  calculate_overviews_orthorectification: false
+  # Workflow-wide constants. They remain available to every scene and aggregate.
+  const:dem_path: /path/to/dem.tif # path; recipe setting. Shared local DEM; or use var:dem after enabling fetch_dem.
+  const:reference_path: /path/to/reference.tif # path; recipe setting. Alignment reference for every scene.
+  const:red_band_index: 5 # one-based integer; recipe setting. WorldView red.
+  const:green_band_index: 3 # one-based integer; recipe setting. WorldView green.
+  const:nir_band_index: 7 # one-based integer; recipe setting. WorldView NIR1.
 
-  # Pansharpening
-  run_pansharpen: true
-  pansharpen_output_suffix: _pansharpen # Filename suffix for pansharpened output
-  save_pansharpen: $temp/pansharpen
-  calculate_overviews_pansharpen: false
+import_files:
+  plugin: import_files
+  core:run: true # true | false; default: false. Enable this step.
+  # Later import_files steps add scenes and missing metadata fields; existing values and roots are preserved.
+  # Output filenames are defined by YAML expressions; functions receive complete explicit paths.
+  param:output_dir: ../processed # path; default: ./output, relative to the first matched file. Persistent products.
+  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the matched file.
+  # param:directory_scope: const # const | var; default: const. Use var for independent directories per scene.
+  # Sensor constants shared by all imported images.
+  const:band_order: [BAND_C, BAND_B, BAND_G, BAND_Y, BAND_R, BAND_RE, BAND_N, BAND_N2]
+  const:band_wavelengths_um: [0.4273, 0.4779, 0.5462, 0.6086, 0.6588, 0.7237, 0.8313, 0.9080]
+  # 2018v0 gain/offset adjustments. Edit or replace these values per product.
+  const:calibration:
+    WV02:
+      BAND_C: [0.977, -5.552]
+      BAND_B: [0.987, -4.443]
+      BAND_G: [0.987, -2.523]
+      BAND_Y: [0.987, -4.929]
+      BAND_R: [0.987, -3.914]
+      BAND_RE: [0.987, -5.675]
+      BAND_N: [0.987, -1.546]
+      BAND_N2: [0.987, -3.564]
+    WV03:
+      BAND_C: [0.905, -8.604]
+      BAND_B: [0.940, -5.809]
+      BAND_G: [0.938, -4.996]
+      BAND_Y: [0.962, -3.649]
+      BAND_R: [0.964, -3.021]
+      BAND_RE: [1.000, -4.521]
+      BAND_N: [0.961, -5.522]
+      BAND_N2: [0.978, -2.992]
 
-  # Cloud masking
-  run_cloud_mask: true
-  cloud_mask_output_suffix: _cloudmasked # Filename suffix for masked image output
-  cloud_mask_mask_suffix: _cloudmask # Filename suffix for binary cloud mask output
-  save_cloud_mask: $output # or $temp/cloud_mask if running next step
-  calculate_overviews_cloud_mask: true
+  param:search_glob: /path/to/worldview/**/MUL/*-M1BS-*.TIF
+  param:scene_id: literal:expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # string/reference/expression; default: var:file_path. Filename stem; later imports merge on this ID.
+  # Extended-glob alternative for selecting named primary MUL products:
+  # param:search_glob: "/path/to/worldview/**/MUL/@(\
+  # 17DEC08211835-M1BS-016445318010_01_P011*|\
+  # 19SEP09211403-M1BS-200011908666_01_P001*\
+  # ).TIF"
+  # search_glob also accepts a list of patterns. Select primary MUL images;
+  # PAN companions are derived below rather than creating duplicate records.
+  # Cached outputs are discovered at each step's declared path. Keep the raw
+  # search glob when resuming from cloud masking; earlier temporary files may be absent.
+  # Relative companion paths resolve from the discovered file's directory.
+  # literal:expr delays evaluation until each file is found; var:file_path is always available.
+  # Imported fields become var fields directly. YAML mappings run after discovery.
+  param:create_metadata_json: # name:{path: glob} | name:{to_json: file}; default: null.
+    mul_companions:
+      path: literal:expr:$replace(var.file_path, '.TIF', '.{RPB,rpb}') # Sorted paths; [] if no matches.
+    pan_companions:
+      path: literal:expr:$replace($replace($replace(var.file_path, '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
+    metadata:
+      to_json: literal:expr:$replace(var.file_path, '.TIF', '.IMD') # IMD/JSON/GeoJSON/XML/YAML -> object; kept in memory.
+  var:mul: returned:file_path # Matched multispectral image. All other files derive from it.
+  var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # Original filename without extension.
+  var:suffix: "" # Naming state; enabled processing steps append their suffixes in YAML.
+  var:pan: expr:$replace($replace(var.mul, '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-')
+  var:sensor_id: var:metadata.IMAGE_1.satId
+  var:acquisition_datetime_utc: expr:var.metadata.IMAGE_1.firstLineTime ?? var.metadata.IMAGE_1.TLCTime
+  var:day_utc: expr:$substring(var.acquisition_datetime_utc, 0, 10)
+  var:day: expr:$number($substring(var.acquisition_datetime_utc, 8, 2))
+  var:month: expr:$number($substring(var.acquisition_datetime_utc, 5, 2))
+  var:solar_azimuth: var:metadata.IMAGE_1.meanSunAz
+  var:solar_zenith: expr:90 - var.metadata.IMAGE_1.meanSunEl
+  var:view_azimuth: var:metadata.IMAGE_1.meanSatAz
+  var:view_zenith: var:metadata.IMAGE_1.meanOffNadirViewAngle
+  var:line_of_sight_azimuth: var:metadata.IMAGE_1.meanSatAz
+  var:line_of_sight_zenith: expr:180 - var.metadata.IMAGE_1.meanOffNadirViewAngle
+  var:cloud_cover: expr:100 * var.metadata.IMAGE_1.cloudCover
+  var:product_resolution: var:metadata.IMAGE_1.meanProductGSD
+  var:dn_to_radiance_factors: expr:$map(const.band_order, function($band){$lookup(var.metadata, $band).absCalFactor / $lookup(var.metadata, $band).effectiveBandwidth * $lookup($lookup(const.calibration, var.sensor_id), $band)[0]})
+  var:dn_to_radiance_offsets: expr:$map(const.band_order, function($band){$lookup($lookup(const.calibration, var.sensor_id), $band)[1]})
+  var:min_lon: expr:$min([var.metadata.BAND_C.ULLon, var.metadata.BAND_C.URLon, var.metadata.BAND_C.LRLon, var.metadata.BAND_C.LLLon])
+  var:max_lon: expr:$max([var.metadata.BAND_C.ULLon, var.metadata.BAND_C.URLon, var.metadata.BAND_C.LRLon, var.metadata.BAND_C.LLLon])
+  var:min_lat: expr:$min([var.metadata.BAND_C.ULLat, var.metadata.BAND_C.URLat, var.metadata.BAND_C.LRLat, var.metadata.BAND_C.LLLat])
+  var:max_lat: expr:$max([var.metadata.BAND_C.ULLat, var.metadata.BAND_C.URLat, var.metadata.BAND_C.LRLat, var.metadata.BAND_C.LLLat])
+  var:geometry:
+    type: Polygon
+    coordinates:
+      - - [var:metadata.BAND_C.ULLon, var:metadata.BAND_C.ULLat]
+        - [var:metadata.BAND_C.URLon, var:metadata.BAND_C.URLat]
+        - [var:metadata.BAND_C.LRLon, var:metadata.BAND_C.LRLat]
+        - [var:metadata.BAND_C.LLLon, var:metadata.BAND_C.LLLat]
+        - [var:metadata.BAND_C.ULLon, var:metadata.BAND_C.ULLat]
+  var:footprint_metadata:
+    scene_id: var:scene_id
+    sensor_id: var:sensor_id
+    acquisition_datetime_utc: var:acquisition_datetime_utc
+    cloud_cover: var:cloud_cover
+    solar_zenith: var:solar_zenith
+    view_zenith: var:view_zenith
+    geometry: var:geometry
+  param:where: literal:expr:100 * var.metadata.IMAGE_1.cloudCover <= 75 # bool/expression; default: true. Maximum cloud cover percent.
 
-  # Spatially match to external dataset (remember to set reference dataset below)
-  run_alignment: false
-  alignment_output_suffix: _aligned # Filename suffix for aligned output
-  save_alignment: $output
-  calculate_overviews_alignment: true
 
-  # Build footprint polygons plus IMD metadata for weighted seamline methods
-  run_seamline_metadata: false
-  save_seamline_metadata: $temp/seamline_metadata.gpkg # $temp/file.gpkg | /custom/absolute.gpkg | relative/to/pwd.gpkg
+# Copy source files and explicitly selected companions before processing.
+file_source:
+  plugin: file_source
+  core:run: false # true | false; default: false. Skip this entire step; no output variable is created.
+  param:input_path: var:mul # path; required.
+  param:companions: var:mul_companions # path list | null; default: null. Copy RPC sidecars with the image.
+  var:suffix: expr:var.suffix & ''
+  var:source_image: expr:const.temp_dir & '/file_source/' & var.basename & var.suffix & '.tif'
+  param:output_path: var:source_image # path; required. Available only when this step is enabled.
+  # To copy, set core:run: true and use var:source_image as the correction input.
+  # Alternative output path: expr:const.temp_dir & '/file_source/' & $split(var.file_path, '/')[-1]
+  # core:calculate_overviews: false # true | false; default: false.
 
-  # Radiometrically match images to each other, align pixel grids, mask, and merge images
-  run_spectralmatch: false
-  save_spectralmatch: # /output/to/spectralmatch/mosaic.tif OR /output/to/folder/spectralmatch/timelapse; Match the final match_steps output: file for a mosaic, folder for merge_rasters_output_tiles or a final multi-raster step before merge (seamline steps produce vector files).
-  calculate_overviews_spectralmatch: false # Enable overviews on the last eligible match_steps entry; conflicts with any true match_*_build_overviews setting
+# Optional online DEM. Otherwise set shared.const:dem_path for correction and both ortho steps.
+# The DEM should contain WGS84 ellipsoidal heights in meters:
+# https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
+# Enable this plugin and set downstream DEM inputs to var:dem to download per scene.
+fetch_dem:
+  plugin: fetch_dem
+  core:run: false # true | false; default: false.
+  param:min_lon: var:min_lon  # number; required. WGS84 bbox west edge.
+  param:min_lat: var:min_lat  # number; required. WGS84 bbox south edge.
+  param:max_lon: var:max_lon  # number; required. WGS84 bbox east edge.
+  param:max_lat: var:max_lat  # number; required. WGS84 bbox north edge.
+  var:dem: expr:const.temp_dir & '/dem/' & var.basename & '.tif'
+  param:output_tif_path: var:dem # path; required.
+  # param:api_key: null # string | null; default: OPENTOPOGRAPHY_API_KEY or OT_API_KEY environment variable.
+  param:demtype: SRTMGL1_E # OpenTopography DEM identifier; default: SRTMGL1_Ellip.
+  # param:endpoint: https://portal.opentopography.org/API/globaldem # URL; default shown.
+  # param:timeout_s: 120.0 # positive seconds; default: 120.0.
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
 
-# STEP SPECIFIC SETTINGS HEREAFTER (defaults are often okay)
+# Fetch atmosphere separately so it can be reused or replaced by another source.
+fetch_atmosphere:
+  plugin: fetch_atmosphere
+  core:run: true # true | false; default: false. Enable this step.
+  # param:source: nasa_power # nasa_power | modis_gee; default: nasa_power.
+  param:day_utc: var:day_utc  # ISO date; required for nasa_power.
+  param:min_lon: var:min_lon  # number; required. WGS84 bbox west edge.
+  param:min_lat: var:min_lat  # number; required. WGS84 bbox south edge.
+  param:max_lon: var:max_lon  # number; required. WGS84 bbox east edge.
+  param:max_lat: var:max_lat  # number; required. WGS84 bbox north edge.
+  var:atmosphere_json: expr:const.temp_dir & '/fetch_atmosphere/' & var.basename & '_atmosphere.json'
+  param:output_path: var:atmosphere_json # path; required.
+  var:atmosphere: returned:$ # Complete JSON object returned by the atmosphere function.
+  # param:grid_size: 3 # integer >= 1; default: 3. Sample points per bbox side.
+  # param:search_days: 1 # integer >= 0; default: 1. Search +/- this many days.
+  # param:timeout_s: 30.0 # positive seconds; default: 30.0.
+  # param:endpoint: https://power.larc.nasa.gov/api/temporal/daily/point # URL; default shown.
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+
+  # For source: modis_gee, remove day_utc and NASA-only options above, then use:
+  # param:scene_datetime_utc: var:acquisition_datetime_utc # ISO datetime; required for modis_gee.
+  # param:ee: null # Python client | null; default: null. Initialized automatically; live objects are Python-only.
+  # param:ee_project: null # string | null; default: null. Or GEE_PROJECT/EE_PROJECT/GOOGLE_EARTH_ENGINE_PROJECT in env_file.
+  # param:authenticate: false # true | false; default: false. Run Earth Engine authentication when needed.
+  # param:env_file: /path/to/.env # path | null; default: null. Optional Earth Engine project settings.
+  # param:hours_window: 24 # integer hours; default: 24. Scene-time search window.
+  # param:terra_collection: MODIS/061/MOD08_D3 # GEE collection; default shown.
+  # param:aqua_collection: MODIS/061/MYD08_D3 # GEE collection; default shown.
+  # param:band_name: Atmospheric_Water_Vapor_Mean # water-vapor band; default shown.
+  # param:aod_band_candidates: null # band-name list | null; default: null. Try known MODIS AOD names.
+  # param:aod_scale_factor: 0.001 # number; default: 0.001.
+  # param:modis_scale_factor: 0.001 # number; default: 0.001. Water vapor -> g/cm^2.
+  # param:modtran_baseline_water_vapor: 2.92 # g/cm^2; default: 2.92. Denominator for FLAASH water-vapor preset.
+  # param:reduce_scale_m: 1000 # meters; default: 1000. Earth Engine reduce-region scale.
+
+# Atmospheric correction. Geometry, band order and radiance calibration come from mapped JSON.
 atmospheric_correction:
-  atmospheric_method: py6s # py6s | flaash | none
+  plugin: atmospheric_correction
+  core:run: true # true | false; default: false. Enable this step.
+  # param:method: py6s # py6s | flaash; default: py6s. run: false ignores the step; update downstream input links when disabling it.
+  core:requires: var:mul_companions # path list; default: []. Preserve access to external RPC metadata.
+  param:input_raster: var:mul # path; required. Use var:source_image after enabling file_source.
+  param:dem_file_path: const:dem_path # path | null; default: null. Or var:dem from fetch_dem.
+  var:suffix: expr:var.suffix & '_py6s'
+  var:corrected: expr:const.temp_dir & '/atmospheric_correction/' & var.basename & var.suffix & '.tif'
+  param:output_raster: var:corrected # path; required. Suffix is user-defined.
+  # core:calculate_overviews: false # true | false; default: false.
+  param:atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter; default: midlatitude_summer.
+  # param:aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric; default: maritime.
+  param:aot550: >- # number; default: 0.2. Used when visibility_km is null.
+    expr:(var.atmosphere.aot550 != null ? var.atmosphere.aot550 : 0.2)
+  param:water_vapor: >- # g/cm^2; default: 2.5. User atmosphere profile.
+    expr:(var.atmosphere.water_vapor != null ? var.atmosphere.water_vapor : 2.5)
+  param:ozone: >- # cm-atm; default: 0.3. User atmosphere profile.
+    expr:(var.atmosphere.ozone_cm_atm != null ? var.atmosphere.ozone_cm_atm : 0.3)
+  param:output_scale_factor: 10000.0 # number | null; default: null. Reflectance scale applied before writing.
+  # param:output_dtype: int16 # raster dtype; default: shared.output_dtype (Python: float32).
+  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: source nodata).
+  # param:visibility_km: null # kilometers | null; default: null. Example: 40.0; overrides aot550.
+  # param:sixs_executable: null # executable path | null; default: SIXS_EXECUTABLE, then sixs/sixsV1.1 on PATH.
+  # param:input_scale_factor: 1.0 # number; default: 1.0. Fallback when per-band radiance factors are absent.
+  # param:clip_reflectance: true # true | false; default: true. Clip to [0,1] before output scaling.
+  # param:ground_elevation_km: null # kilometers | null; default: null. Sample DEM, or 0 without DEM; example override: 0.5.
+  # param:dem_ground_percentile: 50.0 # 0..100; default: 50.0. Sample DEM inside mapped geometry.
+  param:footprint_geometry: var:geometry # GeoJSON geometry | null; default: null. Footprint used for DEM sampling.
+  # Explicit connections from the imported scene and sensor constants to Py6S arguments.
+  param:solar_zenith: var:solar_zenith # degrees; required unless supplied in an explicit variables object.
+  param:solar_azimuth: var:solar_azimuth # degrees; required unless supplied in an explicit variables object.
+  param:view_zenith: var:view_zenith # degrees; required unless supplied in an explicit variables object.
+  param:view_azimuth: var:view_azimuth # degrees; required unless supplied in an explicit variables object.
+  param:day: var:day # 1..31; required unless supplied in an explicit variables object.
+  param:month: var:month # 1..12; required unless supplied in an explicit variables object.
+  param:band_wavelengths_um: const:band_wavelengths_um # number list; required unless supplied in an explicit variables object.
+  param:dn_to_radiance_factors: var:dn_to_radiance_factors # number list | null; default: null. Explicit per-band radiance calibration.
+  param:dn_to_radiance_offsets: var:dn_to_radiance_offsets # number list | null; default: null. Explicit per-band radiance calibration.
+  # To disable IMD calibration or gain/offset adjustment, change the metadata mapping above;
+  # the Python plugin contains no WorldView-specific calibration switch or lookup table.
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
 
-  fetch_atmosphere:
-    fetch_atmosphere_source: auto # auto | nasa_power | modis_gee
-    fetch_atmosphere_grid_size: 3 # Number of sample points per bbox side
-    fetch_atmosphere_search_days: 1 # Search +/- this many days for matching atmosphere data
-    fetch_atmosphere_timeout_s: 30.0 # HTTP timeout in seconds
-    fetch_atmosphere_power_endpoint: https://power.larc.nasa.gov/api/temporal/daily/point # NASA POWER endpoint
-    fetch_atmosphere_hours_window: 24 # MODIS/GEE scene-time search window in hours
-    # fetch_atmosphere_ee_project: your-ee-project
-    # fetch_atmosphere_env_file: /path/to/.env
+  # FLAASH alternative: set method: flaash, use an ENVI output extension if needed,
+  # and remove Py6S-only options (including the direct solar/view/day/band arguments above).
+  # Keep input_raster, output_raster, DEM and footprint_geometry; explicitly supply this mapping:
+  # param:variables: # object | null; default: null. FLAASH requires this mapping unless params is supplied; Py6S also accepts it.
+  #   solar_azimuth: var:solar_azimuth
+  #   solar_zenith: var:solar_zenith
+  #   line_of_sight_azimuth: var:line_of_sight_azimuth
+  #   line_of_sight_zenith: var:line_of_sight_zenith
+  # param:envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe" # path | null; default: null; required without envi_engine.
+  # param:envi_engine: null # initialized ENVI engine | null; default: null. Live objects are Python-only.
+  # param:output_params_path: null # path | null; default: <output_raster>.flaash_params.txt. Set this param explicitly to include it in HPC downloads.
+  # param:convert_paths_for_windows: false # true | false; default: false. Convert WSL /mnt/<drive>/ paths for ENVI.
+  # param:delete_output_before_run: null # path | null; default: output_raster.
+  # param:modtran_atm: Mid-Latitude Summer # MODTRAN atmosphere; default: Mid-Latitude Summer.
+  # param:modtran_aer: Rural # MODTRAN aerosol; default: Rural. Maritime is another option.
+  # param:use_aerosol: AUTO # AUTO | Disabled | ENVI-supported mode; default: AUTO.
+  # param:default_visibility: null # kilometers | null; default: null. Example: 20.0.
+  # param:params: null # object | null; default: null. Complete ENVI task parameters instead of metadata-derived values.
+  # param:custom_params: # object | null; default: null. Override metadata-derived ENVI task settings below.
+  #   # Choices/task defaults below come from docs/flaash_params_info.txt; ENVI versions may differ.
+  #   # Calibration units describe wavelength units; INPUT_SCALE converts radiance to uW/(cm^2 sr nm).
+  #   # Native task defaults can be overridden by the metadata-derived values noted here.
+  #   INPUT_RASTER: {url: /path/to/input, factory: URLRaster} # enviraster; default: ENVI task/metadata-derived value.
+  #   SENSOR_TYPE: "UNKNOWN" # AVIRIS | HYDICE | HyMap | Hyperion | NVIS | Compass | Hycas | Mars | Multispectral | Unknown; default: Unknown.
+  #   INPUT_SCALE: 1.0 # float; default: ENVI task/metadata-derived value.
+  #   OUTPUT_SCALE: 10000.0 # float; default: ENVI task/metadata-derived value.
+  #   CALIBRATION_FILE: /path/to/calibration.txt # enviuri; default: ENVI task/metadata-derived value.
+  #   CALIBRATION_FORMAT: "ENVI" # ASCII | ENVI | Discrete | Filter | FLAASH; default: flaash.
+  #   CALIBRATION_UNITS: Microns # Nanometers | Microns; default: ENVI task/metadata-derived value.
+  #   LAT_LONG: [0.0, 0.0] # float; default: ENVI task/metadata-derived value.
+  #   SENSOR_ALTITUDE: 617.0 # float; default: ENVI task/metadata-derived value.
+  #   DATE_TIME: "2026-01-01T00:00:00Z" # envitime; default: ENVI task/metadata-derived value.
+  #   USE_ADJACENCY: Wavelength-dependent scattering kernel # Disabled | Legacy exponential scattering kernel | Wavelength-dependent scattering kernel; default: Wavelength-dependent scattering kernel.
+  #   DEFAULT_VISIBILITY: 20.0 # float; default: default_visibility (Python: null; ENVI: 40.0).
+  #   USE_POLISHING: Disabled # Disabled | Polish using reference materials | Polish using statistical detection of spectral artifacts; default: Disabled.
+  #   POLISHING_RESOLUTION: 100.0 # uint; default: ENVI task/metadata-derived value.
+  #   SENSOR_AUTOCALIBRATION: false # boolean; default: true.
+  #   SENSOR_CAL_PRECISION: 0.01 # float; default: 0.15000001.
+  #   SENSOR_CAL_FEATURE_LIST: [] # string; default: ENVI task/metadata-derived value.
+  #   GROUND_ELEVATION: 0.5 # float; default: sampled DEM percentile / 1000 (km).
+  #   SOLAR_AZIMUTH: 180.0 # float; default: explicit variables.solar_azimuth.
+  #   SOLAR_ZENITH: 30.0 # float; default: explicit variables.solar_zenith.
+  #   LOS_AZIMUTH: 90.0 # float; default: explicit variables.line_of_sight_azimuth.
+  #   LOS_ZENITH: 10.0 # float; default: explicit variables.line_of_sight_zenith.
+  #   IFOV: 0.002 # float; default: ENVI task/metadata-derived value.
+  #   MODTRAN_ATM: "Mid-Latitude Summer" # Tropical Atmosphere | Mid-Latitude Summer | Mid-Latitude Winter | Sub-Arctic Summer | Sub-Arctic Winter | 1976 US Standard Atmosphere; default: modtran_atm (Python: Mid-Latitude Summer; ENVI: Tropical Atmosphere).
+  #   MODTRAN_AER: "Maritime" # No Aerosol | High-Visibility Rural | Low-Visibility Rural | Maritime | Urban | Tropospheric; default: modtran_aer (Python: Rural; ENVI: High-Visibility Rural).
+  #   MODTRAN_RES: 5.0 # 15.0 | 5.0 | 1.0 | 0.1; default: 5.0 (ENVI: 15.0).
+  #   MODTRAN_MSCAT: "DISORT" # ISAACS | DISORT | Scaled ISAACS; default: DISORT (ENVI: Scaled ISAACS).
+  #   CO2_MIXING: 400.0 # float; default: ENVI task/metadata-derived value.
+  #   WATER_ABS_CHOICE: Automatic Selection # '1130' | '940' | '820' | Automatic Selection; default: Automatic Selection.
+  #   WATER_MULT: 1.0 # float; default: [0.0099999998, 1.0].
+  #   WATER_VAPOR_PRESET: 1.0 # float; default: 0.0.
+  #   USE_AEROSOL: "Disabled" # Disabled | Automatic Selection | Vegetation Based Retrieval | Water Based Retrieval | Wavelength Dependent Water Based Retrieval | Linear Regression Retrieval; default: use_aerosol (Python: AUTO; ENVI: Automatic Selection).
+  #   AEROSOL_SCALE_HT: 2.0 # float; default: 2.0.
+  #   AER_BAND_RATIO: 0.5 # float; default: 0.5.
+  #   AER_BAND_WAVL: 660 # float; default: ENVI task/metadata-derived value.
+  #   AER_REFERENCE_VALUE: 0.1 # float; default: 0.0.
+  #   AER_REFERENCE_PIXEL: [0, 0] # int; default: ENVI task/metadata-derived value.
+  #   AER_BANDLOW_WAVL: 425 # float; default: 425.
+  #   AER_BANDLOW_MAXREFL: 0.2 # float; default: ENVI task/metadata-derived value.
+  #   AER_BANDHIGH_WAVL: 660 # float; default: 660.
+  #   AER_BANDHIGH_MAXREFL: 0.2 # float; default: 0.2.
+  #   CLOUD_RASTER_URI: /path/to/cloud_mask.tif # enviuri; default: ENVI task/metadata-derived value.
+  #   WATER_RASTER_URI: /path/to/water_mask.tif # enviuri; default: ENVI task/metadata-derived value.
+  #   OUTPUT_RASTER_URI: /path/to/output.dat # enviuri; default: ENVI task/metadata-derived value.
 
-  flaash:
-    # Required only when atmospheric_method: flaash
-    # envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe"
-    # flaash_modtran_atm: Mid-Latitude Summer
-    # flaash_modtran_aer: Maritime
-    # flaash_use_aerosol: Disabled
-    # flaash_default_visibility: 20.0
+# Orthorectify multispectral imagery with the source RPC model and a DEM.
+orthorectify_mul:
+  plugin: orthorectification
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_image_path: var:corrected # path; required.
+  param:dem_image_path: const:dem_path # path; required. Or var:dem from fetch_dem.
+  # param:gcp_geojson_file_path: /path/to/rpc_refinement_gcps.geojson # path | null; default: null. Refine RPCs with Orthority-format GCPs.
+  # GCP format: https://orthority.readthedocs.io/en/stable/file_formats/oty_gcps.html
+  var:suffix: expr:var.suffix & '_ortho'
+  var:ortho: expr:const.temp_dir & '/orthorectification/' & var.basename & var.suffix & '.tif'
+  param:output_image_path: var:ortho # path; required.
+  param:output_resolution: var:product_resolution # positive number | [x,y] | null; default: null/native. CRS units; use null for a geographic CRS.
+  # param:output_epsg: 6635 # EPSG integer; default: shared.epsg; required without shared.epsg.
+  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
+  # param:output_dtype: int16 # raster dtype | null; default: shared.output_dtype (Python: source dtype).
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+  # core:calculate_overviews: false # true | false; default: false.
 
-    # Any extra FLAASH task params can be passed through with the `flaash_param_` prefix.
-    # Example:
-    # flaash_param_SENSOR_TYPE: "UNKNOWN"
-    # flaash_param_INPUT_SCALE: 1.0
-    # flaash_param_OUTPUT_SCALE: 10000.0
-    # flaash_param_CALIBRATION_FILE: /path/to/calibration.txt
-    # flaash_param_CALIBRATION_FORMAT: "ENVI"
-    # flaash_param_CALIBRATION_UNITS: "uW/(cm^2 sr nm)"
-    # flaash_param_LAT_LONG: [0.0, 0.0]
-    # flaash_param_SENSOR_ALTITUDE: 617.0
-    # flaash_param_DATE_TIME: "2026-01-01T00:00:00Z"
-    # flaash_param_USE_ADJACENCY: true
-    # flaash_param_DEFAULT_VISIBILITY: 20.0
-    # flaash_param_USE_POLISHING: false
-    # flaash_param_POLISHING_RESOLUTION: 100.0
-    # flaash_param_SENSOR_AUTOCALIBRATION: false
-    # flaash_param_SENSOR_CAL_PRECISION: 0.01
-    # flaash_param_SENSOR_CAL_FEATURE_LIST: []
-    # flaash_param_GROUND_ELEVATION: 0.5
-    # flaash_param_SOLAR_AZIMUTH: 180.0
-    # flaash_param_SOLAR_ZENITH: 30.0
-    # flaash_param_LOS_AZIMUTH: 90.0
-    # flaash_param_LOS_ZENITH: 10.0
-    # flaash_param_IFOV: 0.002
-    # flaash_param_MODTRAN_ATM: "Mid-Latitude Summer"
-    # flaash_param_MODTRAN_AER: "Maritime"
-    # flaash_param_MODTRAN_RES: 5.0
-    # flaash_param_MODTRAN_MSCAT: "DISORT"
-    # flaash_param_CO2_MIXING: 400.0
-    # flaash_param_WATER_ABS_CHOICE: "BAND_MODEL"
-    # flaash_param_WATER_MULT: 1.0
-    # flaash_param_WATER_VAPOR_PRESET: 1.0
-    # flaash_param_USE_AEROSOL: "Disabled"
-    # flaash_param_AEROSOL_SCALE_HT: 2.0
-    # flaash_param_AER_BAND_RATIO: 0.5
-    # flaash_param_AER_BAND_WAVL: 660
-    # flaash_param_AER_REFERENCE_VALUE: 0.1
-    # flaash_param_AER_REFERENCE_PIXEL: [0, 0]
-    # flaash_param_AER_BANDLOW_WAVL: 425
-    # flaash_param_AER_BANDLOW_MAXREFL: 0.2
-    # flaash_param_AER_BANDHIGH_WAVL: 660
-    # flaash_param_AER_BANDHIGH_MAXREFL: 0.2
-    # flaash_param_INPUT_RASTER: {url: /path/to/input, factory: URLRaster}
-    # flaash_param_OUTPUT_RASTER_URI: /path/to/output.dat
-    # flaash_param_CLOUD_RASTER_URI: /path/to/cloud_mask.tif
-    # flaash_param_WATER_RASTER_URI: /path/to/water_mask.tif
+# The same plugin runs again under a different, unique step name.
 
-  py6s:
-    py6s_atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter
-    py6s_aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric
-    py6s_aot550: 0.2 # Used when visibility is not set
-    # py6s_visibility: 40.0
-    py6s_water_vapor: 2.5 # g/cm^2
-    py6s_ozone: 0.3 # cm-atm
-    # py6s_executable: /usr/local/bin/sixsV1.1
-    py6s_output_scale_factor: 10000.0 # Reflectance scale factor applied before writing
-    py6s_output_dtype: int16 # Output dtype for Py6S rasters
-    py6s_use_imd_radiance_calibration: true
-    py6s_use_worldview_gain_offset_adjustment: true
-    py6s_auto_atmos_source: nasa_power # none | nasa_power
-    py6s_auto_atmos_grid_size: 3 # Number of sample points per bbox side
-    py6s_auto_atmos_search_days: 1 # Search +/- this many days for matching atmosphere data
-    py6s_auto_atmos_timeout_s: 30.0 # HTTP timeout in seconds
+orthorectify_pan:
+  plugin: orthorectification
+  core:run: true # true | false; default: false. Enable this step.
+  core:requires: var:pan_companions # path list; default: []. External PAN RPC sidecars.
+  param:input_image_path: var:pan # path; required.
+  param:dem_image_path: const:dem_path # path; required. Or var:dem from fetch_dem.
+  var:pan_ortho: expr:const.temp_dir & '/orthorectification/' & var.basename & '_pan_ortho.tif'
+  param:output_image_path: var:pan_ortho # path; required.
+  # All orthorectification options listed above also apply here.
 
-orthorectification:
-  # orthorectification_rpc_refinement_geojson: /path/to/rpc_refinement_gcps.geojson # GCPs GeoJSON used to refine the RPC model before orthorectification in the standard orthority format: https://orthority.readthedocs.io/en/stable/file_formats/oty_gcps.html
+# Pansharpen corrected multispectral data with orthorectified PAN data.
+pansharpen:
+  plugin: pansharpen
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_low_resolution_path: var:ortho # path; required.
+  param:input_high_resolution_path: var:pan_ortho # path; required.
+  var:suffix: expr:var.suffix & '_pansharpen'
+  var:pansharpened: expr:const.temp_dir & '/pansharpen/' & var.basename & var.suffix & '.tif'
+  param:output_image_path: var:pansharpened # path; required.
+  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+  # core:calculate_overviews: false # true | false; default: false.
 
+# OmniCloudMask inference and application. Band indices here are one-based.
 cloud_mask:
-  cloud_mask_method: omnicloudmask # omnicloudmask
-  cloud_buffer_pixels: 10 # Buffer cloud mask outward by this many pixels
-  cloud_mask_inference_resolution_m: 10.0 # Resolution used for OmniCloudMask inference
-  # cloud_mask_omnicloud_kwargs_json:
-  #   inference_device: cuda
-  #   mosaic_device: cpu
-  #   batch_size: 1
-  #   patch_size: 768
-  #   patch_overlap: 192
+  plugin: cloud_mask
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_image_path: var:pansharpened # path; required.
+  var:suffix: expr:var.suffix & '_cloudmasked'
+  var:cloudmasked: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  param:output_raster_path: var:cloudmasked # path; required. Or a path under const.temp_dir when only an intermediate.
+  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_mask.tif'
+  param:output_mask_path: var:cloudmask # path; required. Binary mask; may use const:temp_dir if not a deliverable.
+  param:red_band_index: const:red_band_index # one-based integer; required. WorldView red.
+  param:green_band_index: const:green_band_index # one-based integer; required. WorldView green.
+  param:nir_band_index: const:nir_band_index # one-based integer; required. WorldView NIR1.
+  # param:cloud_classes: [1, 2, 3] # integer list; default: [1,2,3]. Classes treated as clouds/shadows.
+  # param:buffer_pixels: 0 # integer >= 0; default: 0. Buffer cloud mask outward; the previous example used 10.
+  # param:inference_resolution_m: 10.0 # positive meters | null; default: 10.0. null keeps input grid for inference.
+  # param:cloud_mask_value: 1 # integer; default: 1. Binary value to mask when applying the cloud mask.
+  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: source nodata).
+  # param:allow_mask_reprojection: true # true | false; default: true. Reproject a mask to the image grid if needed.
+  # param:omnicloud_kwargs: # object | null; default: null. Forward additional predict_from_array options.
+  #   inference_device: null # cpu | cuda | mps | null; default: null -> automatic device selection. Example: cuda.
+  #   mosaic_device: cpu # cpu | cuda | mps | null; default: cpu in this plugin (upstream: inference device).
+  #   batch_size: 1 # positive integer; default: 1.
+  #   patch_size: 1000 # positive integer; default: 1000. Previous tuning example: 768.
+  #   patch_overlap: 300 # nonnegative integer; default: 300. Previous tuning example: 192.
+  #   inference_dtype: float32 # float32 | float16 | bfloat16; default: float32.
+  #   export_confidence: false # true | false; default: false. Confidence cubes are converted to class labels before binary masking.
+  #   softmax_output: true # true | false; default: true. Applies when export_confidence is enabled.
+  #   no_data_value: 0 # number; default: 0. Inference-array nodata.
+  #   apply_no_data_mask: true # true | false; default: true.
+  #   custom_models: null # torch model/list | null; default: null. Live models are Python-only.
+  #   pred_classes: 4 # positive integer; default: 4. Class count for custom models.
+  #   destination_model_dir: null # path | null; default: null -> OmniCloudMask cache directory.
+  #   model_download_source: hugging_face # hugging_face | google_drive; default: hugging_face.
+  #   compile_models: false # true | false; default: false.
+  #   compile_mode: default # default | reduce-overhead | max-autotune | max-autotune-no-cudagraphs; default: default.
+  #   model_version: null # model version | null; default: null -> latest available. Examples: 1.0, 2.0, 3.0, 4.0.
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+  core:calculate_overviews: true # true | false; default: false.
 
+# Spatially match to an external image, LiDAR intensity raster or other reference dataset.
+# Band indices for registration are zero-based.
 alignment:
-  alignment_fixed_image: /path/to/fixed/reference.tif # Required when run_alignment step. This can be an image, LiDAR intensity raster, or another dataset
-  alignment_band_index: 0 # 0-based band index used for registration metric
-  # alignment_moving_band_index: 0 # Optional override for moving-image registration band
-  # alignment_fixed_band_index: 0 # Optional override for fixed-image registration band
-  # alignment_moving_nodata: -9999 # Optional override nodata for moving image
-  # alignment_fixed_nodata: -9999 # Optional override nodata for fixed image
-  # alignment_output_nodata: -9999 # Optional override nodata for output image
-  alignment_min_valid_fraction: 0.01 # Required valid overlap fraction in registration ROI
-  alignment_use_edge_proxies: true
-  alignment_split_factor: 0 # 0 disables chunking, >0 splits solve/apply domains into 2^k chunks
-  alignment_clip_fixed_to_moving: true
-  alignment_output_on_moving_grid: false
-  alignment_trim_edge_invalid: true
-  alignment_edge_trim_depth: 8 # Number of edge pixels to trim
-  alignment_edge_trim_detection_band_index: 0 # 0-based band used to detect edge artifacts
-  alignment_edge_trim_invalid_below: -3000 # Values <= this are treated as invalid during edge trimming
-  # alignment_edge_trim_invalid_above: 65535 # Values >= this are treated as invalid during edge trimming
-  alignment_enforce_mutual_valid_mask: true
-  # alignment_solve_resolution: 2.0 # Optional target pixel size for registration solve
+  plugin: alignment
+  core:run: true # true | false; default: false. Enable this step.
+  param:moving_image_path: var:cloudmasked # path; required. Cached image can satisfy this dependency directly.
+  param:fixed_image_path: const:reference_path # path; required when alignment runs.
+  var:suffix: expr:var.suffix & '_aligned'
+  var:aligned: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  param:output_image_path: var:aligned # path; required.
+  # param:band_index: 0 # zero-based integer; default: 0. Registration metric band when per-image overrides are null.
+  param:moving_band_index: expr:const.nir_band_index - 1 # zero-based integer | null; default: null -> band_index.
+  param:fixed_band_index: 0 # zero-based integer | null; default: null -> band_index.
+  # param:moving_nodata: null # number | null; default: null -> raster metadata.
+  # param:fixed_nodata: null # number | null; default: null -> raster metadata.
+  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
+  # param:min_valid_fraction: 0.01 # (0,1]; default: 0.01. Required valid overlap fraction in registration ROI.
+  # param:use_edge_proxies: true # true | false; default: true. Use edge imagery for registration.
+  # param:split_factor: 2 # integer >= 0; default: 2. 0 disables chunking; k > 0 splits solve/apply domains into 2^k chunks.
+  param:clip_fixed_to_moving: true # true | false; default: false. Clip the fixed domain to the moving footprint.
+  # param:output_on_moving_grid: true # true | false; default: true.
+  # param:trim_edge_invalid: false # true | false; default: false. Trim alignment artifacts along irregular exterior boundaries.
+  # param:edge_trim_depth: 8 # positive pixels; default: 8.
+  # param:edge_trim_detection_band_index: 0 # zero-based integer; default: 0. Band used to detect edge artifacts.
+  # param:edge_trim_invalid_below: null # number | null; default: null. Values <= threshold are invalid; example: -3000.
+  # param:edge_trim_invalid_above: null # number | null; default: null. Values >= threshold are invalid; example: 65535.
+  # param:enforce_mutual_valid_mask: false # true | false; default: false. Require pixels valid in both registration images.
+  # param:solve_resolution: null # positive CRS units | null; default: null. Optional solve pixel size; example: 2.0.
+  param:temp_dir: const:temp_dir # path | null; default: null -> system temp. Explicitly use the workflow temp directory.
+  # param:delete_temp_dir: false # true | false; default: shared.delete_temp_dir (Python: true).
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+  core:calculate_overviews: true # true | false; default: false.
 
+
+# SpectralMatch functions run in the order shown: matching -> footprints -> Markov -> mask -> merge.
+# The final merge is last so the completed mosaic also determines the final metadata snapshot.
+# Alternative algorithms and optional utilities are fully commented but retain their parameter catalogs.
+# Uncomment an alternative block and replace the corresponding active stage; update its explicit input links.
+# Multi-raster destinations are explicit lists for core reuse, validation, cleanup and HPC transfers.
+# Native folder/glob/template shorthand remains available to direct Python calls.
+# Core reuses explicit files; functions manage directory contents with resume_from_outputs.
+setup_spectralmatch:
+  core:run: true # true | false; default: false. Collect the current images once.
+  core:scope: aggregate # scene | aggregate; default: scene.
+  # Automatically inherited from shared.param: when accepted: custom_nodata_value,
+  # output_dtype, window_scales, concurrent_processing_backend, window_size,
+  # image_threads, io_threads, tile_threads, cache, dask_scheduler, calculation_dtype,
+  # save_as_cog, debug_logs and resume_from_outputs. Commented shared settings use function defaults.
+  # epsg is offered too, but SpectralMatch uses the input raster/vector CRS instead.
+  # core: controls stay with VHR; core:calculate_overviews uses shared.param:window_scales.
+  # Only state needed by later steps belongs in const:; ordinary settings remain param: values.
+  const:spectralmatch.images: collect:aligned # Current VHR alignment outputs.
+  const:spectralmatch.basenames: collect:basename # Stable names for explicit output lists.
+  const:spectralmatch.suffix: "" # Updated only by enabled image steps.
+  const:spectralmatch.polygon_layer: seamline_metadata # Shared by footprint generation and seamline selection.
+  const:spectralmatch.image_field_name: image_path # Shared by footprint generation, seamlines and masking.
+
+# Jointly register overlapping imagery before matching.
+joint_coregistration:
+  plugin: joint_coregistration
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
+  const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_coreg'
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/joint_coregistration/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  param:output_images: const:spectralmatch.images # path list | template/folder; required. Folder (writes '$_Coregistered.tif'), '$' basename template, or list[str] matching input order and length; output paths must be unique and differ from inputs.
+  # param:tie_feature_method: "orb" # orb; default: "orb". 'orb', currently the only supported tie-point detector.
+  # param:tie_grid_spacing: 500.0 # number; default: 500.0. Positive CRS-unit distance between search-window centers in each pair's overlap; default 500.0; independent of local_model and local_grid_spacing.
+  # param:tie_search_radius: "128px" # string; default: "128px". Window half-width; positive number followed by px or crs
+  # param:tie_orb_max_features: 100 # number; default: 100. Per image per search window
+  # param:tie_max_matches_per_window: 1 # number; default: 1. Per image pair; null keeps all surviving matches
+  # param:tie_maximum_displacement: null # number | null; default: null. Maximum displacement in CRS units; null disables the limit
+  # param:tie_ransac_reprojection_threshold: null # number | null; default: null. CRS units; null uses three pixels at the coarser resolution
+  # param:tie_robust_loss: "huber" # none | huber | soft_l1 | cauchy; default: "huber".
+  # param:tie_robust_loss_scale: null # number | null; default: null. CRS units; null uses the median pair RANSAC threshold
+  # param:tie_save_path: null # string | null; default: null. Selected ties in original zero-based pixel coordinates Example: /path/to/tie_points.json.
+  # param:tie_save_crs_path: null # string | null; default: null. Paired points in the input CRS; GPKG or GeoJSON Example: /path/to/tie_points.gpkg.
+  # param:tie_load_path: null # path | null; default: null. Saved tie pairs; use an existing file for workflow/HPC input checks.
+  # param:global_model: "translation" # none | translation | similarity | affine; default: "translation".
+  # param:global_image_movement_penalty_weights: null # object | null; default: null. Ordered basename-glob mapping to positive weights; first match wins; larger weights resist movement
+  # param:global_tie_alignment_strength: 1.0 # number; default: 1.0. Number in [0, 1] for all images or JSON object string such as '{"base": 0, "*": 1}'; first wcmatch.glob basename match wins; unmatched names use 1; scales each image's solved global correction.
+  # param:local_model: "piecewise_affine" # none | bilinear | piecewise_affine; default: "piecewise_affine".
+  # param:local_image_movement_penalty_weights: null # object | null; default: null. Ordered basename-glob mapping to positive weights; first match wins; larger weights resist deformation
+  # param:local_tie_alignment_strength: 1.0 # number; default: 1.0. Number in [0, 1] for all images or JSON object string such as '{"base": 0, "*": 1}'; first wcmatch.glob basename match wins; unmatched names use 1; scales each image's solved local displacement.
+  # param:local_grid_spacing: 500.0 # number; default: 500.0. Positive target local deformation mesh spacing in CRS units; default 500.0; independent of tie-point search spacing.
+  # param:local_smoothness_weight: 1.0 # number; default: 1.0. Non-negative number penalizing differences between neighboring node displacements; default 1.0.
+  # param:local_bending_weight: 1.0 # number; default: 1.0. Non-negative number penalizing displacement curvature; default 1.0.
+  # param:local_anchor_falloff_distance: 500.0 # number; default: 500.0. Positive CRS-unit distance controlling tie-point influence on mesh anchoring; default 500.0.
+  # param:resampling_method: "bilinear" # nearest | bilinear | cubic | lanczos; default: "bilinear".
+  # param:tap: false # true | false; default: false.
+  # param:resolution: null # highest | average | lowest | positive CRS pixel size | null; default: null. Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units
+  # param:output_dtype: null # raster dtype | null; default: null. GDAL dtype name such as 'uint16' or 'float32'; None preserves each input dtype. Inherits shared.param:output_dtype when set.
+  # param:custom_nodata_value: null # number | null; default: null. Numeric output NoData value; None preserves the detected input value. Inherits shared.param:custom_nodata_value when set.
+  # param:window_size: null # positive integer | null; default: null. Positive int output tile size in pixels or None for native block size; COG output requires a multiple of 16. Inherits shared.param:window_size when set.
+  # param:save_as_cog: false # true | false; default: false. bool, default False; write Cloud-Optimized GeoTIFF outputs. Inherits shared.param:save_as_cog when set.
+  # param:build_overviews: false # true | false; default: false. Leave unset; VHR core calculates overviews.
+  # param:window_scales: [2, 4, 8, 16, 32] # list; default: [2, 4, 8, 16, 32]. tuple[int, ...] of overview factors, default (2, 4, 8, 16, 32); None or () disables overview creation. Inherits shared.param:window_scales when set.
+  # param:cache: null # positive GB | null; default: null. Positive number of gigabytes for the GDAL cache; None retains its current setting. Inherits shared.param:cache when set.
+  # param:image_threads: null # cpu | positive integer | null; default: null. Positive int worker count, 'cpu' for all cores, or None for serial pair matching and output processing. Inherits shared.param:image_threads when set.
+  # param:io_threads: null # cpu | positive integer | null; default: null. Positive int GDAL I/O worker count, 'cpu' for all cores, or None for its default. Inherits shared.param:io_threads when set.
+  # param:tile_threads: null # cpu | positive integer | null; default: null. Positive int warp/tile worker count, 'cpu' for all cores, or None for serial processing. Inherits shared.param:tile_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". 'process_pool' (default) for local execution or 'dask' for an existing cluster. Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. ('file', scheduler_json_path), ('address', 'tcp://host:port'), or None; required with the Dask backend. Inherits shared.param:dask_scheduler when set.
+  # param:debug_logs: false # true | false; default: false. bool, default False; print processing details. Inherits shared.param:debug_logs when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". 'no' (default) overwrites, 'yes' reuses existing outputs, or 'validate' reuses outputs that pass validation. Inherits shared.param:resume_from_outputs when set.
+
+# Build footprints after radiometric matching so image identifiers match Markov inputs exactly.
 seamline_metadata:
-  seamline_metadata_layer: footprints
-  seamline_metadata_image_field_name: image
-  seamline_metadata_footprint_source: package_bounds # package_bounds | calculate_bounds. package_bounds uses the IMD scene corner coordinates; calculate_bounds polygonizes the processed raster valid-data mask
-  seamline_metadata_calculate_bounds_eight_connected: true # Use 8-connectedness when footprint_source is calculate_bounds
+  plugin: seamline_metadata
+  core:run: true # true | false; default: false. Enable this step.
+  param:image_paths: const:spectralmatch.images # path list; required. Ordered across imported records.
+  param:metadata_records: collect:footprint_metadata # JSON object list; required. Same length as image_paths.
+  const:footprints: expr:const.temp_dir & '/spectralmatch/seamline_metadata.gpkg'
+  param:output_path: const:footprints # path; required. Temporary input to seamlines; use const.output_dir to keep it as a deliverable.
+  param:layer: const:spectralmatch.polygon_layer # layer name; default: seamline_metadata. Previous example: footprints.
+  param:image_field_name: const:spectralmatch.image_field_name # field name; default: image_path. Use the same field in SpectralMatch seamline options.
+  # param:footprint_source: calculate_bounds # calculate_bounds | metadata; default: calculate_bounds. metadata uses mapped IMD corners; calculate_bounds polygonizes valid raster data.
+  # param:calculate_bounds_eight_connected: true # true | false; default: true. 8-connected versus 4-connected polygonization.
+  # param:epsg: 6635 # EPSG integer; default: shared.epsg (Python: 4326).
+  # param:scene_total: null # integer | null; default: null -> input count for progress logs.
+  param:reuse: true # true | false; default: false. Native record-level reuse for the footprint table.
+  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+  # param:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Function workers; core scene scheduling is separate.
+  # param:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
+  # param:dask_scheduler_file: null # path | null; default: null.
+  # param:dask_scheduler_address: null # address | null; default: null.
 
-spectralmatch:
-  spectralmatch_method: spectralmatch # spectralmatch
+# Global radiometric regression between overlapping images.
+global_regression:
+  plugin: global_regression
+  core:run: true # true | false; default: false. Enable this step.
+  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
+  const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_global'
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/global_regression/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
+  # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
+  # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
+  # param:vector_mask: null # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/global_mask.gpkg, image].
+  # param:debug_logs: false # true | false; default: false. If True, prints debug info and progress. Inherits shared.param:debug_logs when set.
+  # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
+  # param:cache: null # positive GB | null; default: null. Controls GDAL cache size in GB. Inherits shared.param:cache when set.
+  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
+  # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
+  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
+  # param:window_size: null # positive integer | null; default: null. Output image tile size. Inherits shared.param:window_size when set.
+  # param:save_as_cog: false # true | false; default: false. If True, saves output as a Cloud-Optimized GeoTIFF using proper band and block order. Inherits shared.param:save_as_cog when set.
+  # param:estimate_stats: true # true | false; default: true.
+  # param:specify_model_images: null # string | null; default: null. Example: [include, [image_a, image_b]].
+  # param:custom_mean_factor: 1.0 # number; default: 1.0. Weight for mean constraints in regression.
+  # param:custom_std_factor: 1.0 # number; default: 1.0. Weight for standard deviation constraints in regression.
+  # param:save_adjustments: null # string | null; default: null. Example: /path/to/adjustments.json.
+  # param:load_adjustments: null # path | null; default: null. Saved adjustments; use an existing file for workflow/HPC input checks.
+  # param:pif_method: "flood_from_match_points" # entire | flood_from_match_points; default: "flood_from_match_points". flood_from_match_points | entire
+  # param:pif_red_band_index: null # number | null; default: null. Optional red band index for vegetation filtering
+  # param:pif_nir_band_index: null # number | null; default: null. Optional NIR band index for vegetation filtering
+  # param:pif_vegetation_threshold: 0.2 # number; default: 0.2. Vegetation threshold used with NDVI filtering.
+  # param:pif_inz_threshold: 0.25 # number; default: 0.25. Integrated normalized Z-score threshold used for flood_from_match_points.
+  # param:pif_region_radius: 5 # number; default: 5.
+  # param:pif_max_samples: 10000 # number; default: 10000. null disables the cap
+  # param:pif_min_samples: 10 # number; default: 10. Minimum number of PIF samples, default 10.
+  # param:pif_feature_method: "orb" # orb; default: "orb".
+  # param:pif_load_ties: null # path | null; default: null. Saved PIF seed ties; use an existing file for workflow/HPC input checks.
+  # param:pif_save_inz: null # string | null; default: null. Example: /path/to/inz_outputs.
+  # param:build_overviews: false # true | false; default: false. Leave unset; VHR core calculates overviews.
+  # param:window_scales: [2, 4, 8, 16, 32] # list; default: [2, 4, 8, 16, 32]. Overview decimation factors, default (2, 4, 8, 16, 32); None or an empty tuple disables overview creation. Inherits shared.param:window_scales when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Inherits shared.param:resume_from_outputs when set.
+  # Compound file arguments need an explicit dependency:
+  # const:regression_mask: /path/to/global_mask.gpkg
+  # core:requires: const:regression_mask
+  # param:vector_mask: [include, const:regression_mask, image]
+  # pif_save_inz is a backend-managed filename/template; pair names are generated by SpectralMatch.
 
-  # Optionally, run named SpectralMatch groups. Keys are output file names saved under the resolved output folder. Values have two options: "auto:" patterns use wcmatch against finished scene output filenames; "file:" values are literal tif paths.
-  # group_by_basename: {"name.tif": "auto:**/*.tif"}
-  # group_by_basename: {"name.tif": ["auto:*893242343*", {"nested.tif": ["file:/path/to/reference.tif", "auto:*222222222*"]}, "auto:*123456789*"]}
+# Local radiometric adjustment; block counts and method control spatial correction.
+local_block_adjustment:
+  plugin: local_block_adjustment
+  core:run: true # true | false; default: false. Enable this step.
+  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
+  const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_local'
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/local_block_adjustment/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
+  # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
+  # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
+  # param:vector_mask: null # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/local_mask.gpkg, image].
+  # param:debug_logs: false # true | false; default: false. If True, prints debug info and progress. Inherits shared.param:debug_logs when set.
+  # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
+  # param:cache: null # positive GB | null; default: null. Controls GDAL cache size in GB. Inherits shared.param:cache when set.
+  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
+  # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
+  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
+  # param:window_size: null # positive integer | null; default: null. Output image tile size. Inherits shared.param:window_size when set.
+  # param:save_as_cog: false # true | false; default: false. If True, saves output as a Cloud-Optimized GeoTIFF using proper band and block order. Inherits shared.param:save_as_cog when set.
+  # param:number_of_blocks: 100 # positive integer | [rows, columns] | coefficient_of_variation; default: 100. Integer, [rows, columns], or coefficient_of_variation
+  # param:alpha: 1.0 # number; default: 1.0. Blending factor between reference and local means.
+  # param:correction_method: "offset" # gamma | linear | offset; default: "offset".
+  # param:save_block_maps: null # list | null; default: null. Example: [/path/to/reference_block_map.tif, /path/to/local_block_maps/{}.tif].
+  # param:load_block_maps: null # list | null; default: null. Either entry may be null Example: [/path/to/reference_block_map.tif, [/path/to/local_block_map.tif]].
+  # param:override_bounds_canvas_coords: null # list | null; default: null. Example: [0, 0, 1000, 1000].
+  # param:build_overviews: false # true | false; default: false. Leave unset; VHR core calculates overviews.
+  # param:window_scales: [2, 4, 8, 16, 32] # list; default: [2, 4, 8, 16, 32]. Overview decimation factors, default (2, 4, 8, 16, 32); None or an empty tuple disables overview creation. Inherits shared.param:window_scales when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Inherits shared.param:resume_from_outputs when set.
+  # save_block_maps uses [reference_tif, local_tif_template]; $ is expanded by SpectralMatch.
+  # load_block_maps uses [reference_tif_or_null, [local_tifs]_or_null].
+  # Add existing load files to core:requires for HPC; diagnostic output templates are backend-managed.
 
-  # Pass SpectralMatch arguments (see https://spectralmatch.github.io/spectralmatch/api/pipeline/) through using the `match_` prefix, which will be removed before passing to Spectralmatch
-  # These are already passed in by vhrharmonize to spectralmatch automatically, to override them, set them
-  # match_shared_input_images: ["/path/to/scene_output_1.tif", "/path/to/scene_output_2.tif"] # Resolved from the previous steps output
-  # match_shared_output_image_path: /path/to/image.tif # Resolved from save_spectralmatch
-  # match_shared_temp_dir: ./temp/spectralmatch # Resolved from temp_dir
-  # match_delete_temp_dir: true # Defaults to delete_temp_dir
-  # match_shared_debug_logs: false # Resolved from log_to_console
-  # match_shared_output_dtype: int16 # Resolved from dtype
-  # match_shared_window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # Resolved from overview_scales; consecutive powers of 2 for tile pyramids
-  # match_shared_concurrent_processing_backend:  # Resolved from concurrent_processing_backend
-  # match_shared_dask_scheduler: null # Resolved from dask_scheduler_file/address, e.g. ["file", "/tmp/spectralmatch-dask-1.json"]
-  # calculate_overviews_spectralmatch enables match_<step>_build_overviews for the last eligible match_steps entry: joint_coregistration, global_regression, local_block_adjustment, or merge (match_merge_rasters_build_overviews). Any explicit true match_*_build_overviews conflicts with this option.
+# Optional footprint cleanup. Distances require a suitable projected CRS and image-specific tuning.
+postprocess_footprints:
+  plugin: postprocess_footprints
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_polygons: const:footprints # path; required. Current footprints.
+  param:input_layer: const:spectralmatch.polygon_layer # string; default: footprints. Layer in current footprints.
+  const:footprints: expr:const.temp_dir & '/spectralmatch/postprocess_footprints.gpkg'
+  const:spectralmatch.polygon_layer: footprints
+  param:output_polygons: const:footprints # string; required. Output GeoPackage path for processed polygons and their original attributes; must differ from input_polygons.
+  param:output_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Output GeoPackage layer for processed footprints, default "footprints".
+  # param:hole_edge_distance: 800 # number; default: 800. Maximum hole-to-edge distance in projected CRS units; 0 disables edge cuts
+  # param:hole_to_hole_distance: 800 # number; default: 800. Maximum distance between original holes in one component; 0 disables hole-pair cuts
+  # param:hole_relative_edge_distance: null # number | null; default: null. Optional edge distance limit relative to sqrt(hole_area / pi)
+  # param:hole_cut_width: "maximum_inscribed_circle" # hole_size | maximum_inscribed_circle; default: "maximum_inscribed_circle". Positive integer | hole_size | maximum_inscribed_circle; pairs use the smaller width
+  # param:hole_cut_method: "corridor" # corridor | buffer; default: "corridor".
+  # param:simplify_smoothing_radius: 240 # number; default: 240. Inward smoothing radius in projected CRS units; 0 disables smoothing
+  # param:simplify_tolerance: 120 # number; default: 120. Maximum inward simplification deviation in projected CRS units; 0 disables simplification
+  # param:simplify_area_weight: 0.5 # number; default: 0.5. Weight in [0, 1] balancing normalized area loss against perimeter reduction in the greedy inward shortcut simplifier; larger values favor retaining area.
+  # param:filter_area_size: null # number | null; default: null. Minimum component area in squared CRS units
+  # param:filter_area_rank: 1 # number; default: 1. Largest N components; negative N keeps smallest abs(N); 0 or null keeps all
+  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-feature geometry operations; "cpu" uses all CPU cores, an integer sets the process count, and None disables local parallelism. Inherits shared.param:image_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address); required for Dask execution, which requires image_threads=None. Inherits shared.param:dask_scheduler when set.
+  # param:debug_logs: false # true | false; default: false. Enables debug print statements if True; default is False. Inherits shared.param:debug_logs when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Recompute outputs with "no", reuse existing outputs with "yes", or validate existing outputs before reusing them with "validate"; incomplete streaming outputs are recomputed. Inherits shared.param:resume_from_outputs when set.
 
-  # Other optional SpectralMatch pipeline kwargs, defaults are often sufficient:
-  # Each step exposes its own build_overviews flag below; all use shared_window_scales.
-  
-  # Shared runtime/output options
-  # match_shared_resume_from_steps: "no" # "no" | "yes" | "validate"; SpectralMatch owns all output reuse/validation. VHRHarmonize always calls it.
-  # match_shared_cache: auto
-  # match_shared_custom_nodata_value: -9999
-  # match_shared_window_size: 1024 # Processing window size and tiled merge tile width/height in pixels
-  # match_shared_image_threads: auto # Workers across images and merge output tiles
-  # match_shared_io_threads: auto
-  # match_shared_tile_threads: auto
-  # match_shared_calculation_dtype: float32
-  # match_shared_save_as_cog: false
+# # Voronoi seamlines. Enable one seamline algorithm for masking.
+# voronoi_center_seamline:
+#   plugin: voronoi_center_seamline
+#   core:run: true # true | false; default: false. Enable this step.
+#   const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/voronoi_center_seamline.gpkg'
+#   param:input_polygons: const:footprints # path; required. Polygons from the selected footprint step.
+#   param:output_mask: const:spectralmatch.mask # string; required. Output path for the final seamline polygon vector file.
+#   param:input_images: const:spectralmatch.images # list | null; default: null. Optional raster folder, glob or paths for substring footprint matching; None infers names from the polygon field.
+#   # param:aoi_path: null # string | null; default: null. Example: /path/to/aoi.gpkg.
+#   param:input_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Inherits preceding footprint layer when using its polygons
+#   # param:output_layer: "seamlines" # string; default: "seamlines". Output GeoPackage layer name for Voronoi seamlines; default "seamlines".
+#   param:image_field_name: const:spectralmatch.image_field_name # string; default: "image". Explicit setup value.
+#   # param:min_point_spacing: 10 # number; default: 10.
+#   # param:min_cut_length: 0 # number; default: 0.
+#   # param:debug_logs: false # true | false; default: false. Enables debug print statements if True; default is False. Inherits shared.param:debug_logs when set.
+#   # param:debug_vectors_path: null # string | null; default: null. Example: /path/to/debug_vectors.gpkg.
+#   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Recompute outputs with "no", reuse existing outputs with "yes", or validate existing outputs before reusing them with "validate"; default is "no". Inherits shared.param:resume_from_outputs when set.
 
-  # match_delete_previous_step: false # Delete inactive intermediate step outputs
+# # Weighted seamlines. Ranking requires attributes in the input polygons.
+# # Rank expressions use {field} placeholders, arithmetic, comparisons, and/or/not,
+# # parentheses and abs/min/max/round/sqrt/log/log10/exp/sin/cos/tan. Example: -{cloud_cover} - {solar_zenith}.
+# weighted_seamline:
+#   plugin: weighted_seamline
+#   core:run: true # true | false; default: false. Enable this step.
+#   const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/weighted_seamline.gpkg'
+#   param:input_polygons: const:footprints # path; required. Footprints and attributes from the selected footprint step.
+#   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path for the ranked seamline polygons.
+#   param:input_images: const:spectralmatch.images # list | null; default: null. Optional raster folder, glob or paths for substring footprint matching; None infers names from the polygon field.
+#   param:rank_function: "-{cloud_cover} - {solar_zenith}" # string; required. Ranking expression, required when steps includes weighted_seamline. Example: "-{cloud_cover} - {solar_zenith}".
+#   param:image_field_name: const:spectralmatch.image_field_name # string; default: "image". Explicit setup value.
+#   param:input_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Defaults to "footprints" for explicit polygons; None selects their first layer; either inherits the preceding footprint step's layer when using its polygons.
+#   # param:output_layer: "seamlines" # string; default: "seamlines".
+#   # param:rank_descending: true # true | false; default: true.
+#   # param:debug_logs: false # true | false; default: false. If True, prints ranking details. Inherits shared.param:debug_logs when set.
+#   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Recompute outputs with "no", reuse existing outputs with "yes", or validate existing outputs before reusing them with "validate"; default is "no". Inherits shared.param:resume_from_outputs when set.
 
-  # Pipeline order.
-  # Allowed steps: joint_coregistration, align, global_regression, local_block_adjustment, create_footprints, postprocess_footprints, weighted_seamline, mask, merge. Only one seamline step may be included: voronoi_center_seamline or weighted_seamline.
-  # Below matches SpectralMatch's default pipeline; a separate align step is unnecessary after joint_coregistration.
-  # match_steps: [joint_coregistration, global_regression, local_block_adjustment, voronoi_center_seamline, mask, merge] # For mosaic
-  # match_steps: [joint_coregistration, global_regression, local_block_adjustment, align] # For a time series
+# Markov mesh seamlines. Raster costs and image quality determine the selected polygons.
+markov_triangles:
+  plugin: markov_triangles
+  core:run: true # true | false; default: false. Enable this step.
+  const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/markov_triangles.gpkg'
+  param:input_images: const:spectralmatch.images # path list | glob/folder; required. Raster folder, glob or path list; basenames without extensions must be unique.
+  param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path, distinct from input vectors; stores image identifiers, image_path and raw quality_score.
+  param:input_polygons: const:footprints # string | null; default: null. Optional valid-data footprints; None polygonizes band-1 GDAL masks, while supplied polygons must match every image and are never regenerated.
+  param:input_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Input footprint layer name; None selects the first layer.
+  # param:output_layer: "seamlines" # string; default: "seamlines". Output polygon layer name; defaults to "seamlines".
+  param:image_field_name: const:spectralmatch.image_field_name # string; default: "image". Footprint field containing each input basename without extension as a substring; matching pieces are dissolved using first-match attributes; defaults to "image". Explicit setup value.
+  # param:image_rank_function: null # string | null; default: null. Optional footprint-attribute expression using weighted() syntax, e.g.
+  # param:image_rank_descending: true # true | false; default: true. True favors larger quality scores, False favors smaller scores; defaults to True.
+  # param:image_quality_weight: 1.0 # number; default: 1.0. Nonnegative multiplier of assigned area times globally min-max-normalized quality penalty; zero removes quality preference; defaults to 1.
+  # param:edge_variables_weights_gsds_bands: [["laplacian_difference", 1.0, ["native"], [1]], ["laplacian_magnitude", 0.25, [100], [1]]] # list; default: [["laplacian_difference", 1.0, ["native"], [1]], ["laplacian_magnitude", 0.25, [100], [1]]]. Terms [name_or_path, nonnegative weight, GSD selection, band selection]; use [value] for one value or {"average" | "largest" | "smallest": [values]} for two or more; GSDs are positive integers in CRS units or "
+  # param:foreground_path: null # string | null; default: null. Optional polygon mask forbidding seams through protected interiors; infeasible coverage raises ValueError.
+  # param:foreground_layer: null # string | null; default: null. Optional layer in foreground_path; None reads the default layer.
+  # param:mesh_spacing: 10 # number; default: 10. Positive mesh-cell width in CRS units, independent of cost GSDs; footprint boundaries constrain triangles; defaults to 10.
+  # param:quadtree_max_images_per_leaf: 16 # number; default: 16. Positive label-count target for quadtree leaves; defaults to 16.
+  # param:quadtree_overlap: 0.1 # number; default: 0.1. Child-block overlap fraction in (0, 0.5); defaults to 0.1.
+  # param:quadtree_max_depth: 8 # number; default: 8. Nonnegative quadtree subdivision limit; defaults to 8.
+  # param:solver_max_iterations: 50 # number; default: 50. Positive graph-cut sweep limit per node; defaults to 50; reaching the limit warns.
+  # param:image_threads: null # cpu | positive integer | null; default: null. Local worker count, "cpu" or None for serial execution; defaults to None. Inherits shared.param:image_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". "process_pool" for local workers or "dask" for an existing cluster; defaults to "process_pool". Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Dask connection as ("file", path) or ("address", address); requires image_threads=None; defaults to None. Inherits shared.param:dask_scheduler when set.
+  # param:debug_logs: false # true | false; default: false. Print node sizes and processing details; defaults to False. Inherits shared.param:debug_logs when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". "no" recomputes, "yes" reuses existing output, "validate" checks the requested polygon layer; incomplete outputs always recompute. Inherits shared.param:resume_from_outputs when set.
+  # External raster costs in edge_variables_weights_gsds_bands also need explicit core:requires paths.
 
-  # Joint coregistration
-  # match_joint_coregistration_tie_feature_method: orb
-  # match_joint_coregistration_tie_grid_spacing: 500.0 # Search-center spacing in CRS units, independent of local_grid_spacing
-  # match_joint_coregistration_tie_search_radius: 128px # Window half-width; positive number followed by px or crs
-  # match_joint_coregistration_tie_orb_max_features: 100 # Per image per search window
-  # match_joint_coregistration_tie_max_matches_per_window: 1 # Per image pair; null keeps all surviving matches
-  # match_joint_coregistration_tie_maximum_displacement: null # Maximum displacement in CRS units; null disables the limit
-  # match_joint_coregistration_tie_ransac_reprojection_threshold: null # CRS units; null uses three pixels at the coarser resolution
-  # match_joint_coregistration_tie_robust_loss: huber # none | huber | soft_l1 | cauchy
-  # match_joint_coregistration_tie_robust_loss_scale: null # CRS units; null uses the median pair RANSAC threshold
-  # match_joint_coregistration_tie_save_path: /path/to/tie_points.json # Selected ties in original zero-based pixel coordinates
-  # match_joint_coregistration_tie_save_crs_path: /path/to/tie_points.gpkg # Paired points in the input CRS; GPKG or GeoJSON
-  # match_joint_coregistration_tie_load_path: /path/to/tie_points.json
-  # match_joint_coregistration_global_model: translation # none | translation | similarity | affine
-  # match_joint_coregistration_global_image_movement_penalty_weights: null # Ordered basename-glob mapping to positive weights; first match wins; larger weights resist movement
-  # match_joint_coregistration_global_tie_alignment_strength: 1.0 # 0..1 or a JSON object string, e.g. '{"reference*": 0, "*": 1}'
-  # match_joint_coregistration_local_model: piecewise_affine # none | bilinear | piecewise_affine
-  # match_joint_coregistration_local_image_movement_penalty_weights: null # Ordered basename-glob mapping to positive weights; first match wins; larger weights resist deformation
-  # match_joint_coregistration_local_tie_alignment_strength: 1.0 # 0..1 or a JSON object string, e.g. '{"reference*": 0, "*": 1}'
-  # match_joint_coregistration_local_grid_spacing: 500.0
-  # match_joint_coregistration_local_smoothness_weight: 1.0
-  # match_joint_coregistration_local_bending_weight: 1.0
-  # match_joint_coregistration_local_anchor_falloff_distance: 500.0
-  # match_joint_coregistration_resampling_method: bilinear # nearest | bilinear | cubic | lanczos
-  # match_joint_coregistration_tap: false
-  # match_joint_coregistration_resolution: null # Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units
-  # match_joint_coregistration_build_overviews: false
+# Clip rasters using the selected seamlines. The explicit requires link tracks the compound vector_mask file.
+mask_rasters:
+  plugin: mask_rasters
+  core:run: true # true | false; default: false. Enable this step.
+  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
+  const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_masked'
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/mask_rasters/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  core:requires: const:spectralmatch.mask
+  param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
+  param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/seamline_mask.gpkg, image].
+  # param:window_size: null # positive integer | null; default: null. Tile size for processing tiles. Inherits shared.param:window_size when set.
+  # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
+  # param:cache: null # positive GB | null; default: null. Parallelization strategy at the window level within each image. Inherits shared.param:cache when set.
+  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
+  # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
+  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
+  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
+  # param:include_touched_pixels: false # true | false; default: false.
+  # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Inherits shared.param:resume_from_outputs when set.
 
-  # Optional standalone alignment. Skip this when joint_coregistration performs the alignment/tap.
-  # match_align_rasters_resampling_method: bilinear
-  # match_align_rasters_tap: false
-  # match_align_rasters_resolution: null # Preserve native resolution; or highest | average | lowest | positive pixel size in CRS units
 
-  # Global regression
-  # match_global_regression_vector_mask: [include, /path/to/global_mask.gpkg, image]
-  # match_global_regression_estimate_stats: true
-  # match_global_regression_specify_model_images: [include, [image_a, image_b]]
-  # match_global_regression_custom_mean_factor: 1.0
-  # match_global_regression_custom_std_factor: 1.0
-  # match_global_regression_save_adjustments: /path/to/adjustments.json
-  # match_global_regression_load_adjustments: /path/to/adjustments.json
-  # match_global_regression_pif_method: flood_from_match_points # flood_from_match_points | entire
-  # match_global_regression_pif_red_band_index: null # Optional red band index for vegetation filtering
-  # match_global_regression_pif_nir_band_index: null # Optional NIR band index for vegetation filtering
-  # match_global_regression_pif_vegetation_threshold: 0.2
-  # match_global_regression_pif_inz_threshold: 0.25
-  # match_global_regression_pif_region_radius: 5
-  # match_global_regression_pif_max_samples: 10000 # null disables the cap
-  # match_global_regression_pif_min_samples: 10
-  # match_global_regression_pif_feature_method: orb
-  # match_global_regression_pif_load_ties: /path/to/tie_points.json
-  # match_global_regression_pif_save_inz: /path/to/inz_outputs
-  # match_global_regression_build_overviews: false
-  # Local block adjustment
-  # match_local_block_adjustment_vector_mask: [include, /path/to/local_mask.gpkg, image]
-  # match_local_block_adjustment_number_of_blocks: 100 # Integer, [rows, columns], or coefficient_of_variation
-  # match_local_block_adjustment_alpha: 1.0
-  # match_local_block_adjustment_correction_method: offset # gamma | linear | offset
-  # match_local_block_adjustment_save_block_maps: [/path/to/reference_block_map.tif, /path/to/local_block_maps/$.tif]
-  # match_local_block_adjustment_load_block_maps: [/path/to/reference_block_map.tif, [/path/to/local_block_map.tif]] # Either entry may be null
-  # match_local_block_adjustment_override_bounds_canvas_coords: [0, 0, 1000, 1000]
-  # match_local_block_adjustment_build_overviews: false
-
-  # Footprint creation. Include create_footprints in match_steps; current rasters remain available for masking and merging.
-  # match_create_footprints_image_field_name: image # Use the same field name in the seamline step
-  # match_create_footprints_output_layer: footprints
-  # match_create_footprints_band: 1 # One-based raster band whose validity mask defines the footprints
-  # match_create_footprints_eight_connected: true # false uses four-connected polygonization
-
-  # Footprint postprocessing. Include postprocess_footprints in match_steps; polygons and layer names flow to the seamline step.
-  # match_postprocess_footprints_input_polygons: null # Uses preceding footprint output; or /path/to/seamline_metadata.gpkg
-  # match_postprocess_footprints_input_layer: null # Inherits preceding footprint layer when using its polygons; or footprints for an explicit input
-  # match_postprocess_footprints_output_layer: footprints
-  # match_postprocess_footprints_edge_distance: 800 # Maximum hole-to-edge distance in projected CRS units; 0 disables edge cuts
-  # match_postprocess_footprints_hole_to_hole_distance: 800 # Maximum distance between original holes in one component; 0 disables hole-pair cuts
-  # match_postprocess_footprints_relative_edge_distance: null # Optional edge distance limit relative to sqrt(hole_area / pi)
-  # match_postprocess_footprints_cut_width: maximum_inscribed_circle # Positive integer | hole_size | maximum_inscribed_circle; pairs use the smaller width
-  # match_postprocess_footprints_cut_method: corridor # corridor | buffer
-  # match_postprocess_footprints_smoothing_radius: 240 # Inward smoothing radius in projected CRS units; 0 disables smoothing
-  # match_postprocess_footprints_simplify_tolerance: 120 # Maximum inward simplification deviation in projected CRS units; 0 disables simplification
-  # match_postprocess_footprints_simplify_area_weight: 0.5 # Area retention weight in [0, 1]
-  # match_postprocess_footprints_area_filter: null # Minimum component area in squared CRS units
-  # match_postprocess_footprints_area_rank: 1 # Largest N components; negative N keeps smallest abs(N); 0 or null keeps all
-
-  # Seamlines
-  # Select the seamline algorithm by including either `voronoi_center_seamline` or `weighted_seamline` in match_steps.
-  # match_voronoi_center_seamline_aoi_path: /path/to/aoi.gpkg
-  # match_voronoi_center_seamline_input_polygons: null # Uses preceding footprint output, or creates footprints from current images; or /path/to/footprints.gpkg
-  # match_voronoi_center_seamline_input_layer: null # Inherits preceding footprint layer when using its polygons
-  # match_voronoi_center_seamline_output_layer: seamlines
-  # match_voronoi_center_seamline_image_field_name: image
-  # match_voronoi_center_seamline_min_point_spacing: 10
-  # match_voronoi_center_seamline_min_cut_length: 0
-  # match_voronoi_center_seamline_debug_vectors_path: /path/to/debug_vectors.gpkg
-  # Weighted seamline inputs. Use preceding footprint output or provide an explicit path, e.g. from run_seamline_metadata above.
-  # match_weighted_seamline_input_polygons: /path/to/seamline_metadata.gpkg
-  # Rank functions support field placeholders plus Python expression operators: +, -, *, /, //, %, **, comparisons, and/or/not, parentheses, and math functions abs, min, max, round, sqrt, log, log10, exp, sin, cos, tan.
-  # match_weighted_seamline_rank_function: "-{cloud_cover} + {sun_elevation}"
-  # match_weighted_seamline_image_field_name: image
-  # match_weighted_seamline_input_layer: footprints
-  # match_weighted_seamline_output_layer: seamlines
-  # match_weighted_seamline_rank_descending: true
-
-  # Masking
-  # match_mask_rasters_vector_mask: [include, /path/to/seamline_mask.gpkg, image]
-  # match_mask_rasters_include_touched_pixels: false
-
-  # Merge
-  # match_merge_rasters_resolution: highest # highest | average | lowest | positive pixel size in CRS units
-  # match_merge_rasters_build_overviews: false # Internal overviews for a file; pyramid tiles for a folder
-
-  # For tiled output, enable output_tiles and set save_spectralmatch to a folder (e.g. output/merged_tiles). Named group keys must also be folder names, without .tif.
-  # match_merge_rasters_output_tiles: false
-  # match_merge_rasters_overlap: 0 # Tile mode only; smaller than shared_window_size
-  # match_merge_rasters_resampling_method: nearest # nearest | near | bilinear | cubic | cubicspline | lanczos
-  # match_merge_rasters_custom_tiles_csv: tiles.csv # Tile mode only; filename inside each output level
-  # match_merge_rasters_create_vrts: MergedImage.vrt # Portable mosaic VRT in each tile level
+# Merge into a mosaic. For output_tiles: true, use a directory as output_image_path.
+# This example writes one GeoTIFF with VHR overviews. For tiled output, choose a folder and configure tile settings explicitly.
+merge_rasters:
+  plugin: merge_rasters
+  core:run: true # true | false; default: false. Enable this step.
+  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  param:input_images: const:spectralmatch.images # path list | glob/folder; required. Defines input files from a glob path, folder, or list of paths.
+  param:output_image_path: expr:const.output_dir & '/mosaic.tif' # string; required. Output file, or output folder when output_tiles=True.
+  # param:output_tiles: false # true | false; default: false. Write tiles into a folder instead of one mosaic file.
+  # param:cache: null # positive GB | null; default: null. GDAL cache size in GB, or None for the GDAL default. Inherits shared.param:cache when set.
+  param:image_threads: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
+  # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
+  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
+  # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
+  # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
+  # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
+  # param:resolution: "highest" # highest | average | lowest; default: "highest". highest | average | lowest | positive pixel size in CRS units
+  # param:window_size: null # positive integer | null; default: null. In tile mode, output tile width/height in pixels (-ps), default 256. Inherits shared.param:window_size when set.
+  # param:overlap: 0 # number; default: 0. Tile mode only; smaller than window_size
+  # param:build_overviews: false # true | false; default: false. Leave unset; VHR core calculates overviews.
+  # param:window_scales: [2, 4, 8, 16, 32] # list; default: [2, 4, 8, 16, 32]. Overview factors, default (2, 4, 8, 16, 32). Inherits shared.param:window_scales when set.
+  # param:resampling_method: "nearest" # nearest | near | bilinear | cubic | cubicspline | lanczos; default: "nearest".
+  # param:custom_tiles_csv: null # string | null; default: null. Tile mode only; filename inside each output level Example: tiles.csv.
+  # param:create_vrts: "MergedImage.vrt" # string; default: "MergedImage.vrt". Filename of the full-resolution VRT in the output folder, default "MergedImage.vrt".
+  param:concurrent_processing_backend: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
+  param:dask_scheduler: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". "no" overwrites outputs (omits -resume); "yes" skips existing files (-resume); "validate" checks existing tiles with the raster validation helper, removes invalid tiles, then uses -resume. Inherits shared.param:resume_from_outputs when set.

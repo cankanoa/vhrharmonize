@@ -1,0 +1,1 @@
+::: vhrharmonize.plugins.pansharpen

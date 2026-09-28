@@ -10,13 +10,13 @@ from shapely.geometry.base import BaseGeometry
 from shapely.geometry import mapping
 
 
-from vhrharmonize.preprocess.helpers import _logged_operation
+from vhrharmonize.io.logging import _logged_operation
 
 
 @_logged_operation("overviews", inputs=("input_image_path",), outputs=("input_image_path",), allow_nested=True)
 def calculate_raster_overviews(
     input_image_path: str,
-    overview_scales: Optional[Iterable[int]],
+    window_scales: Optional[Iterable[int]],
     *,
     resampling: str = "nearest",
     log_to_console: bool = False,
@@ -27,14 +27,14 @@ def calculate_raster_overviews(
     """Build internal raster overviews.
     Args:
         input_image_path: Input raster path.
-        overview_scales: Requested overview decimation factors.
+        window_scales: Requested overview decimation factors.
         resampling: Rasterio overview resampling method name.
     Returns:
         Input raster path after overview creation.
     """
     factors = []
     seen = set()
-    for value in overview_scales or []:
+    for value in window_scales or []:
         factor = int(value)
         if factor <= 1 or factor in seen:
             continue

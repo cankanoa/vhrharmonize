@@ -17,9 +17,6 @@ class VHRHarmonizePlugin:
         self.plugin_dir = Path(__file__).resolve().parent
         self.config_manager = ConfigManager(self.plugin_dir)
         self.config_manager.ensure_user_configs()
-        settings = QgsSettings()
-        if not settings.contains("vhrharmonize/provider"):
-            settings.setValue("vhrharmonize/provider", "WorldView")
         self.action = None
         self.dialog = None
 

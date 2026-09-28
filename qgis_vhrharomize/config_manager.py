@@ -10,10 +10,10 @@ from pathlib import Path
 class ConfigManager:
     """Keep immutable defaults separate from user-edited plugin configs."""
 
-    WORLDVIEW = "example.worldview.yml"
+    WORKFLOW = "example.worldview.yml"
     HPC = "example.hpc.yml"
     SLURM = "example.slurm.sbatch"
-    FILES = (WORLDVIEW, HPC, SLURM)
+    FILES = (WORKFLOW, HPC, SLURM)
 
     def __init__(self, plugin_dir: Path):
         self.plugin_dir = Path(plugin_dir)

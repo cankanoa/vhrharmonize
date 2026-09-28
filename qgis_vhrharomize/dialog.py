@@ -201,7 +201,6 @@ class ConfigEditor(QWidget):
 class VHRHarmonizeDialog(QDialog):
     """Main VHRHarmonize interface."""
 
-    SETTINGS_PROVIDER = "vhrharmonize/provider"
     SETTINGS_USE_CONDA = "vhrharmonize/use_conda"
     SETTINGS_CONDA_ENV = "vhrharmonize/conda_env"
     DEFAULT_CONDA_ENV = "vhrharmonize"
@@ -231,7 +230,7 @@ class VHRHarmonizeDialog(QDialog):
         self.hpc_tab = self._build_hpc_tab()
         self.run_tab = self._build_run_tab()
         self.tabs.addTab(self.setup_tab, "Setup")
-        self.tabs.addTab(self.provider_tab, "Provider")
+        self.tabs.addTab(self.provider_tab, "Workflow")
         self.tabs.addTab(self.hpc_tab, "High Performance Compute")
         self.tabs.addTab(self.run_tab, "Run")
 
@@ -388,16 +387,8 @@ class VHRHarmonizeDialog(QDialog):
         page = QWidget(self)
         layout = QVBoxLayout(page)
         options = QHBoxLayout()
-        options.addWidget(QLabel("Provider:", page))
-        self.provider_combo = QComboBox(page)
-        self.provider_combo.addItem("WorldView", "worldview")
-        saved = str(self.settings.value(self.SETTINGS_PROVIDER, "WorldView"))
-        index = self.provider_combo.findText(saved)
-        self.provider_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.settings.setValue(self.SETTINGS_PROVIDER, self.provider_combo.currentText())
-        self.provider_combo.currentTextChanged.connect(self._provider_changed)
-        options.addWidget(self.provider_combo)
-        reset = _refresh_button(page, "Reset the provider config to its default")
+        options.addWidget(QLabel("Ordered workflow recipe", page))
+        reset = _refresh_button(page, "Reset the workflow recipe to its default")
         reset.clicked.connect(lambda: self.provider_editor.reset())
         options.addWidget(reset)
         options.addStretch(1)
@@ -405,7 +396,7 @@ class VHRHarmonizeDialog(QDialog):
 
         self.provider_editor = ConfigEditor(
             self.manager,
-            ConfigManager.WORLDVIEW,
+            ConfigManager.WORKFLOW,
             reset_at_right=False,
             parent=page,
         )
@@ -505,7 +496,7 @@ class VHRHarmonizeDialog(QDialog):
         layout = QGridLayout(page)
         start = QPushButton("Start", page)
         layout.setRowMinimumHeight(0, start.sizeHint().height())
-        start.setToolTip("Load the provider pipeline command into the command field")
+        start.setToolTip("Load the workflow command into the command field")
         start.clicked.connect(self._set_local_command_preset)
         layout.addWidget(start, 1, 0)
         open_configs = QPushButton("Open Configs Folder", page)
@@ -559,9 +550,6 @@ class VHRHarmonizeDialog(QDialog):
             self.terminal_status.setText(
                 f"Could not open the configs folder: {self.manager.config_dir}"
             )
-
-    def _provider_changed(self, provider: str) -> None:
-        self.settings.setValue(self.SETTINGS_PROVIDER, provider)
 
     def _reset_optional_command(self, name: str) -> None:
         self.optional_command_inputs[name].setText(self._optional_command(name))
@@ -686,10 +674,10 @@ class VHRHarmonizeDialog(QDialog):
         return shlex.join(["python", "-u", "-m", module, *args])
 
     def _local_command(self) -> str:
-        config = str(self.manager.path(ConfigManager.WORLDVIEW))
+        config = str(self.manager.path(ConfigManager.WORKFLOW))
         return self._module_command(
-            "vhrharmonize.cli.worldview",
-            ["--config-yaml", config],
+            "vhrharmonize.cli",
+            ["workflow", "--config", config],
         )
 
     def _hpc_command(self, action: str) -> str:
@@ -699,8 +687,8 @@ class VHRHarmonizeDialog(QDialog):
             else self._selected_staged_hpc_path()
         )
         return self._module_command(
-            "vhrharmonize.slurm",
-            [action, "--config", str(config_path)],
+            "vhrharmonize.cli",
+            ["hpc-" + action, "--config", str(config_path)],
         )
 
     def _set_local_command_preset(self) -> None:

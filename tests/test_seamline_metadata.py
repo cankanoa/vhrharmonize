@@ -13,11 +13,14 @@ import numpy as np
 from osgeo import gdal, osr
 from shapely.geometry import box, MultiPolygon
 
-from vhrharmonize.preprocess import seamline_metadata
+from vhrharmonize.plugins import seamline_metadata
 
 
 class SeamlineMetadataTests(unittest.TestCase):
     def setUp(self):
+        projection = patch.object(seamline_metadata, "_project_image_geometry", side_effect=lambda image, geometry, epsg: geometry)
+        projection.start()
+        self.addCleanup(projection.stop)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.output_path = str(Path(self.temp.name) / "seamline_metadata.gpkg")
@@ -25,7 +28,7 @@ class SeamlineMetadataTests(unittest.TestCase):
             layer="footprints", image_field_name="source_image",
             footprint_source="calculate_bounds",
             calculate_bounds_eight_connected=True, epsg=6635,
-            run_from_existing_check_validity=True,
+            reuse=True,
         )
 
     def state(self, image_path):
@@ -43,7 +46,10 @@ class SeamlineMetadataTests(unittest.TestCase):
 
     def write(self, states):
         return seamline_metadata.write_seamline_metadata_gpkg(
-            states, self.output_path, **self.kwargs,
+            [state.current_files[0] for state in states], self.output_path,
+            metadata_records=[{**state.scene.mul_image.standardized_metadata.to_dict(),
+                               **getattr(state.scene.mul_image.standardized_metadata, "source_metadata", {}),
+                               "scene_id": state.scene.primary_basename} for state in states], **self.kwargs,
         )
 
     def read(self):
@@ -95,7 +101,7 @@ class SeamlineMetadataTests(unittest.TestCase):
     def test_disabled_validation_replaces_output(self):
         with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
             self.write([self.state("a.tif")])
-            self.kwargs["run_from_existing_check_validity"] = False
+            self.kwargs["reuse"] = False
             self.write([self.state("b.tif")])
         self.assertEqual(list(self.read().image_basename), ["b.tif"])
 
@@ -186,12 +192,12 @@ class SeamlineMetadataTests(unittest.TestCase):
 
         states = [self.state("a.tif"), self.state("b.tif")]
         for state in states:
-            state.scene.mul_image.standardized_metadata.source_metadata = {"BAND_C": CORNERS}
-        self.kwargs.update(footprint_source="package_bounds", epsg=4326, concurrent_processing=2)
+            state.scene.mul_image.standardized_metadata.source_metadata = {"geometry": {"type": "Polygon", "coordinates": [[[CORNERS[f"{corner}Lon"], CORNERS[f"{corner}Lat"]] for corner in ("UL", "UR", "LR", "LL", "UL")]]}}
+        self.kwargs.update(footprint_source="metadata", epsg=4326, concurrent_processing=2)
         self.write(states)
         result = self.read()
         self.assertEqual(set(result.image_basename), {"a.tif", "b.tif"})
-        expected = seamline_metadata.materialize_scene_bounds({"BAND_C": CORNERS})
+        expected = seamline_metadata.materialize_geometry(states[0].scene.mul_image.standardized_metadata.source_metadata["geometry"])
         self.assertTrue(all(geometry.equals(expected) for geometry in result.geometry))
         # Reused records need neither an input raster nor valid IMD bounds.
         for state in states:
@@ -233,7 +239,6 @@ class SeamlineMetadataTests(unittest.TestCase):
         self.assertEqual(list(self.read().image_basename), ["a.tif", "c.tif", "b.tif"])
         self.assertEqual(make_client.call_args.args[0].dask_scheduler_address, "tcp://scheduler:8786")
         self.assertTrue(client.closed)
-
 
 
 if __name__ == "__main__":

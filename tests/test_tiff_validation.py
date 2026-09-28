@@ -3,7 +3,7 @@ from osgeo import gdal
 import pytest
 from tifffile import TiffFile, TiffFileError, TiffWriter, imwrite
 
-from vhrharmonize.cli import worldview
+from vhrharmonize.io import validation
 
 
 @pytest.mark.parametrize("bigtiff", [False, True])
@@ -16,7 +16,7 @@ def test_tiff_bounds_detect_unreadable_middle_block(tmp_path, bigtiff, tiled, by
         byteorder=byteorder, metadata=None,
         **({"tile": (128, 128)} if tiled else {"rowsperstrip": 32}),
     )
-    assert worldview._gdal_raster_is_valid(str(path)) == (True, None)
+    assert validation._gdal_raster_is_valid(str(path)) == (True, None)
     with TiffFile(path, mode="r+") as tif:
         page = tif.pages[0]
         offsets = list(page.dataoffsets)
@@ -31,7 +31,7 @@ def test_tiff_bounds_detect_unreadable_middle_block(tmp_path, bigtiff, tiled, by
     band = dataset = None
 
     before = path.read_bytes()
-    valid, reason = worldview._gdal_raster_is_valid(str(path))
+    valid, reason = validation._gdal_raster_is_valid(str(path))
 
     assert not valid
     assert "Truncated TIFF:" in reason
@@ -48,7 +48,7 @@ def test_tiff_bounds_detect_truncated_internal_overview(tmp_path, subifd):
     with path.open("r+b") as stream:
         stream.truncate(path.stat().st_size - 8)
 
-    valid, reason = worldview._gdal_raster_is_valid(str(path))
+    valid, reason = validation._gdal_raster_is_valid(str(path))
 
     assert not valid
     assert "Truncated TIFF:" in reason
@@ -70,7 +70,7 @@ def test_tiff_bounds_allow_sparse_blocks_and_trailing_bytes(tmp_path, bigtiff):
     with path.open("ab") as stream:
         stream.write(b"extra metadata after image data")
 
-    assert worldview._gdal_raster_is_valid(str(path)) == (True, None)
+    assert validation._gdal_raster_is_valid(str(path)) == (True, None)
 
 
 def test_tiff_metadata_inspection_failure_falls_back_to_gdal(tmp_path, make_test_raster, monkeypatch):
@@ -79,9 +79,9 @@ def test_tiff_metadata_inspection_failure_falls_back_to_gdal(tmp_path, make_test
     def unsupported(*args, **kwargs):
         raise TiffFileError("unsupported TIFF metadata")
 
-    monkeypatch.setattr(worldview, "TiffFile", unsupported)
+    monkeypatch.setattr(validation, "TiffFile", unsupported)
 
-    assert worldview._gdal_raster_is_valid(str(path)) == (True, None)
+    assert validation._gdal_raster_is_valid(str(path)) == (True, None)
 
 
 def test_non_tiff_rasters_keep_existing_validation(tmp_path, make_test_raster, monkeypatch):
@@ -93,25 +93,6 @@ def test_non_tiff_rasters_keep_existing_validation(tmp_path, make_test_raster, m
     def unexpected(*args, **kwargs):
         raise AssertionError("TIFF inspection must not run on a VRT")
 
-    monkeypatch.setattr(worldview, "TiffFile", unexpected)
+    monkeypatch.setattr(validation, "TiffFile", unexpected)
 
-    assert worldview._gdal_raster_is_valid(str(path)) == (True, None)
-
-
-def test_truncated_tiff_uses_existing_regeneration_cleanup(tmp_path, make_test_raster):
-    source = make_test_raster(tmp_path / "original.tif")
-    output = tmp_path / "intermediate.tif"
-    imwrite(output, np.ones((512, 512), dtype=np.uint16), rowsperstrip=32, metadata=None)
-    with output.open("r+b") as stream:
-        stream.truncate(output.stat().st_size - 8)
-    sidecar = tmp_path / "intermediate.tif.aux.xml"
-    sidecar.write_text("sidecar")
-    args = worldview._build_parser().parse_args([])
-    assert "Truncated TIFF:" in worldview._gdal_raster_is_valid(str(output))[1]
-
-    assert not worldview._prepare_step_outputs(
-        [str(output)], input_paths=[str(source)], args=args, step="orthorectification",
-    )
-
-    assert not output.exists()
-    assert source.exists() and sidecar.exists()
+    assert validation._gdal_raster_is_valid(str(path)) == (True, None)

@@ -1,0 +1,60 @@
+# Example for already orthorectified Planet imagery with adjacent JSON metadata.
+# Adapt the glob, metadata keys and band indices to the product you receive.
+shared:
+  plugin: shared
+  core:run: true # true | false; default: false. Apply workflow-wide defaults.
+  # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
+  core:output_metadata_path: expr:const.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
+  # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
+  # core:run_from_existing: true # true | false; default: true.
+  # core:check_validity: true # true | false; default: true.
+  param:custom_nodata_value: 0
+  # core:log_to_console: true # true | false; default: true.
+  # Workflow-wide constants. They remain available to every scene and aggregate.
+
+  const:reference_path: /path/to/reference.tif
+  const:red_band_index: 3 # one-based; recipe setting.
+  const:green_band_index: 2 # one-based; recipe setting.
+  const:nir_band_index: 4 # one-based; recipe setting.
+
+import_files:
+  plugin: import_files
+  param:output_dir: ../processed_planet # path; default: ./output, relative to the first matched file. Persistent products.
+  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the matched file.
+  # param:directory_scope: const # const | var; default: const. Use var for independent directories per scene.
+  core:run: true # true | false; default: false. Enable this step.
+  param:search_glob: /path/to/planet/*_AnalyticMS_SR.tif
+  var:reflectance: returned:file_path
+  var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
+  var:suffix: ""
+  # literal:expr is evaluated by import_files once per discovered file.
+  param:create_metadata_json: # name:{path: glob} | name:{to_json: file}; default: null.
+    metadata:
+      to_json: literal:expr:$replace(var.file_path, '_AnalyticMS_SR.tif', '_metadata.json')
+  param:scene_id: literal:var:metadata.id # string/reference/expression; default: var:file_path. Match later imports by the metadata ID.
+  var:acquisition_datetime_utc: var:metadata.properties.acquired
+  var:cloud_cover: expr:100 * var.metadata.properties.cloud_cover
+
+cloud_mask:
+  plugin: cloud_mask
+  core:run: true # true | false; default: false. Enable this step.
+  param:input_image_path: var:reflectance
+  var:suffix: expr:var.suffix & '_cloudmasked'
+  var:cloudmasked: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  param:output_raster_path: var:cloudmasked
+  var:cloudmask: expr:const.output_dir & '/' & var.basename & '_cloudmask.tif'
+  param:output_mask_path: var:cloudmask
+  param:red_band_index: const:red_band_index
+  param:green_band_index: const:green_band_index
+  param:nir_band_index: const:nir_band_index
+alignment:
+  plugin: alignment
+  core:run: true # true | false; default: false. Enable this step.
+  param:temp_dir: const:temp_dir
+  param:moving_image_path: var:cloudmasked
+  param:fixed_image_path: const:reference_path
+  var:suffix: expr:var.suffix & '_aligned'
+  var:aligned: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
+  param:output_image_path: var:aligned
+  param:moving_band_index: expr:const.nir_band_index - 1
+  param:fixed_band_index: 0

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Edit SBATCH lines for the cluster; vhr-hpc passes the remote provider config as $1
+# Edit SBATCH lines for the cluster; vhr hpc-start passes the remote workflow config as $1
 
 
 # Node settings
@@ -8,7 +8,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
-#SBATCH --job-name=vhr-worldview
+#SBATCH --job-name=vhr-workflow
 #SBATCH --output=../run_{run_id}/logs/slurm-%j.out
 #SBATCH --error=../run_{run_id}/logs/slurm-%j.err
 
@@ -50,10 +50,18 @@ python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 # python -m pip install --upgrade "${SOURCE_DIR}${SOURCE_EXTRAS}"
 
 
-# Run with configs from yml
-vhr-worldview --config-yaml "$1"
+# Run the prepared YAML (top-level plugin names; param:/var:/const:/core: settings).
+# jsonata-python is installed by the package dependency above.
+vhr workflow --config "$1"
 
-# When dask is enabled (also comment the above section out)
+# When Dask is enabled, set shared.core:concurrent_processing_backend: dask
+# and shared.core:concurrent_processing: 1 in the recipe; comment the command above out.
+# SpectralMatch aggregate functions inherit ordinary parameters from shared:
+# param:concurrent_processing_backend: dask
+# param:image_threads: null
+# param:dask_scheduler: [file, /remote/path/to/the/scheduler.json]
+# VHR seamline_metadata also needs param:dask_scheduler_file pointing to that file.
+# Use the same scheduler file below; core settings are not passed as function parameters.
 # SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json"
 # SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
 # mkdir -p "$(dirname "${SCHEDULER_FILE}")"
@@ -62,4 +70,4 @@ vhr-worldview --config-yaml "$1"
 # sleep 10
 # srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
 # sleep 10
-# vhr-worldview --config-yaml "$1"
+# vhr workflow --config "$1"
