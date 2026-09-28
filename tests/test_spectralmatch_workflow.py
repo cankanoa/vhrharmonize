@@ -178,7 +178,11 @@ def test_batch_outputs_checkpoint_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
         output_paths={"output_path"},
     )
     config = {
-        "defaults": {"plugin": "shared", "core:run": True, "core:log_to_console": False},
+        "defaults": {
+            "plugin": "shared", "core:run": True, "core:log_to_console": False,
+            # Retain intermediates for the checkpoint/staging checks; enable cleanup below.
+            "core:delete_temp_steps_proactively": False,
+        },
         "files": import_settings(source, tmp_path),
         "matching": {
             "plugin": "batch",

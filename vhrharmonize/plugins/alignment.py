@@ -55,9 +55,9 @@ def align_image_pair(
     min_valid_fraction: float = 0.01,
     temp_dir: str | None = None,
     delete_temp_dir: bool = True,
-    split_factor: int = 2,
+    split_factor: int = 0,
     clip_fixed_to_moving: bool = False,
-    output_on_moving_grid: bool = True,
+    output_on_moving_grid: bool = False,
     trim_edge_invalid: bool = False,
     edge_trim_depth: int = 8,
     edge_trim_detection_band_index: int = 0,
@@ -83,9 +83,9 @@ def align_image_pair(
         min_valid_fraction: Minimum valid overlap fraction required for registration.
         temp_dir: Optional temp directory for coregix intermediates.
         delete_temp_dir: Whether to delete the coregix temp directory after alignment.
-        split_factor: Chunking factor used by coregix.
+        split_factor: Chunking factor used by coregix; defaults to 0 (no chunking).
         clip_fixed_to_moving: Whether to clip the fixed image to the moving bounds before registration.
-        output_on_moving_grid: Whether to write the aligned result on the moving grid.
+        output_on_moving_grid: Whether to write on the moving grid; defaults to False.
         trim_edge_invalid: Whether to trim invalid alignment edge artifacts.
         edge_trim_depth: Edge trim depth in pixels.
         edge_trim_detection_band_index: Detection band index used for edge trimming.

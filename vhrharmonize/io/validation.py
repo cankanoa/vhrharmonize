@@ -36,11 +36,11 @@ def _tiff_truncation_reason(path: str) -> str | None:
     return None
 
 
-def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 0) -> tuple[bool, str | None]:
+def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 2048) -> tuple[bool, str | None]:
     """Check raster readability and TIFF strip/tile bounds.
     Args:
         path: Raster path to validate.
-        validity_check_grid_size: Pixel sampling grid size. 0 disables pixel validity sampling.
+        validity_check_grid_size: Pixel sampling grid size; defaults to 2048. 0 disables pixel validity sampling.
     Returns:
         Tuple of validity and optional reason.
     """

@@ -167,6 +167,9 @@ def test_context_argument_is_never_injected(recipe, monkeypatch, defaulted):
 def test_explicit_scope_arguments_track_runtime_dependencies_locally_and_on_hpc(
     recipe, tmp_path, monkeypatch, binding, scope
 ):
+    # This test exercises reuse/staging of retained intermediate checkpoints.
+    recipe["shared"]["core:delete_temp_steps_proactively"] = False
+
     def produce(output_path):
         Path(output_path).write_text("produced")
         return 4

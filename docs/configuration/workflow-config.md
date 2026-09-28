@@ -268,10 +268,10 @@ These are Python adapter attributes, not YAML parameters. Each contains a set or
 | `output_parent_creation_paths` | Create parents of selected destinations before invocation. | Always. |
 | `output_collision_check_paths` | Reject duplicate destinations when either declaration selects collision checking. | Always. |
 | `output_reuse_paths` | Allow skipping a function when its requested products already exist. Every requested product must be selected for reuse. | Plugin `core:reuse`; default `shared.core:run_from_existing: true`. |
-| `output_validation_paths` | Validate selected products during reuse and after invocation. Reuse always checks existence; format checks apply only to this selection. | Plugin/shared `core:check_validity: true`; `shared.core:validity_check_grid_size: 0`. |
+| `output_validation_paths` | Validate selected products during reuse and after invocation. Reuse always checks existence; format checks apply only to this selection. | Plugin/shared `core:check_validity: true`; `shared.core:validity_check_grid_size: 2048`. |
 | `output_invalid_removal_paths` | Inspect and remove corrupt selected products before regeneration. No missing-file error or post-call check is implied. | Runs before processing, independently of reuse/validation selections. |
 | `output_overview_calculation_paths` | Build overviews on selected TIFF outputs after processing. | Plugin `core:calculate_overviews: false`; requires `shared.param:window_scales` when enabled. |
-| `output_temporary_cleanup_paths` | Remove selected regular files inside declared temporary roots, with associated sidecars, after required consumers succeed. Requires a populated temporary-root location. | Shared `core:delete_temp_steps_proactively: false` / `core:delete_temp_dir: false`. |
+| `output_temporary_cleanup_paths` | Remove selected regular files inside declared temporary roots, with associated sidecars, after required consumers succeed. Requires a populated temporary-root location. | Shared `core:delete_temp_steps_proactively: true` / `core:delete_temp_dir: false`. |
 | `output_context_checkpoint_paths` | Save returned assignments beside the first supplied selected output as `<output>.context.json`; restore them on reuse. Normally select one argument; aliases can supply alternatives. | Automatic when returned assignments exist; empty disables file checkpoints. |
 | `input_hpc_staging_paths` | Rewrite and upload selected inputs needed by processing steps. | HPC remote reference directory and upload settings. |
 | `output_hpc_staging_paths` | Rewrite selected destinations and upload selected reusable products needed by the remote run. | HPC remote output/temp directories and upload settings. |
@@ -315,9 +315,9 @@ Shared runner controls are:
 | `delete_final_json_first` | `true` |
 | `run_from_existing` | `true` |
 | `check_validity` | `true` |
-| `validity_check_grid_size` | `0` |
+| `validity_check_grid_size` | `2048` |
 | `delete_temp_dir` | `false` |
-| `delete_temp_steps_proactively` | `false` |
+| `delete_temp_steps_proactively` | `true` |
 | `log_to_console` | `true` |
 | `concurrent_processing` | `1` |
 | `concurrent_processing_backend` | `process_pool` |

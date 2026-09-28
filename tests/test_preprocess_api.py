@@ -69,6 +69,8 @@ def test_align_image_pair(monkeypatch, tmp_path: Path, delete_temp) -> None:
     output = align_image_pair("moving.tif", "fixed.tif", str(tmp_path / "out.tif"), **options)
     assert output.output_image_path.endswith("out.tif")
     assert calls[0]["keep_temp_dir"] is (delete_temp is False)
+    assert calls[0]["split_factor"] == 0
+    assert calls[0]["output_on_moving_grid"] is False
 
 
 def test_align_image_pair_rejects_removed_keep_temp_dir() -> None:

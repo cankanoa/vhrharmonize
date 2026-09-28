@@ -52,44 +52,45 @@ shared:
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
   core:output_metadata_path: expr:const.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
-  # Function defaults are offered to every plugin that accepts the parameter.
+  # Shared parameters are offered to every function that accepts them; no shared defaults exist.
   # Set shared values directly; per-step param: settings override them.
-  param:window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # increasing integer list; required for VHR core overviews.
-  param:epsg: 6635 # EPSG integer; default: unset. Projected output CRS; 6635 is Hawaii Island.
-  # param:custom_nodata_value: null # number | null; default: null, preserve source NoData. Example override: -9999.
-  # param:output_dtype: float32 # raster dtype; default: function/source dtype. Example override: int16.
-  # param:concurrent_processing_backend: process_pool # process_pool | dask; default: function default. Single-file merge overrides this with null.
+  param:window_scales: [2, 4, 8, 16, 32, 64, 128, 256, 512] # increasing integer list; default: NA. Required for VHR core overviews.
+  param:epsg: 8857 # EPSG integer; default: NA. Projected output CRS; 6635 is Hawaii Island. 8857 is Equal Earth. Must be a projected CRS.
+  param:custom_nodata_value: -9999 # number | null; default: NA. Output NoData value.
+  param:output_dtype: int16 # raster dtype; default: NA. Output raster data type.
 
   # Common SpectralMatch function options also use ordinary shared parameters.
-  param:window_size: 1024 # positive integer | null; default: null, native block size. Processing/output tile size.
-  param:image_threads: 1 # cpu | positive integer | null; default: null. Single-file merge overrides this with null.
-  param:io_threads: 1 # cpu | positive integer | null; default: null. Raster IO workers.
-  param:tile_threads: 1 # cpu | positive integer | null; default: null. Window workers.
-  # param:cache: null # positive GB | null; default: null, existing GDAL cache.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. With Dask, set image_threads: null.
+  param:window_size: 1024 # positive integer | null; default: NA. Processing/output tile size.
+  param:image_threads: 1 # cpu | positive integer | null; default: NA. Single-file merge overrides this with null.
+  param:io_threads: 1 # cpu | positive integer | null; default: NA. Raster IO workers.
+  param:tile_threads: 1 # cpu | positive integer | null; default: NA. Window workers.
+  # param:cache: null # positive GB | null; default: NA. null keeps the existing GDAL cache.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: NA. With Dask, set image_threads: null.
   # Also set seamline_metadata.param:dask_scheduler_file/address for its VHR Dask workers.
-  # param:calculation_dtype: float32 # raster dtype; default: float32.
-  # param:save_as_cog: false # true | false; default: false.
-  # param:debug_logs: false # true | false; default: false.
-  # param:resume_from_outputs: "no" # no | yes | validate; default: no. Native reuse; core reuse is separate.
+  # param:calculation_dtype: float32 # raster dtype; default: NA.
+  # param:save_as_cog: false # true | false; default: NA.
+  # param:debug_logs: false # true | false; default: NA.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: NA. Native reuse; core reuse is separate.
   # VHR calculates overviews after the selected steps. Leave native build_overviews unset.
 
+  param:concurrent_processing_backend: process_pool # process_pool | dask; default: NA. Single-file merge overrides this with null.
   # core:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
-  # core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Must be 1 for Dask.
+  # core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent workflow tasks; must be 1 for Dask.
+  # param:concurrent_processing: 1 # positive integer | num_cpu; default: NA. Workers inside accepting functions (seamline_metadata); independent of core task scheduling.
   # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.
   # core:dask_scheduler_file: ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json # path | null; default: null.
   # core:dask_scheduler_address: tcp://scheduler-host:8786 # address | null; default: null. Alternative to scheduler_file.
 
   # core:delete_temp_dir: false # true | false; default: false. Clean owned temporary outputs after success.
-  # core:delete_temp_steps_proactively: false # true | false; default: false. Clean completed intermediates during processing.
+  # core:delete_temp_steps_proactively: true # true | false; default: true. Clean completed intermediates during processing.
   # core:run_from_existing: true # true | false; default: true. Reuse required outputs at each step.
   # core:check_validity: true # true | false; default: true. Verify raster readability, TIFF bounds and JSON syntax.
-  core:validity_check_grid_size: 2048 # integer >= 0; default: 0. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
+  # core:validity_check_grid_size: 2048 # integer >= 0; default: 2048. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
   # core:log_to_console: true # true | false; default: true.
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
   # Workflow-wide constants. They remain available to every scene and aggregate.
-  const:dem_path: /path/to/dem.tif # path; recipe setting. Shared local DEM; or use var:dem after enabling fetch_dem.
+  const:dem_path: /path/to/dem.tif # path; recipe setting. Shared local DEM; fetch_dem replaces this when enabled.
   const:reference_path: /path/to/reference.tif # path; recipe setting. Alignment reference for every scene.
   const:red_band_index: 5 # one-based integer; recipe setting. WorldView red.
   const:green_band_index: 3 # one-based integer; recipe setting. WorldView green.
@@ -100,7 +101,7 @@ import_files:
   core:run: true # true | false; default: false. Enable this step.
   # Later import_files steps add scenes and missing metadata fields; existing values and roots are preserved.
   # Output filenames are defined by YAML expressions; functions receive complete explicit paths.
-  param:output_dir: ../processed # path; default: ./output, relative to the first matched file. Persistent products.
+  param:output_dir: ../../processed # path; default: ./output, relative to the first matched file. Persistent products.
   # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the matched file.
   # param:directory_scope: const # const | var; default: const. Use var for independent directories per scene.
   # Sensor constants shared by all imported images.
@@ -145,13 +146,13 @@ import_files:
     mul_companions:
       path: literal:expr:$replace(var.file_path, '.TIF', '.{RPB,rpb}') # Sorted paths; [] if no matches.
     pan_companions:
-      path: literal:expr:$replace($replace($replace(var.file_path, '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
+      path: literal:expr:$replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
     metadata:
       to_json: literal:expr:$replace(var.file_path, '.TIF', '.IMD') # IMD/JSON/GeoJSON/XML/YAML -> object; kept in memory.
   var:mul: returned:file_path # Matched multispectral image. All other files derive from it.
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # Original filename without extension.
   var:suffix: "" # Naming state; enabled processing steps append their suffixes in YAML.
-  var:pan: expr:$replace($replace(var.mul, '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-')
+  var:pan: expr:$replace($replace(var.mul, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-')
   var:sensor_id: var:metadata.IMAGE_1.satId
   var:acquisition_datetime_utc: expr:var.metadata.IMAGE_1.firstLineTime ?? var.metadata.IMAGE_1.TLCTime
   var:day_utc: expr:$substring(var.acquisition_datetime_utc, 0, 10)
@@ -206,22 +207,26 @@ file_source:
 # Optional online DEM. Otherwise set shared.const:dem_path for correction and both ortho steps.
 # The DEM should contain WGS84 ellipsoidal heights in meters:
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
-# Enable this plugin and set downstream DEM inputs to var:dem to download per scene.
+# Enable to download one DEM covering all imported images; downstream const:dem_path links already use it.
+# For per-scene DEMs: set scope to scene, image_paths to var:mul, define var:dem as a unique path,
+# and use var:dem for output_tif_path and downstream DEM inputs.
 fetch_dem:
   plugin: fetch_dem
   core:run: false # true | false; default: false.
-  param:min_lon: var:min_lon  # number; required. WGS84 bbox west edge.
-  param:min_lat: var:min_lat  # number; required. WGS84 bbox south edge.
-  param:max_lon: var:max_lon  # number; required. WGS84 bbox east edge.
-  param:max_lat: var:max_lat  # number; required. WGS84 bbox north edge.
-  var:dem: expr:const.temp_dir & '/dem/' & var.basename & '.tif'
-  param:output_tif_path: var:dem # path; required.
+  core:scope: aggregate # scene | aggregate; default: scene. Fetch once for the combined image extent.
+  param:image_paths: collect:mul # path | path list | null; default: null. Union of image bounds, transformed to WGS84.
+  # param:min_lon: null # number | null; default: null. Alternative bbox west edge; omit image_paths and supply all four edges.
+  # param:min_lat: null # number | null; default: null. Alternative bbox south edge.
+  # param:max_lon: null # number | null; default: null. Alternative bbox east edge.
+  # param:max_lat: null # number | null; default: null. Alternative bbox north edge.
+  const:dem_path: expr:const.temp_dir & '/fetch_dem/dem.tif'
+  param:output_tif_path: const:dem_path # path; required. Shared by correction and both orthorectification steps.
   # param:api_key: null # string | null; default: OPENTOPOGRAPHY_API_KEY or OT_API_KEY environment variable.
   param:demtype: SRTMGL1_E # OpenTopography DEM identifier; default: SRTMGL1_Ellip.
   # param:endpoint: https://portal.opentopography.org/API/globaldem # URL; default shown.
   # param:timeout_s: 120.0 # positive seconds; default: 120.0.
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
-  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
+  # param:scene_basename: null # string | null; default: null. Optional log label; use var:basename in scene scope.
 
 # Fetch atmosphere separately so it can be reused or replaced by another source.
 fetch_atmosphere:
@@ -424,13 +429,13 @@ cloud_mask:
   var:suffix: expr:var.suffix & '_cloudmasked'
   var:cloudmasked: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_raster_path: var:cloudmasked # path; required. Or a path under const.temp_dir when only an intermediate.
-  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_mask.tif'
+  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   param:output_mask_path: var:cloudmask # path; required. Binary mask; may use const:temp_dir if not a deliverable.
   param:red_band_index: const:red_band_index # one-based integer; required. WorldView red.
   param:green_band_index: const:green_band_index # one-based integer; required. WorldView green.
   param:nir_band_index: const:nir_band_index # one-based integer; required. WorldView NIR1.
   # param:cloud_classes: [1, 2, 3] # integer list; default: [1,2,3]. Classes treated as clouds/shadows.
-  # param:buffer_pixels: 0 # integer >= 0; default: 0. Buffer cloud mask outward; the previous example used 10.
+  param:buffer_pixels: 10 # integer >= 0; default: 0. Buffer cloud mask outward; the previous example used 10.
   # param:inference_resolution_m: 10.0 # positive meters | null; default: 10.0. null keeps input grid for inference.
   # param:cloud_mask_value: 1 # integer; default: 1. Binary value to mask when applying the cloud mask.
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: source nodata).
@@ -468,22 +473,22 @@ alignment:
   var:aligned: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:aligned # path; required.
   # param:band_index: 0 # zero-based integer; default: 0. Registration metric band when per-image overrides are null.
-  param:moving_band_index: expr:const.nir_band_index - 1 # zero-based integer | null; default: null -> band_index.
+  param:moving_band_index: 0 # zero-based integer | null; default: null -> band_index.
   param:fixed_band_index: 0 # zero-based integer | null; default: null -> band_index.
   # param:moving_nodata: null # number | null; default: null -> raster metadata.
   # param:fixed_nodata: null # number | null; default: null -> raster metadata.
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
   # param:min_valid_fraction: 0.01 # (0,1]; default: 0.01. Required valid overlap fraction in registration ROI.
   # param:use_edge_proxies: true # true | false; default: true. Use edge imagery for registration.
-  # param:split_factor: 2 # integer >= 0; default: 2. 0 disables chunking; k > 0 splits solve/apply domains into 2^k chunks.
+  # param:split_factor: 0 # integer >= 0; default: 0. 0 disables chunking; k > 0 splits solve/apply domains into 2^k chunks.
   param:clip_fixed_to_moving: true # true | false; default: false. Clip the fixed domain to the moving footprint.
-  # param:output_on_moving_grid: true # true | false; default: true.
-  # param:trim_edge_invalid: false # true | false; default: false. Trim alignment artifacts along irregular exterior boundaries.
-  # param:edge_trim_depth: 8 # positive pixels; default: 8.
-  # param:edge_trim_detection_band_index: 0 # zero-based integer; default: 0. Band used to detect edge artifacts.
-  # param:edge_trim_invalid_below: null # number | null; default: null. Values <= threshold are invalid; example: -3000.
+  # param:output_on_moving_grid: false # true | false; default: false.
+  param:trim_edge_invalid: true # true | false; default: false. Trim alignment artifacts along irregular exterior boundaries.
+  param:edge_trim_depth: 8 # positive pixels; default: 8.
+  param:edge_trim_detection_band_index: 0 # zero-based integer; default: 0. Band used to detect edge artifacts.
+  param:edge_trim_invalid_below: -3000 # number | null; default: null. Values <= threshold are invalid; example: -3000.
   # param:edge_trim_invalid_above: null # number | null; default: null. Values >= threshold are invalid; example: 65535.
-  # param:enforce_mutual_valid_mask: false # true | false; default: false. Require pixels valid in both registration images.
+  param:enforce_mutual_valid_mask: true # true | false; default: false. Require pixels valid in both registration images.
   # param:solve_resolution: null # positive CRS units | null; default: null. Optional solve pixel size; example: 2.0.
   param:temp_dir: const:temp_dir # path | null; default: null -> system temp. Explicitly use the workflow temp directory.
   # param:delete_temp_dir: false # true | false; default: shared.delete_temp_dir (Python: true).
@@ -521,7 +526,7 @@ joint_coregistration:
   core:run: true # true | false; default: false. Enable this step.
   param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
   const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_coreg'
-  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/joint_coregistration/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/joint_coregistration/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
   param:output_images: const:spectralmatch.images # path list | template/folder; required. Folder (writes '$_Coregistered.tif'), '$' basename template, or list[str] matching input order and length; output paths must be unique and differ from inputs.
   # param:tie_feature_method: "orb" # orb; default: "orb". 'orb', currently the only supported tie-point detector.
   # param:tie_grid_spacing: 500.0 # number; default: 500.0. Positive CRS-unit distance between search-window centers in each pair's overlap; default 500.0; independent of local_model and local_grid_spacing.
@@ -569,7 +574,7 @@ seamline_metadata:
   core:run: true # true | false; default: false. Enable this step.
   param:image_paths: const:spectralmatch.images # path list; required. Ordered across imported records.
   param:metadata_records: collect:footprint_metadata # JSON object list; required. Same length as image_paths.
-  const:footprints: expr:const.temp_dir & '/spectralmatch/seamline_metadata.gpkg'
+  const:footprints: expr:const.temp_dir & '/seamline_metadata/seamline_metadata.gpkg'
   param:output_path: const:footprints # path; required. Temporary input to seamlines; use const.output_dir to keep it as a deliverable.
   param:layer: const:spectralmatch.polygon_layer # layer name; default: seamline_metadata. Previous example: footprints.
   param:image_field_name: const:spectralmatch.image_field_name # field name; default: image_path. Use the same field in SpectralMatch seamline options.
@@ -591,7 +596,7 @@ global_regression:
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
   const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_global'
-  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/global_regression/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/global_regression/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
   param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
   # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
@@ -639,7 +644,7 @@ local_block_adjustment:
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
   const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_local'
-  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/local_block_adjustment/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/local_block_adjustment/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
   param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   # param:calculation_dtype: "float32" # raster dtype; default: "float32". Precision for internal calculations. Inherits shared.param:calculation_dtype when set.
   # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
@@ -673,7 +678,7 @@ postprocess_footprints:
   core:run: true # true | false; default: false. Enable this step.
   param:input_polygons: const:footprints # path; required. Current footprints.
   param:input_layer: const:spectralmatch.polygon_layer # string; default: footprints. Layer in current footprints.
-  const:footprints: expr:const.temp_dir & '/spectralmatch/postprocess_footprints.gpkg'
+  const:footprints: expr:const.temp_dir & '/postprocess_footprints/postprocess_footprints.gpkg'
   const:spectralmatch.polygon_layer: footprints
   param:output_polygons: const:footprints # string; required. Output GeoPackage path for processed polygons and their original attributes; must differ from input_polygons.
   param:output_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Output GeoPackage layer for processed footprints, default "footprints".
@@ -697,7 +702,7 @@ postprocess_footprints:
 # voronoi_center_seamline:
 #   plugin: voronoi_center_seamline
 #   core:run: true # true | false; default: false. Enable this step.
-#   const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/voronoi_center_seamline.gpkg'
+#   const:spectralmatch.mask: expr:const.temp_dir & '/voronoi_center_seamline/voronoi_center_seamline.gpkg'
 #   param:input_polygons: const:footprints # path; required. Polygons from the selected footprint step.
 #   param:output_mask: const:spectralmatch.mask # string; required. Output path for the final seamline polygon vector file.
 #   param:input_images: const:spectralmatch.images # list | null; default: null. Optional raster folder, glob or paths for substring footprint matching; None infers names from the polygon field.
@@ -717,7 +722,7 @@ postprocess_footprints:
 # weighted_seamline:
 #   plugin: weighted_seamline
 #   core:run: true # true | false; default: false. Enable this step.
-#   const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/weighted_seamline.gpkg'
+#   const:spectralmatch.mask: expr:const.temp_dir & '/weighted_seamline/weighted_seamline.gpkg'
 #   param:input_polygons: const:footprints # path; required. Footprints and attributes from the selected footprint step.
 #   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path for the ranked seamline polygons.
 #   param:input_images: const:spectralmatch.images # list | null; default: null. Optional raster folder, glob or paths for substring footprint matching; None infers names from the polygon field.
@@ -733,7 +738,7 @@ postprocess_footprints:
 markov_triangles:
   plugin: markov_triangles
   core:run: true # true | false; default: false. Enable this step.
-  const:spectralmatch.mask: expr:const.temp_dir & '/spectralmatch/markov_triangles.gpkg'
+  const:spectralmatch.mask: expr:const.temp_dir & '/markov_triangles/markov_triangles.gpkg'
   param:input_images: const:spectralmatch.images # path list | glob/folder; required. Raster folder, glob or path list; basenames without extensions must be unique.
   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path, distinct from input vectors; stores image identifiers, image_path and raw quality_score.
   param:input_polygons: const:footprints # string | null; default: null. Optional valid-data footprints; None polygonizes band-1 GDAL masks, while supplied polygons must match every image and are never regenerated.
@@ -765,7 +770,7 @@ mask_rasters:
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: const:spectralmatch.images # path list; required. Previous enabled image step.
   const:spectralmatch.suffix: expr:const.spectralmatch.suffix & '_masked'
-  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/spectralmatch/mask_rasters/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
+  const:spectralmatch.images: expr:[$map(const.spectralmatch.basenames, function($name, $i) { const.temp_dir & '/mask_rasters/' & $string($i) & '_' & $name & const.spectralmatch.suffix & '.tif' })]
   core:requires: const:spectralmatch.mask
   param:output_images: const:spectralmatch.images # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/seamline_mask.gpkg, image].
