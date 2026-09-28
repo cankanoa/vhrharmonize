@@ -426,10 +426,10 @@ cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
   param:input_image_path: var:pansharpened # path; required.
+  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
   var:cloudmasked: expr:const.output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_raster_path: var:cloudmasked # path; required. Or a path under const.temp_dir when only an intermediate.
-  var:cloudmask: expr:const.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   param:output_mask_path: var:cloudmask # path; required. Binary mask; may use const:temp_dir if not a deliverable.
   param:red_band_index: const:red_band_index # one-based integer; required. WorldView red.
   param:green_band_index: const:green_band_index # one-based integer; required. WorldView green.
