@@ -120,7 +120,7 @@ def test_worldview_selects_one_chain_and_inherits_function_settings():
         < list(config).index("seamline_metadata")
         < list(config).index("markov_triangles")
     )
-    assert config["seamline_metadata"]["param:image_paths"] == "const:spectralmatch.images"
+    assert config["seamline_metadata"]["param:image_paths"] == "collect:current_image_paths"
     assert config["shared"]["param:window_scales"] == [2, 4, 8, 16, 32, 64, 128, 256, 512]
     assert not any(
         key.startswith("const:")
@@ -264,7 +264,7 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
         },
         "files": {
             **import_settings(source, tmp_path),
-            "var:aligned": "returned:file_path",
+            "var:current_image_paths": "returned:file_path",
             "var:footprint_metadata": {"quality": 10},
         },
         "setup": {**example["setup_spectralmatch"], "core:run": True},
@@ -349,9 +349,7 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
     assert [call[0] for call in calls] == ["global_regression", "local_block_adjustment"]
     assert calls[0][2] == calls[1][1]
     assert calls[1][2][0].endswith("_global_local.tif")
-    assert remote.context["const"]["spectralmatch"]["images"][0].endswith(
-        "_global_local_masked.tif"
-    )
+    assert remote.records[0]["context"]["var"]["current_image_paths"] == downloads[final]
     with gdal.Open(downloads[final]) as mosaic:
         assert mosaic.GetRasterBand(1).GetOverviewCount() == 2
     calls.clear()

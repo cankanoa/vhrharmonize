@@ -149,6 +149,14 @@ def expression_names(source):
 
     def visit(node):
         if isinstance(node, Parser.Symbol):
+            if (
+                node.type == "function" and node.procedure.type == "variable"
+                and node.procedure.value == "lookup" and len(node.arguments) == 2
+                and node.arguments[0].type == "variable" and node.arguments[0].value in {"", "$"}
+                and node.arguments[1].type == "string" and node.arguments[1].value in {"const", "var"}
+            ):
+                names.add(node.arguments[1].value + ".*")
+                return
             if node.type == "path":
                 steps = node.steps
                 offset = int(
@@ -167,6 +175,9 @@ def expression_names(source):
                 # Look inside filters, function arguments and nested expressions;
                 # don't interpret path segments as standalone root references.
                 for step in steps:
+                    if step.type == "function":
+                        visit(step)
+                        continue
                     for key, value in vars(step).items():
                         if key not in {"_outer_instance", "environment"}:
                             visit(value)
@@ -240,7 +251,7 @@ def resolve(value, context, *, returned=UNSET, records=None):
     if kind == "collect":
         require_scene_variables(context)
         if records is None:
-            raise ValueError("collect: values require an aggregate plugin")
+            raise ValueError("collect: values require initialized scene records")
         return [deepcopy(lookup(record["var"], text)) for record in records]
     if kind == "expr":
         return expression(text, context)
@@ -274,17 +285,52 @@ def uses_returned(value):
 
 
 def constant_settings(settings, *, owner):
-    """Select scene-independent assignments, including references nested in JSON."""
-    constants = {key: value for key, value in settings.items() if key.startswith("const:")}
-    for key, value in constants.items():
+    """Select assignments that can be evaluated once rather than per scene."""
+    constants, scene_names = {}, set()
+    for key, value in settings.items():
+        if not key.startswith("const:"):
+            continue
+        refs = references(value)
         if uses_returned(value) or any(
-            ref.startswith(("var.", "collect:")) for ref in references(value)
+            ref.startswith("var.")
+            or ref == "*" and refs == {"*"}
+            or any(matches_reference(ref, name) for name in scene_names)
+            for ref in refs
         ):
-            raise ValueError(
-                f"{owner} {key} cannot depend on a scene: use literals, const: references, "
-                "or JSONata expressions without var, collect:, or returned: values"
-            )
+            scene_names.add("const." + key[6:].split(".")[0])
+        else:
+            constants[key] = value
     return constants
+
+
+def scene_values(value, scene_ids, *, name):
+    """Map an aggregate assignment to exactly one value per scene."""
+    if isinstance(value, Pending):
+        return [deepcopy(value) for _ in scene_ids]
+    if isinstance(value, list) and len(value) == len(scene_ids):
+        return deepcopy(value)
+    if isinstance(value, dict) and set(value) == set(scene_ids):
+        return [deepcopy(value[scene_id]) for scene_id in scene_ids]
+    raise ValueError(
+        f"{name} must map exactly {len(scene_ids)} scenes: supply a list in scene order "
+        "or a dictionary with exactly the scene IDs as keys"
+    )
+
+
+def aggregate_variables(records):
+    """Expose common scene fields as ordered lists in aggregate expressions."""
+    if not records:
+        return {}
+    fields = set.intersection(*(set(record["var"]) for record in records))
+    return {name: [deepcopy(record["var"][name]) for record in records] for name in fields}
+
+
+def update_scene_variables(records, updates, scene_ids):
+    """Apply aggregate var assignments without touching the shared constants."""
+    for name, value in updates.items():
+        if name.startswith("var."):
+            for record, item in zip(records, scene_values(value, scene_ids, name=name)):
+                assign(record["var"], name[4:], item)
 
 
 def path(value, *, base_dir):
@@ -297,7 +343,8 @@ def path(value, *, base_dir):
 
 
 def evaluate_settings(
-    settings, context, *, records=None, planning=False, returned=UNSET, constants=None
+    settings, context, *, records=None, planning=False, returned=UNSET, constants=None,
+    scene_ids=None, aggregate=None,
 ):
     """Resolve ordered assignments and arguments without mutating the input context.
 
@@ -305,6 +352,15 @@ def evaluate_settings(
     No function argument may depend on that same invocation's return value.
     """
     current = deepcopy(context)
+    aggregate = records is not None if aggregate is None else aggregate
+    if records is not None and "var" not in current:
+        records = None
+    if records is not None:
+        records = deepcopy(records)
+        scene_ids = list(map(str, range(len(records)))) if scene_ids is None else scene_ids
+        require_scene_variables(current)
+        if aggregate:
+            current["var"] = aggregate_variables(records)
     params, updates, post = {}, {}, set()
     for key, template in settings.items():
         kind, name = key.split(":", 1)
@@ -320,7 +376,7 @@ def evaluate_settings(
             assign(current[kind], name, value)
             updates[qualified] = value
             continue
-        refs = references(template)
+        refs = {"var." + ref[8:] if ref.startswith("collect:") else ref for ref in references(template)}
         after = uses_returned(template) or any(
             matches_reference(ref, name) for ref in refs for name in post
         )
@@ -338,7 +394,12 @@ def evaluate_settings(
         if kind in {"var", "const"}:
             if after:
                 post.add(kind + "." + name.split(".")[0])
-            assign(current[kind], name, value)
+            if kind == "var" and records is not None and aggregate:
+                value = scene_values(value, scene_ids, name=key)
+                update_scene_variables(records, {qualified: value}, scene_ids)
+                current["var"] = aggregate_variables(records)
+            else:
+                assign(current[kind], name, value)
             updates[kind + "." + name] = value
         else:
             params[name] = value

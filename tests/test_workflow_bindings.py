@@ -343,7 +343,7 @@ def test_missing_metadata_and_invalid_jsonata_have_python_errors():
     for value in ["var:missing", "expr:var.missing", "expr:2 +"]:
         with pytest.raises(ValueError):
             resolve(value, {"const": {}, "var": {}})
-    with pytest.raises(ValueError, match="aggregate"):
+    with pytest.raises(ValueError, match="initialized scene records"):
         resolve("collect:x", {"const": {}, "var": {"x": 1}})
 
 

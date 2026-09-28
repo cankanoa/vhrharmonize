@@ -62,7 +62,7 @@ A key and its value have independent roles. In `param:output_path: var:atmospher
 | `const:name` | Read a workflow-wide variable, including dotted fields. Preserve its JSON type. |
 | `expr:expression` | Evaluate JSONata with the combined context as the root. |
 | `returned:field` | Read a field of the current function's return value. `returned:$` selects the whole result. |
-| `collect:name` | Collect a scene variable across records in an aggregate step. `collect:$` selects all scene `var` objects. |
+| `collect:name` | Collect a scene variable across all current records. `collect:$` selects all scene `var` objects. |
 | `literal:text` | Return text without interpreting a reserved prefix. |
 
 Unquoted `param:output_path:` keys and `expr:var.suffix & '_aligned'` values are valid YAML. The prefix colon is not followed by whitespace. An expression containing YAML punctuation such as `: ` may need a quoted scalar or a block scalar:
@@ -84,11 +84,28 @@ The engine maintains a JSON context for resolving each plugin’s YAML settings:
 
 `const` holds values shared across all scenes: calibration tables, wavelengths, common paths and aggregate results. `var` holds image paths, acquisition geometry, per-image calibration factors, returned values and naming state. Names can exist in both scopes without colliding. `const` describes scope, not immutability: a later enabled step can update an earlier constant.
 
-`const:` assignments in enabled `plugin: shared` blocks initialize the workflow. Scene-setting functions, including `import_files`, resolve their `const:` assignments once for the whole invocation. **Scene steps can define both `var:` and `const:`**, but their constants must use literals, other constants, or JSONata expressions that do not read `var`. This restriction includes references nested in lists/objects; `collect:` and `returned:` are also rejected in scene constant assignments. Constant expressions are evaluated with only the `const` namespace available.
+Any initialized scene or aggregate step can assign both `var:` and `const:`. The prefixes select separate namespaces: `var:gain` and `const:gain` never collide. `collect:gain` gathers every scene's gain as a list, so `const:gains: collect:gain` stores that complete list as one shared value. Collection is available to scene functions too.
 
-Scene constants resolve once per enabled step and become available to every image and subsequent plugin, including aggregate plugins. Reassigning `const:scale: expr:const.scale + 1` increments once, regardless of scene count. Assignments still take effect at their position in the settings: a parameter before the reassignment reads the old value, and one after it reads the new value. Values known during planning are retained for execution and HPC staging; expressions depending on an earlier aggregate return resolve when that return is available. These declarations work when scene outputs are cached or discovery finds no files. Disabled steps define nothing.
+Within a scene step, `collect:` reads all scenes as they stood at the start of that step, so each invocation receives the same list.
 
-Aggregate steps write `const:` and may use `collect:` or their own `returned:` values. Scene-setting steps additionally accept `var:` assignments applied individually to the newly returned scene dictionaries. They run once, even if discovery finds no files. `shared` runs before scene initialization, so `shared.var:` assignments are errors. Put initial scene assignments in the scene-setting plugin, where they run after its function returns.
+A scene assignment writes that scene's `var` value directly. An **aggregate `var:` assignment must supply exactly one value per scene**: either a list in scene order, or a dictionary whose keys exactly match the internal scene IDs. Dictionaries are reordered by those IDs, not insertion order. Incorrect lengths, missing/extra IDs and scalar assignments raise `ValueError`. Each mapped item can itself be any JSON value. Dotted assignments update the selected field while retaining each scene's other fields. Aggregate `var:name` references and JSONata `var.name` expose the ordered list of scene values.
+
+Shared constants are arbitrary JSON values and have no scene-count requirement. Scene-independent constant expressions resolve once per enabled step (including with zero scenes), preserving the existing behavior of `const:scale: expr:const.scale + 1`. Constants derived from individual scene variables or function returns are allowed; scene invocations must agree on their shared value or core raises `ValueError`. Use `collect:` to retain differing values as a shared list, or `var:` to keep them per scene. Disabled steps make no assignments.
+
+Scene-setting steps apply their `var:` mappings to the newly returned records. Their `const:` mappings may then collect or reference those discovered scene values. Before scenes exist, ordinary `var:` reads/writes and `collect:` remain invalid; `plugin: shared` runs before discovery and initializes constants only.
+
+For a batch step, capture inputs before replacing the current paths:
+
+```yaml
+match:
+  plugin: global_regression
+  core:run: true
+  param:input_images: collect:current_image_paths
+  var:current_image_paths: expr:[$map(var.basename, function($name) { const.temp_dir & '/matched/' & $name & '.tif' })]
+  param:output_images: collect:current_image_paths
+```
+
+The first collection reads old paths and the second reads the replacements. Later scene steps use `param:input_path: var:current_image_paths` to receive their single path. Returned assignments use the same count/ID validation after execution; known output expressions allow planning and HPC staging before execution.
 
 Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by [jsonata-python](https://github.com/rayokota/jsonata-python). JSONata sees both scopes: `expr:const.output_dir & '/' & var.basename & '.tif'`. Use `&` for strings and JSONata functions such as `$map`, `$lookup`, `$replace` and `$substring`. Python comprehensions and function calls are not supported.
 
@@ -331,7 +348,7 @@ Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file out
 
 ## Aggregates and concurrency
 
-An aggregate uses `param:input_images: collect:aligned` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, checkpoints and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
+An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, checkpoints and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
 
 Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file. Each step completes before the next begins. Aggregate functions manage their internal parallelism. SpectralMatch inherits supported shared `param:` settings; no adapter translates core worker counts or scheduler settings into native parameters.
 

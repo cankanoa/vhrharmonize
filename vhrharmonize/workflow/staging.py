@@ -33,6 +33,12 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
             "HPC staging requires scenes and file paths known during planning; "
             "its required upstream processing must finish before these scenes can be staged"
         )
+    # Available checkpoints can resolve returned scene values without executing plugins.
+    for step_index in range(len(workflow.steps)):
+        workflow._prepare_constants(step_index)
+        for node in workflow.nodes:
+            if node.step_index == step_index and node.status == "loaded":
+                workflow._restore(node)
     staged = deepcopy(workflow.config)
     shared_names = [name for name, settings in staged.items() if settings.get("plugin") == "shared"]
     shared_name = shared_names[0] if shared_names else "shared"
@@ -94,7 +100,7 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
 
     def constants(node):
         bindings = workflow.constant_steps.get(node.step_index)
-        return bindings.planned if bindings else None
+        return (bindings.resolved or bindings.planned) if bindings else None
 
     for node in workflow.nodes:
         if node.status == "loaded":
@@ -107,16 +113,12 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
                 in node.paths("output_hpc_staging_paths")
             ):
                 required.add(node.checkpoint)
-        elif node.status == "processing":
-            required.update(
-                p
-                for p in [*node.paths("input_hpc_staging_paths"), *node.requirements]
-                if p not in path_map
-            )
         params = evaluate_settings(
             node.step["settings"],
-            node.pre_context,
-            records=node.collection_snapshot if node.record is None else None,
+            workflow._runtime_context(node),
+            records=workflow._record_values(node),
+            aggregate=node.record is None,
+            scene_ids=[r["id"] for r in workflow.records],
             planning=True,
             constants=constants(node),
         )[0]
@@ -134,6 +136,14 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
         if unresolved:
             raise ValueError(
                 f"HPC file arguments must resolve during planning: {sorted(unresolved)}"
+            )
+        for name in node.file_features["input_hpc_staging_paths"]:
+            if name in params and not contains_pending(params[name]):
+                node.params[name] = params[name]
+        if node.status == "processing":
+            required.update(
+                p for p in [*node.paths("input_hpc_staging_paths"), *node.requirements]
+                if p not in path_map
             )
     for filename in sorted(required):
         path_map.setdefault(
@@ -205,7 +215,9 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
             params = evaluate_settings(
                 node.step["settings"],
                 node.pre_context,
-                records=node.collection_snapshot if node.record is None else None,
+                records=workflow._record_values(node),
+                aggregate=node.record is None,
+                scene_ids=[r["id"] for r in workflow.records],
                 planning=True,
                 constants=constants(node),
             )[0]
@@ -236,7 +248,7 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
             else:
                 final_contexts.extend(
                     (index, {**context, "const": node.context["const"]}, node.collection_snapshot)
-                    for index, context in enumerate(node.collection_snapshot)
+                    for index, context in enumerate(node.collection_result)
                 )
         if not workflow.nodes:
             final_contexts = [

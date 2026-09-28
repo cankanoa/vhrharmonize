@@ -37,7 +37,9 @@ from .values import (
     path,
     references,
     resolve,
-    require_scene_variables,
+    aggregate_variables,
+    scene_values,
+    update_scene_variables,
 )
 
 
@@ -86,7 +88,7 @@ def _materialize(value, runtime, selector=""):
     return deepcopy(value)
 
 
-def _arguments(features, params, context, settings, base_dir):
+def _arguments(features, params, context, settings, base_dir, *, scene_ids=None, updates=None):
     params = deepcopy(params)
     resolution = features["output_path_resolution_paths"]
     for name in resolution & params.keys():
@@ -94,9 +96,20 @@ def _arguments(features, params, context, settings, base_dir):
             continue
         params[name] = path(params[name], base_dir=base_dir)
         template = settings.get("param:" + name)
-        if isinstance(template, str) and template.startswith(("var:", "const:")):
+        if isinstance(template, str) and template.startswith(("var:", "const:", "collect:")):
             scope, field = template.split(":", 1)
-            assign(context[scope], field, params[name])
+            if scope in {"var", "collect"} and scene_ids is not None:
+                records = [
+                    {"var": {key: values[i] for key, values in context["var"].items()}}
+                    for i in range(len(scene_ids))
+                ]
+                update = {"var." + field: params[name]}
+                update_scene_variables(records, update, scene_ids)
+                context["var"] = aggregate_variables(records)
+                if updates is not None:
+                    updates.update(update)
+            elif scope != "collect":
+                assign(context[scope], field, params[name])
     return params
 
 
@@ -135,6 +148,7 @@ class Node:
     status: str = "unused"
     runtime_base: dict = field(default_factory=dict)
     collection_snapshot: list = field(default_factory=list)
+    collection_result: list = field(default_factory=list)
     base_dir: str = "."
     file_features: dict = field(default_factory=dict)
     directory_locations: dict = field(default_factory=dict)
@@ -177,6 +191,7 @@ class ConstantBindings:
     planned: dict
     resolved: dict = field(default_factory=dict)
     runtime_before: dict = field(default_factory=dict)
+    records: list = field(default_factory=list)
 
 
 def _execute(payload):
@@ -276,12 +291,27 @@ class Workflow:
         self._build(self.start_index)
 
     @staticmethod
+    def _discovered_constants(step):
+        """Scene-setting steps can derive shared values after establishing records."""
+        settings, names = {}, set()
+        for key, value in step["settings"].items():
+            if key.startswith("const:") and any(
+                ref == "*" or ref.startswith(("var.", "collect:"))
+                or any(matches_reference(ref, name) for name in names)
+                for ref in references(value)
+            ):
+                settings[key] = value
+                names.add("const." + key[6:].split(".")[0])
+        return settings
+
+    @staticmethod
     def _settings(step, plugin=None):
         plugin = plugin or load_plugin(step["plugin"])
+        discovered = Workflow._discovered_constants(step) if plugin.scene_records_return else {}
         return {
             key: value
             for key, value in step["settings"].items()
-            if not (plugin.scene_records_return and key.startswith("var:"))
+            if not (plugin.scene_records_return and key.startswith("var:")) and key not in discovered
         }
 
     def _register_directories(self, plugin):
@@ -309,7 +339,7 @@ class Workflow:
             explicit = {
                 key[6:]: lookup(context["const"], key[6:])
                 for key in step["settings"]
-                if key.startswith("const:")
+                if key.startswith("const:") and key not in self._discovered_constants(step)
             }
             if merge:
                 context["const"] = _add_missing(context["const"], constants)
@@ -378,6 +408,16 @@ class Workflow:
                 previous.update(record)
             else:
                 records.append(record)
+        discovered = self._discovered_constants(step)
+        if discovered:
+            context = evaluate_settings(
+                discovered, {"const": context["const"], "var": {}},
+                records=[r["context"] for r in records], scene_ids=[r["id"] for r in records],
+                returned=returned,
+            )[2]
+            for record in records:
+                record["context"]["const"] = deepcopy(context["const"])
+                self._normalize_directories(record["context"])
         self.records = records
         self.initial_context = {"const": deepcopy(context["const"]), "var": {}}
 
@@ -387,6 +427,7 @@ class Workflow:
         self.runtime_values = [{} for _ in self.records]
         self.constant_values = {}
         self.constant_steps = {}
+        self.scene_constant_writes = {}
         self.context = deepcopy(self.initial_context)
         producers = [{} for _ in self.records]
         constant_producers, paths, path_producers = {}, {}, {}
@@ -406,22 +447,18 @@ class Workflow:
             initialized = "var" in self.context
             scope = "aggregate" if source or not initialized else step.get("scope", plugin.scope)
             settings = self._settings(step, plugin)
-            if scope == "aggregate" and any(k.startswith("var:") for k in settings):
-                require_scene_variables(self.context)
-                raise ValueError(
-                    f"{step['plugin']}: aggregate steps write const:; var: belongs to individual scenes"
-                )
             constants = {}
             step_producers = deepcopy(constant_producers)
             if scope == "scene":
                 constants_settings = constant_settings(settings, owner=step["plugin"])
-                before = {"const": deepcopy(self.context["const"])}
+                before = {"const": deepcopy(self.context["const"]), "var": {}}
                 _, constants, constant_context, _ = evaluate_settings(
-                    constants_settings, before, planning=True
+                    constants_settings, before, planning=True, records=self.contexts,
+                    scene_ids=[r["id"] for r in self.records],
                 )
                 if constants_settings:
                     self.constant_steps[step_index] = ConstantBindings(
-                        constants_settings, before, constants
+                        constants_settings, before, constants, records=deepcopy(self.contexts)
                     )
                 # Declarative constants inherit their producers; the scene function
                 # does not produce them and need not run just to define them.
@@ -435,6 +472,12 @@ class Workflow:
                         if matches_reference(ref, field)
                         for i in indices
                     }
+                    for ref in references(template):
+                        if ref.startswith("collect:"):
+                            dependencies.update(
+                                index for producer in producers for field, indices in producer.items()
+                                if matches_reference("var." + ref[8:], field) for index in indices
+                            )
                     if name != root:
                         dependencies.update(constant_producers.get(root, set()))
                     if contains_pending(constants[name]):
@@ -447,6 +490,7 @@ class Workflow:
                         constant_producers.get(root, set())
                     )
             indices = [None] if scope == "aggregate" else range(len(self.contexts))
+            step_records = deepcopy(self.contexts)
             for record_index in indices:
                 base = deepcopy(
                     self.context if record_index is None else self.contexts[record_index]
@@ -464,12 +508,14 @@ class Workflow:
                 params, updates, current, _ = evaluate_settings(
                     settings,
                     base,
-                    records=self.contexts if record_index is None else None,
+                    records=step_records,
+                    aggregate=record_index is None,
+                    scene_ids=[r["id"] for r in self.records],
                     planning=True,
                     constants=constants if scope == "scene" else None,
                 )
                 if scope == "scene":
-                    updates = {k: v for k, v in updates.items() if k.startswith("var.")}
+                    updates = {k: v for k, v in updates.items() if k not in constants}
                 for name in input_names | output_names:
                     if name not in params:
                         if name in self.shared:
@@ -482,7 +528,11 @@ class Workflow:
                     required=("temp_dir",) if features["output_temporary_cleanup_paths"] else (),
                 )
                 base_dir = roots["output_dir"][0] if roots["output_dir"] else self.config_dir
-                params = _arguments(features, params, current, step["settings"], base_dir)
+                params = _arguments(
+                    features, params, current, step["settings"], base_dir,
+                    scene_ids=[r["id"] for r in self.records] if record_index is None else None,
+                    updates=updates,
+                )
                 for name in output_names & params.keys():
                     if contains_pending(params[name]):
                         raise ValueError(f"Output parameter {name} must resolve during planning")
@@ -522,16 +572,16 @@ class Workflow:
                     )
                 }
                 for ref in references([step["settings"], self.shared]) | directory_refs:
-                    if ref.startswith("collect:"):
-                        key = ref[8:]
+                    if ref.startswith("collect:") or record_index is None and (ref.startswith("var.") or ref == "*"):
+                        key = "var." + ref[8:] if ref.startswith("collect:") else ref
                         for producer in producers:
                             deps.update(
                                 i
                                 for field, indices in producer.items()
-                                if key == "*" or field == "var." + key
+                                if matches_reference(key, field)
                                 for i in indices
                             )
-                    else:
+                    if not ref.startswith("collect:"):
                         deps.update(
                             i
                             for key, indices in available.items()
@@ -563,8 +613,7 @@ class Workflow:
                     file_features=features,
                     directory_locations=deepcopy(self.directory_locations),
                 )
-                if record_index is None:
-                    node.collection_snapshot = deepcopy(self.contexts)
+                node.collection_snapshot = deepcopy(step_records)
                 self.nodes.append(node)
                 path_producers.update(
                     {p: node.index for p in node.paths("output_dependency_paths")}
@@ -579,18 +628,44 @@ class Workflow:
                 }
                 target = constant_producers if record_index is None else producers[record_index]
                 for key in static_roots:
+                    if record_index is None and key.startswith("var."):
+                        for producer in producers:
+                            producer.pop(key, None)
+                        continue
                     target.pop(key, None)
-                target.update({key: {node.index} for key in names})
+                target.update({key: {node.index} for key in names if record_index is not None or key.startswith("const.")})
                 if record_index is None:
+                    update_scene_variables(
+                        self.contexts, updates, [r["id"] for r in self.records]
+                    )
+                    for producer in producers:
+                        producer.update({key: {node.index} for key in names if key.startswith("var.")})
                     self.context = current
                     for scene in self.contexts:
                         scene["const"] = deepcopy(current["const"])
+                    node.collection_result = deepcopy(self.contexts)
                 else:
                     self.contexts[record_index] = current
             if source:
                 self.barrier_index = step_index
                 break
             if scope == "scene":
+                step_nodes = [n for n in self.nodes if n.step_index == step_index]
+                for name in {k for n in step_nodes for k in n.updates if k.startswith("const.")}:
+                    contributors = [n for n in step_nodes if name in n.updates]
+                    known = [n.updates[name] for n in contributors if not contains_pending(n.updates[name])]
+                    if known and any(value != known[0] for value in known[1:]):
+                        raise ValueError(f"{step['name']} {name} has conflicting scene values; use collect: for a shared list or var: for per-scene values")
+                    dynamic = len(known) != len(contributors)
+                    value = Pending(name) if dynamic else known[0]
+                    assign(constant_context["const"], name[6:], value)
+                    root = ".".join(name.split(".")[:2])
+                    if dynamic:
+                        constant_producers.setdefault(root, set()).update(n.index for n in contributors)
+                        for n in contributors:
+                            n.dynamic_names.add(name)
+                    elif not contains_pending(dependency_values(constant_context)[root]):
+                        constant_producers.pop(root, None)
                 self.context["const"] = constant_context["const"]
                 for scene in self.contexts:
                     scene["const"] = deepcopy(constant_context["const"])
@@ -750,7 +825,7 @@ class Workflow:
         bindings = self.constant_steps.get(node.step_index)
         runtime = {
             "const": bindings.runtime_before["const"] if bindings else self.constant_values,
-            "var": self.runtime_values[node.record] if node.record is not None else {},
+            "var": self.runtime_values[node.record] if node.record is not None else self._aggregate_runtime_variables(),
         }
         return _materialize(node.pre_context, runtime)
 
@@ -763,7 +838,10 @@ class Workflow:
         # Only references to pending aggregate results need runtime evaluation.
         frozen = {k: v for k, v in bindings.planned.items() if not contains_pending(v)}
         _, bindings.resolved, _, _ = evaluate_settings(
-            bindings.settings, bindings.runtime_before, constants=frozen
+            bindings.settings, bindings.runtime_before, constants=frozen,
+            records=[_materialize(c, {"const": self.constant_values, "var": values})
+                     for c, values in zip(bindings.records, self.runtime_values)],
+            scene_ids=[r["id"] for r in self.records],
         )
         for name, value in bindings.resolved.items():
             if contains_pending(bindings.planned[name]):
@@ -773,16 +851,32 @@ class Workflow:
         bindings = self.constant_steps.get(node.step_index)
         return bindings.resolved if bindings else None
 
-    def _record_values(self, node=None):
-        contexts = node.collection_snapshot if node is not None else self.contexts
+    def _record_values(self, node=None, *, after=False):
+        contexts = (
+            node.collection_result if after else node.collection_snapshot
+        ) if node is not None else self.contexts
         return [
             _materialize(c, {"const": self.constant_values, "var": values})
             for c, values in zip(contexts, self.runtime_values)
         ]
 
+    def _aggregate_runtime_variables(self):
+        return aggregate_variables([{"var": values} for values in self.runtime_values])
+
     def _publish_values(self, node, values):
         for name, value in values.items():
             scope, field = name.split(".", 1)
+            if scope == "const" and node.record is not None and name in node.updates:
+                previous = self.scene_constant_writes.setdefault(node.step_index, {})
+                if name in previous and previous[name] != value:
+                    raise ValueError(f"{node.step['name']} {name} has conflicting scene values; use collect: for a shared list or var: for per-scene values")
+                previous[name] = deepcopy(value)
+            if scope == "var" and node.record is None:
+                update_scene_variables(
+                    [{"var": item} for item in self.runtime_values],
+                    {name: value}, [r["id"] for r in self.records],
+                )
+                continue
             target = self.constant_values if scope == "const" else self.runtime_values[node.record]
             assign(target, field, value)
 
@@ -791,7 +885,7 @@ class Workflow:
             node.context,
             {
                 "const": self.constant_values,
-                "var": self.runtime_values[node.record] if node.record is not None else {},
+                "var": self.runtime_values[node.record] if node.record is not None else self._aggregate_runtime_variables(),
             },
         )
         plugin = load_plugin(node.step["plugin"])
@@ -807,7 +901,9 @@ class Workflow:
             _, updates, _, _ = evaluate_settings(
                 self._settings(node.step),
                 self._runtime_context(node),
-                records=self._record_values(node) if node.record is None else None,
+                records=self._record_values(node),
+                aggregate=node.record is None,
+                scene_ids=[r["id"] for r in self.records],
                 returned=returned,
                 constants=self._constants(node),
             )
@@ -859,6 +955,15 @@ class Workflow:
             }
         )
         value["values"] = remap_paths(value["values"], replacements)
+        if node.record is None and any(name.startswith("var.") for name in node.dynamic_names):
+            if remap_paths(value.get("scene_ids"), replacements) != [r["id"] for r in self.records]:
+                return None
+            try:
+                for name in node.dynamic_names:
+                    if name.startswith("var."):
+                        scene_values(value["values"][name], [r["id"] for r in self.records], name=name)
+            except ValueError:
+                return None
         if "returned" in value:
             value["returned"] = remap_paths(value["returned"], replacements)
         return value
@@ -869,7 +974,9 @@ class Workflow:
         params, _, context, _ = evaluate_settings(
             self._settings(node.step),
             base,
-            records=self._record_values(node) if node.record is None else None,
+            records=self._record_values(node),
+            aggregate=node.record is None,
+            scene_ids=[r["id"] for r in self.records],
             constants=self._constants(node),
         )
         # Return assignments take effect after invocation. Keep preceding values
@@ -891,7 +998,8 @@ class Workflow:
                 if name in shared:
                     params[name] = shared[name]
         params = _arguments(
-            node.file_features, params, context, node.step["settings"], node.base_dir
+            node.file_features, params, context, node.step["settings"], node.base_dir,
+            scene_ids=[r["id"] for r in self.records] if node.record is None else None,
         )
         output_names = file_parameter_names(node.file_features, "output")
         if _selected(params, output_names) != node.file_arguments(*OUTPUT_PATH_FEATURES):
@@ -942,7 +1050,9 @@ class Workflow:
         _, updates, _, _ = evaluate_settings(
             self._settings(node.step),
             node.runtime_base,
-            records=self._record_values(node) if node.record is None else None,
+            records=self._record_values(node),
+            aggregate=node.record is None,
+            scene_ids=[r["id"] for r in self.records],
             returned=returned,
             constants=self._constants(node),
         )
@@ -958,7 +1068,7 @@ class Workflow:
             accumulated = {}
             runtime = {
                 "const": self.constant_values,
-                "var": self.runtime_values[node.record] if node.record is not None else {},
+                "var": self.runtime_values[node.record] if node.record is not None else self._aggregate_runtime_variables(),
             }
             for step_index, bindings in self.constant_steps.items():
                 if step_index > node.step_index:
@@ -982,7 +1092,8 @@ class Workflow:
                 {
                     **({"returned": returned} if source else {}),
                     "values": accumulated,
-                    "files": node.file_arguments(*OUTPUT_PATH_FEATURES),
+                    "scene_ids": [r["id"] for r in self.records] if node.record is None else None,
+                    "files": node.file_arguments(*INPUT_PATH_FEATURES, *OUTPUT_PATH_FEATURES),
                     "directories": node.directory_bindings,
                 },
             )
@@ -1133,14 +1244,14 @@ class Workflow:
             return
         runtime = {
             "const": self.constant_values,
-            "var": self.runtime_values[node.record] if node.record is not None else {},
+            "var": self.runtime_values[node.record] if node.record is not None else self._aggregate_runtime_variables(),
         }
         context = available_context(_materialize(node.context, runtime))
         if node.record is None and self.records:
             # Aggregate outputs share the final constants, with one context per scene.
-            for scene in self._record_values(node):
+            for scene in self._record_values(node, after=True):
                 scene["const"] = deepcopy(context["const"])
-                self._append_metadata(available_context(scene), records=self._record_values(node))
+                self._append_metadata(available_context(scene), records=self._record_values(node, after=True))
         else:
             self._append_metadata(context)
         self._exported_nodes.add(key)
@@ -1248,6 +1359,6 @@ class Workflow:
         for record, context in zip(self.records, self._record_values()):
             record["context"] = available_context(context)
         self.context = available_context(
-            _materialize(self.context, {"const": self.constant_values, "var": {}})
+            _materialize(self.context, {"const": self.constant_values, "var": self._aggregate_runtime_variables()})
         )
         return self.records

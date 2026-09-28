@@ -143,7 +143,7 @@ def test_shared_arguments_precedence_and_context_snapshots(recipe, monkeypatch):
 @pytest.mark.parametrize(
     "scope,assignment,error",
     [
-        ("aggregate", "var:scale", "aggregate steps write const:"),
+        ("aggregate", "var:scale", "Invalid JSONata expression"),
     ],
 )
 def test_scope_write_validation_and_disabled_noop(recipe, monkeypatch, scope, assignment, error):
@@ -168,13 +168,17 @@ def test_scope_write_validation_and_disabled_noop(recipe, monkeypatch, scope, as
         {"nested": ["returned:value"]},
     ],
 )
-def test_scene_constants_reject_scene_dependencies_and_disabled_steps_skip_validation(
+def test_scene_constants_accept_scene_values_returns_and_collections(
     recipe, monkeypatch, template
 ):
-    install_function(monkeypatch, "example", lambda: None)
+    install_function(monkeypatch, "example", lambda: {"value": "shared"})
     recipe["example"] = {"plugin": 'example', "core:run": True, "const:label": template}
-    with pytest.raises(ValueError, match="cannot depend on a scene"):
-        Workflow(recipe)
+    workflow = Workflow(recipe)
+    workflow.run()
+    expected = resolve(template, workflow.records[0]["context"],
+                       records=[r["context"] for r in workflow.records], returned={"value": "shared"})
+    assert workflow.context["const"]["label"] == expected
+    assert all(r["context"]["const"]["label"] == expected for r in workflow.records)
     recipe["example"]["core:run"] = False
     workflow = Workflow(recipe)
     workflow.run()
@@ -358,11 +362,11 @@ def test_static_scene_constants_do_not_require_running_cached_functions(recipe, 
     assert workflow.context["const"]["scale"] == 3
 
 
-@pytest.mark.parametrize("value", ["returned:basename", "var:basename", "expr:var.basename"])
-def test_import_constants_cannot_depend_on_a_scene(recipe, value):
+@pytest.mark.parametrize("value", ["var:basename", "expr:var.basename", "collect:basename"])
+def test_import_constants_can_collect_newly_mapped_scenes(recipe, value):
     recipe["import_files"]["const:label"] = value
-    with pytest.raises(ValueError, match="[Uu]ndefined|var is unavailable"):
-        Workflow(recipe)
+    workflow = Workflow(recipe)
+    assert workflow.context["const"]["label"] == ["same", "same"]
 
 
 def test_old_meta_assignment_is_rejected(recipe):

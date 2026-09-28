@@ -78,7 +78,7 @@ copy_products:
   var:copied_bytes: returned:bytes
 ```
 
-Later steps can read `var:copied` and `var:copied_bytes`. JSONata sees `{"const": {...}, "var": {...}}`: constants belong to the workflow, variables to a scene. Scene plugins write `var:` and may define `const:` from literals, other constants, or JSONata expressions without `var`. Such constants resolve once per step, and cannot use `collect:` or scene `returned:` values. An adapter with `scope = "aggregate"` runs once, reads collections through `collect:image` or `collect:$`, and writes `const:` for later plugins. `shared` and `import_files` can initialize constants. Disabled steps do nothing and export no values; all steps default to disabled.
+Later steps can read `var:copied` and `var:copied_bytes`. JSONata sees `{"const": {...}, "var": {...}}`: constants belong to the workflow, variables to a scene. Scene and aggregate plugins can assign either scope, including from returned values. An adapter with `scope = "aggregate"` runs once; its `var:` assignments must map exactly one value to each scene. Both scopes support `collect:image` or `collect:$` after discovery. Scene-independent constants resolve once per step; constants derived separately by scene invocations must agree. See [assigning shared and scene values](#assigning-shared-and-scene-values) below. Disabled steps do nothing and export no values; all steps default to disabled.
 
 ```bash
 vhr my_copy --config recipe.yml
@@ -175,3 +175,7 @@ setup_values:
 ```
 
 Only `plugin: shared` is a core-provided special implementation. It defines workflow defaults, not a callable processing function or CLI command. Pluginless steps cannot have `param:` or `returned:` values. Ordinary registered plugins require no core changes.
+
+### Assigning shared and scene values
+
+Plugins need no extra declaration to write either scope through YAML. `const:` stores a shared JSON value; `var:` stores one value per scene. In aggregate steps, `var:` assignments must be lists matching scene count or dictionaries keyed by exactly the current scene IDs. Core distributes them in scene order and rejects unmappable results, including after a `returned:` assignment. `collect:name` reads all current scene values and can also be passed by scene steps. Scene invocations writing the same shared constant must agree; use `const:values: collect:name` to preserve different scene values as a shared list.
