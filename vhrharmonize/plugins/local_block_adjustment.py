@@ -1,6 +1,7 @@
 """local_block_adjustment: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,6 +10,7 @@ def _upstream():
     return local_block_adjustment
 
 
+@reports_progress
 def local_block_adjustment(*args, **kwargs):
     """Call SpectralMatch's local_block_adjustment with its native parameters."""
 
@@ -23,7 +25,7 @@ def local_block_adjustment(*args, **kwargs):
     ):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 local_block_adjustment.__parameter_sources__ = (_upstream,)

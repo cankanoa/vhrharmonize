@@ -1,6 +1,7 @@
 """joint_coregistration: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,13 +10,14 @@ def _upstream():
     return joint_coregistration
 
 
+@reports_progress
 def joint_coregistration(*args, **kwargs):
     """Call SpectralMatch's joint_coregistration with its native parameters."""
 
     for name in ("dask_scheduler", "resolution", "window_scales"):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 joint_coregistration.__parameter_sources__ = (_upstream,)

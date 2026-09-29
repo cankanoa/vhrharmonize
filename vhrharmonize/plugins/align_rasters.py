@@ -1,6 +1,7 @@
 """align_rasters: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,13 +10,14 @@ def _upstream():
     return align_rasters
 
 
+@reports_progress
 def align_rasters(*args, **kwargs):
     """Call SpectralMatch's align_rasters with its native parameters."""
 
     for name in ("dask_scheduler", "resolution"):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 align_rasters.__parameter_sources__ = (_upstream,)

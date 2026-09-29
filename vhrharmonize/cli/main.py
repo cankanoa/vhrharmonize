@@ -30,6 +30,7 @@ def main(argv=None):
         "hpc-upload": slurm.upload_slurm_files,
         "hpc-start": slurm.start_slurm_job,
         "hpc-status": slurm.update_status_slurm_file,
+        "hpc-progress": slurm.get_slurm_progress,
         "hpc-stop": slurm.stop_slurm_job,
         "hpc-close": slurm.close_hpc_connection,
         "hpc-download": slurm.download_slurm_outputs,

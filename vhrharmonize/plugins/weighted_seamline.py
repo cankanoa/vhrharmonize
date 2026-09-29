@@ -1,6 +1,7 @@
 """weighted_seamline: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,10 +10,11 @@ def _upstream():
     return weighted_seamline
 
 
+@reports_progress
 def weighted_seamline(*args, **kwargs):
     """Call SpectralMatch's weighted_seamline with its native parameters."""
 
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 weighted_seamline.__parameter_sources__ = (_upstream,)

@@ -137,6 +137,7 @@ def test_dask_prioritizes_downstream_work_and_resolves_scene_returns(monkeypatch
 
     recipe, events = pipeline(monkeypatch, "vertical")
     recipe["defaults"].update({"core:concurrent_processing_backend": "dask",
+                              "core:show_progress": False,  # Scheduling-only client stub.
                               "core:dask_scheduler_address": "tcp://scheduler:8786"})
     priorities = []
 

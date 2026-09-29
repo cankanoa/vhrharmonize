@@ -202,7 +202,7 @@ def test_hpc_staging_rewrites_metadata_roots(recipe, tmp_path):
 
 
 def test_all_hpc_commands_have_config_generated_from_python_signature(capsys):
-    for command in ["prepare", "upload", "start", "status", "stop", "close", "download"]:
+    for command in ["prepare", "upload", "start", "status", "progress", "stop", "close", "download"]:
         with pytest.raises(SystemExit) as help_result:
             main(["hpc-" + command, "--help"])
         assert help_result.value.code == 0

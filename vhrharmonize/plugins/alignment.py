@@ -8,13 +8,14 @@ from typing import Any
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
+from vhrharmonize.io.progress import call_with_progress
 
 
 def coregix_align_image_pair(**kwargs):
     """Load the optional registration backend only when alignment runs."""
     from coregix import align_image_pair
 
-    return align_image_pair(**kwargs)
+    return call_with_progress(align_image_pair, **kwargs)
 
 
 @dataclass

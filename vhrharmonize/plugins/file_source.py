@@ -3,8 +3,10 @@
 from pathlib import Path
 import shutil
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import progress, reports_progress
 
 
+@reports_progress(worker_progress=True)
 def copy_file(input_path: str, output_path: str, companions=None):
     """Copy input and companions to the explicitly supplied output path."""
     if not output_path:
@@ -12,7 +14,7 @@ def copy_file(input_path: str, output_path: str, companions=None):
     output_path = str(output_path)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(input_path, output_path)
-    for source in companions or []:
+    for source in progress(companions or [], desc="Copying companion files", unit="files"):
         source = Path(source)
         # Companion extensions follow the copied raster stem.
         destination = Path(output_path).with_suffix(source.suffix)

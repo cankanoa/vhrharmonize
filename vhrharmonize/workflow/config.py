@@ -42,6 +42,8 @@ DEFAULT_SHARED = {
     "delete_temp_dir": False,
     "delete_temp_steps_proactively": True,
     "log_to_console": True,
+    "show_progress": True,
+    "report_progress": False,
     "concurrent_processing": 1,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
@@ -59,6 +61,8 @@ BOOLEANS = {
     "delete_temp_dir",
     "delete_temp_steps_proactively",
     "log_to_console",
+    "show_progress",
+    "report_progress",
 }
 
 

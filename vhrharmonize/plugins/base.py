@@ -169,5 +169,8 @@ class FunctionPlugin:
         return kwargs
 
     def run(self, *, params, shared):
+        from vhrharmonize.io.progress import reports_progress
+
         function = self.function()
+        function = reports_progress(function)
         return json_value(function(**self.arguments(function, params, shared)))

@@ -11,6 +11,7 @@ from rasterio.vrt import WarpedVRT
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
+from vhrharmonize.io.progress import raster_windows
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,8 @@ class CloudMaskResult:
 
 
 @_logged_operation(
-    "cloud_mask", inputs=("input_image_path",), outputs=("output_raster_path", "output_mask_path")
+    "cloud_mask", inputs=("input_image_path",), outputs=("output_raster_path", "output_mask_path"),
+    worker_progress=True,
 )
 def cloudmask_raster(
     input_image_path: str,
@@ -82,7 +84,7 @@ def cloudmask_raster(
 
     mask_pixel_count = 0
     with rasterio.open(output_mask_path) as src:
-        for _, window in src.block_windows(1):
+        for _, window in raster_windows(src, desc="Counting cloud pixels"):
             block = src.read(1, window=window)
             mask_pixel_count += int((block == cloud_mask_value).sum())
 
@@ -165,7 +167,7 @@ def _build_cloud_binary_mask(
     return binary_mask.astype(np.uint8)
 
 
-@_logged_operation("cloud_mask", inputs=("input_image_path",), outputs=("output_mask_path",))
+@_logged_operation("cloud_mask", inputs=("input_image_path",), outputs=("output_mask_path",), worker_progress=True)
 def create_cloud_mask_with_omnicloudmask(
     input_image_path: str,
     output_mask_path: str,
@@ -326,6 +328,7 @@ def create_cloud_mask_with_omnicloudmask(
     "apply_cloud_mask",
     inputs=("input_image_path", "cloud_mask_path"),
     outputs=("output_image_path",),
+    worker_progress=True,
 )
 def apply_binary_cloud_mask_to_image(
     input_image_path: str,
@@ -381,7 +384,7 @@ def apply_binary_cloud_mask_to_image(
         )
         _ensure_parent_dir(output_image_path)
         with rasterio.open(output_image_path, "w", **profile) as dst:
-            for _, window in src.block_windows(1):
+            for _, window in raster_windows(src, desc="Applying cloud mask"):
                 mask_block = mask_reader.read(1, window=window)
                 cloud_pixels = mask_block == cloud_mask_value
                 data_block = src.read(window=window)

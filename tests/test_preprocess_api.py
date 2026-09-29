@@ -224,7 +224,7 @@ def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(atmos_mod, "ProcessPoolExecutor", _Executor)
     monkeypatch.setattr(atmos_mod, "as_completed", lambda futures: futures)
-    monkeypatch.setattr(atmos_mod, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(atmos_mod, "progress", lambda it, **kwargs: it)
     assert parallel_flaash([({"OUTPUT_RASTER_URI": "a.tif"}, "p.txt")], object()) == ["a.tif"]
     monkeypatch.setattr(
         atmos_mod.Py6SCorrector,

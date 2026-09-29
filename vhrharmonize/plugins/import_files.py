@@ -10,6 +10,7 @@ from wcmatch import glob
 from vhrharmonize.io.metadata import read_metadata
 from vhrharmonize.workflow.values import path, resolve
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import progress, reports_progress
 
 FLAGS = glob.GLOBSTAR | glob.BRACE | glob.EXTGLOB | glob.GLOBTILDE | glob.NEGATE
 _RESERVED_FIELDS = {"scene_id", "file_path", "source_paths", "temp_dir", "output_dir"}
@@ -57,6 +58,7 @@ def _scene_id(value):
     return value
 
 
+@reports_progress(worker_progress=True)
 def import_file(
     file_path: str, *, scene_id: str = "var:file_path", create_metadata_json: dict | None = None
 ) -> dict:
@@ -81,6 +83,7 @@ def import_file(
     return item
 
 
+@reports_progress(worker_progress=True)
 def import_files(
     search_glob,
     *,
@@ -156,7 +159,7 @@ def import_files(
     published = directories({}, base_dir, "const")
     scenes = []
     seen_ids = set()
-    for filename in files:
+    for filename in progress(files, desc="Importing files", unit="files"):
         item = {"file_path": filename, "source_paths": [filename]}
         context = {"var": item}
         item.update(directories(context, str(Path(filename).parent), "var"))

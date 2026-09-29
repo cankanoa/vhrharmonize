@@ -1,4 +1,4 @@
-"""The editable recipe documents every public function parameter and its defaults."""
+"""The editable recipe documents YAML-configurable function parameters and defaults."""
 
 import importlib
 import inspect
@@ -54,7 +54,8 @@ def test_worldview_documents_every_public_plugin_parameter(plugin, functions):
     module = importlib.import_module("vhrharmonize.plugins." + plugin)
     documented = documented_plugin_keys()[plugin]
     for name in functions:
-        assert set(function_parameters(getattr(module, name))) <= documented
+        # Python callbacks are supplied by core and documented in the Python API.
+        assert set(function_parameters(getattr(module, name))) - {"progress_callback"} <= documented
 
 
 def test_worldview_retains_all_supported_flaash_task_parameters():
@@ -71,6 +72,8 @@ def test_spectralmatch_commented_defaults_match_the_installed_api(name):
     text = "\n".join(plugin_sections()[name])
     function = getattr(importlib.import_module("vhrharmonize.plugins." + name), name)
     for key, parameter in function_parameters(function).items():
+        if key == "progress_callback":
+            continue  # A Python callable is not a YAML configuration option.
         line = re.search(r"^  (#\s*)?param:" + key + r": (.*?) # (.*)$", text, re.MULTILINE)
         assert line, f"{name}.{key} needs a value and a concise options/default comment"
         if parameter.default is inspect.Parameter.empty:

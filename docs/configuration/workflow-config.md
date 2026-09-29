@@ -342,6 +342,8 @@ Shared runner controls are:
 | `delete_temp_dir` | `false` |
 | `delete_temp_steps_proactively` | `true` |
 | `log_to_console` | `true` |
+| `show_progress` | `true` |
+| `report_progress` | `false` |
 | `processing_direction` | `vertical` |
 | `concurrent_processing` | `1` |
 | `concurrent_processing_backend` | `process_pool` |
@@ -350,6 +352,34 @@ Shared runner controls are:
 The engine implements these controls; plugin functions do **not** need to accept them all. There is no mandatory set of raster parameters such as `custom_nodata_value`, `output_dtype`, `epsg` or `window_scales`. Functions accept the settings they support. Raster options use SpectralMatch names such as `custom_nodata_value`, `output_dtype` and `window_scales`. Native utilities that use `custom_output_dtype` retain that name; set it directly when overriding their dtype. The engine additionally uses shared `param:window_scales` when `core:calculate_overviews` requests raster overviews. Per-step `core:reuse` and `core:check_validity` override shared reuse/validation. Raster validation checks readability/TIFF bounds; JSON validation checks syntax.
 
 The planner follows file and runtime-variable dependencies backward from deliverables. A cached cloudmasked image can feed alignment even when correction, orthorectification and pansharpen temporary files are absent. Static suffixes/constants do not force upstream recomputation. Non-temporary outputs selected by `output_target_paths` remain requested deliverables; `core:required: true` additionally requests temporary products. `loaded` counts reusable outputs, `processing` counts required work and `unused` counts bypassed nodes; a loaded node can also be unused. `pending: 1` marks a step awaiting scenes from a runtime scene-setting function, so its invocation count is not yet known.
+
+With `core:log_to_console: true` and the dashboard disabled, the scheduler logs `[scene_id core:step_name] Start current/processing/total` immediately before each function call or worker submission. `current` is the dispatch number for this step, `processing` is the number of calls needed in this run, and `total` includes cached and unused calls. Aggregate steps count function calls, so a single call handling many images has a total of one. These are start counters; concurrent calls can finish in a different order. Single-image operation logs end with `Completed` without a separate counter.
+
+### Live progress dashboard
+
+The dashboard is enabled by default. Its setting can be overridden in a shared block:
+
+```yaml
+shared:
+  plugin: shared
+  core:run: true
+  core:show_progress: true
+```
+
+Set `core:show_progress: false` to disable the Rich frontend. `core:report_progress: true` collects progress and writes snapshots without a display; `show_progress: true` implies reporting. With both controls disabled and no Python progress callback or explicit snapshot path, ordinary console logging is used. Logging controls remain independent: `core:log_to_console` controls core messages, while plugin messages follow `param:log_to_console`.
+
+In an interactive terminal, Rich keeps a recent-message panel above a table of steps and active operations. Rows use the **configured step name**, including repeated uses of the same plugin. Core-generated overviews have a separate `<step name> / overviews` row. `(no cb)` beside a name means detailed worker callbacks are unavailable; core still tracks that step's starts, completions and elapsed time. On smaller terminals, active steps take priority and an omitted-row count appears; the total always includes every row. The terminal is restored on exit and a final summary remains. Redirected output (including Slurm log files) receives a single plain final summary without terminal animation.
+
+The columns are:
+
+- **Unused, Done, Run, All:** four separate columns, each displaying `count(percentage of All)`. Unused means scenes the planner does not need for this step. Done means successful completions **during this run**, excluding previously completed outputs. Run is all work selected for this run, including Done; it does not decrease as work finishes. All is the full planned scene count, including reused and unused scenes. These columns overlap rather than partitioning All: Done is a subset of Run, and reused outputs can also be unused. Aggregate calls represent the current scene batch; their Done count advances by the batch size only after successful validation. Overview rows count raster files. Steps after runtime scene discovery show `waiting` in ETA until their counts are known.
+- **Progress:** a gray segment on the left represents reused work, followed by green completions from this run. The full bar represents All, so cached scenes keep their proportion across steps. Unprocessed, bypassed scenes remain dark. Forced reprocessing does not count old outputs as reused. Percentages appear only in the count columns; the bars have no percentage labels or bottom legend.
+- **Active:** function calls currently executing, excluding queued submissions. The top `total` row sums the counts and active calls below it.
+- **ETA:** approximate remaining work based on completed-call durations. Per-step estimates use observed concurrency; the total combines remaining work and divides by available workflow workers (Dask worker threads for Dask). Estimates show `estimating…` until each unfinished type of work has timing samples. Dependencies, unequal scene sizes and changing concurrency can change the estimate. Cached scenes do not enter timing samples.
+
+The active-operation panel uses tqdm-style callback snapshots for tile, band, point or image progress, with its own elapsed time and ETA. Backends without progress hooks report their phase and elapsed time with an indeterminate bar. Worker processes send events to core rather than creating their own terminal displays. See [function progress callbacks](../api/io-logging.md) for the Python interface.
+
+When running a YAML file with reporting enabled, core writes `<workflow.yml>.progress.json` beside that file. The snapshot is replaced atomically at most once per second, with initial and final updates on success or failure. `vhr hpc-status --config <staged.hpc.yml>` fetches the snapshot through `get_slurm_progress()` and gives it to the same Rich frontend for a static display. This works while Slurm output is redirected. Snapshots from a different Slurm job ID are ignored, and the displayed timestamp identifies the last update. The staged HPC YAML retains the fetched data under `workflow_progress`. Apps can receive the same versioned data through a Python callback, `Workflow.get_progress()`, the JSON file, or the HPC accessor; see the [progress API](../api/progress.md).
 
 Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under `const.temp_dir`**. It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
 

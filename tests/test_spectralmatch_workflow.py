@@ -41,7 +41,7 @@ def test_every_public_function_has_a_delegating_plugin(name, monkeypatch):
     native = module._upstream()
     function = getattr(module, name)
     params = function_parameters(function)
-    assert set(inspect.signature(native).parameters) == set(params)
+    assert set(inspect.signature(native).parameters) - {"progress_callback"} == set(params) - {"progress_callback"}
     supplied = {
         key: "example" for key, value in params.items() if value.default is inspect.Parameter.empty
     }

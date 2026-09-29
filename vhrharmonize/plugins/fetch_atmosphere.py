@@ -13,6 +13,7 @@ import requests
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
+from vhrharmonize.io.progress import progress
 
 
 @dataclass
@@ -125,7 +126,7 @@ def _fetch_power_daily_point(
     }
 
 
-@_logged_operation("fetch_atmosphere", inputs=(), outputs=())
+@_logged_operation("fetch_atmosphere", inputs=(), outputs=(), worker_progress=True)
 def fetch_power_atmosphere_for_bbox(
     *,
     day_utc: date,
@@ -160,7 +161,7 @@ def fetch_power_atmosphere_for_bbox(
         aod_vals: List[float] = []
         wv_vals: List[float] = []
         oz_vals: List[float] = []
-        for lon, lat in points:
+        for lon, lat in progress(points, desc=f"Fetching atmosphere for {query_day}", unit="points"):
             item = _fetch_power_daily_point(
                 query_day,
                 lon,
@@ -542,7 +543,7 @@ def _visibility_from_aod(aod: float) -> float:
     return 5.0
 
 
-@_logged_operation("fetch_atmosphere", inputs=(), outputs=())
+@_logged_operation("fetch_atmosphere", inputs=(), outputs=(), worker_progress=True)
 def fetch_modis_water_vapor_for_bbox(
     *,
     scene_datetime_utc: datetime,

@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 import numpy as np
 import rasterio
 from shapely.geometry.base import BaseGeometry
-from tqdm import tqdm
+from vhrharmonize.io.progress import current_callback, progress, raster_windows, reports_progress
+from vhrharmonize.io.progress_transport import local_worker_progress
 
 from vhrharmonize.io.geospatial import get_image_percentile_value
 from vhrharmonize.io.workflow_utils import remove_output_files
@@ -95,7 +96,7 @@ def _py6s_aerosol_profile(AeroProfile: Any, value: str) -> Any:
     return AeroProfile.PredefinedType(mapping[key])
 
 
-@_logged_operation("atmospheric_correction", inputs=("input_raster",), outputs=("output_raster",))
+@_logged_operation("atmospheric_correction", inputs=("input_raster",), outputs=("output_raster",), worker_progress=True)
 def run_py6s(
     input_raster: str,
     output_raster: str,
@@ -330,7 +331,7 @@ class Py6SCorrector:
             input_gcps, input_gcps_crs = src.gcps
 
             coeffs = []
-            for band_idx in range(src.count):
+            for band_idx in progress(range(src.count), desc="Calculating Py6S coefficients", unit="bands"):
                 s.wavelength = Wavelength(float(band_wavelengths_um[band_idx]))
                 s.run()
                 coeffs.append(
@@ -357,7 +358,7 @@ class Py6SCorrector:
                         if dn_to_radiance_offsets is not None
                         else 0.0
                     )
-                    for _, window in src.block_windows(band_idx):
+                    for _, window in raster_windows(src, band_idx, desc=f"Correcting band {band_idx}"):
                         in_block = src.read(band_idx, window=window).astype(np.float32)
                         mask = src.read_masks(band_idx, window=window) > 0
                         if nodata is not None:
@@ -558,6 +559,7 @@ def _execute_flaash_task(
     _log("Wrote output", enabled=log_to_console, step="flaash")
 
 
+@reports_progress
 def _run_flaash_wrapper(args: tuple[Dict[str, Any], str, Any]) -> str:
     """Executor wrapper for FLAASH grid runs."""
     test_params, test_output_params_path, envi_engine = args
@@ -565,6 +567,7 @@ def _run_flaash_wrapper(args: tuple[Dict[str, Any], str, Any]) -> str:
     return test_params["OUTPUT_RASTER_URI"]
 
 
+@reports_progress(worker_progress=True)
 def parallel_flaash(
     test_flaash_params_array: List[tuple[Dict[str, Any], str]],
     envi_engine: Any,
@@ -577,9 +580,13 @@ def parallel_flaash(
         for test_params, test_output_params_path in test_flaash_params_array
     ]
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_run_flaash_wrapper, task) for task in tasks]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="FLAASH"):
+    with (
+        local_worker_progress(current_callback(), processes=True) as reporter,
+        ProcessPoolExecutor(max_workers=max_workers) as executor,
+    ):
+        callback_kwargs = {"progress_callback": reporter} if reporter is not None else {}
+        futures = [executor.submit(_run_flaash_wrapper, task, **callback_kwargs) for task in tasks]
+        for future in progress(as_completed(futures), total=len(futures), desc="FLAASH", disable=False):
             output_uri = future.result()
             all_output_paths.append(output_uri)
 
@@ -717,6 +724,7 @@ def run_flaash(
 # ---------------------------------------------------------------------------
 
 
+@reports_progress(worker_progress=True)
 def atmospheric_correction(
     input_raster: str, output_raster: str, method: str = "flaash", **kwargs: Any
 ) -> str:

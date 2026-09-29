@@ -1,9 +1,67 @@
 from pathlib import Path
+import json
+from types import SimpleNamespace
 import shutil
 import yaml
 from vhrharmonize.slurm import prepare_slurm_plan
 from vhrharmonize.workflow.config import load_config
 from vhrharmonize.workflow.engine import Workflow
+
+
+def test_hpc_status_prints_saved_workflow_progress(tmp_path, monkeypatch, capsys):
+    from vhrharmonize import slurm
+
+    filename = tmp_path / "hpc.yml"
+    config = {"submitted_job_id": "123", "remote_workflow_config": "/remote/my recipe.yml"}
+    filename.write_text(yaml.safe_dump(config))
+    row = {
+        "name": "alignment", "unused": 44, "done": 20, "run": 40, "all": 264, "reused": 180,
+        "percentages": {key: 100 * n / 264 for key, n in
+                        {"unused": 44, "done": 20, "run": 40, "all": 264, "reused": 180}.items()},
+        "fraction_done": 0.5, "active": 1, "pending": False, "worker_progress": True,
+        "status": "running", "eta_seconds": 180,
+    }
+    snapshot = {
+        "version": 2, "run_id": "test-run", "job_id": "123", "status": "running", "updated_at": "2026-09-29T12:00:00Z",
+        "rows": [row], "total": {**row, "name": "total"},
+        "messages": ["Alignment wrote output.tif"],
+        "active": [{"task_id": "1:0", "step": "alignment", "scene": "P004", "eta_seconds": 40, "stats": {
+            "prefix": "matching tiles", "n": 120, "total": 200, "unit": "tiles", "elapsed": 60, "rate": 2,
+        }}],
+    }
+    commands = []
+
+    def ssh(data, command, **kwargs):
+        commands.append(command)
+        text = json.dumps(snapshot) if command.startswith("cat ") else "JobState=RUNNING"
+        return SimpleNamespace(stdout=text, stderr="", returncode=0)
+
+    monkeypatch.setattr(slurm, "_run_ssh", ssh)
+    original = filename.read_bytes()
+    assert slurm.get_slurm_progress(str(filename)) == snapshot
+    assert filename.read_bytes() == original
+    assert capsys.readouterr().out == ""
+    from vhrharmonize.cli.main import main
+
+    assert main(["hpc-progress", "--config", str(filename)]) == 0
+    assert json.loads(capsys.readouterr().out) == snapshot
+    assert filename.read_bytes() == original
+    result = slurm.update_status_slurm_file(str(filename))
+    output = capsys.readouterr().out
+    assert "cat '/remote/my recipe.yml.progress.json'" in commands
+    assert result["workflow_progress"] == snapshot
+    assert "Unused" in output and "20(8%)" in output and "264(100%)" in output
+    assert "matching tiles" in output and "120 / 200 tiles" in output
+    assert "Alignment wrote output.tif" in output and "gray: reused" not in output
+    assert "\x1b[" not in output
+    # A new Slurm submission cannot reuse the previous job's saved snapshot.
+    config["submitted_job_id"] = "456"
+    assert slurm.get_slurm_progress(config) is None
+    config["submitted_job_id"] = "123"
+    snapshot["active"] = [{"stats": "malformed"}]
+    assert slurm.get_slurm_progress(config) is None
+    snapshot["version"] = -1
+    assert slurm.get_slurm_progress(config) is None
 
 
 def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make_test_raster):

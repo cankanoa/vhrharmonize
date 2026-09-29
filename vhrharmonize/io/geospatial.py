@@ -11,6 +11,7 @@ from shapely.geometry import mapping
 
 
 from vhrharmonize.io.logging import _logged_operation
+from vhrharmonize.io.progress import operation, progress, reports_progress
 
 
 @_logged_operation("overviews", inputs=("input_image_path",), outputs=("input_image_path",), allow_nested=True)
@@ -45,11 +46,13 @@ def calculate_raster_overviews(
         return input_image_path
 
     with rasterio.open(input_image_path, "r+") as dataset:
-        dataset.build_overviews(factors, rasterio.enums.Resampling[resampling])
+        with operation("Building overviews"):
+            dataset.build_overviews(factors, rasterio.enums.Resampling[resampling])
         dataset.update_tags(ns="rio_overview", resampling=resampling)
     return input_image_path
 
 
+@reports_progress(worker_progress=True)
 def get_image_percentile_value(
     input_image_path: str,
     percentile: float = 50.0,
@@ -80,7 +83,7 @@ def get_image_percentile_value(
         else:
             geometries = None
 
-        for i in range(1, src.count + 1):
+        for i in progress(range(1, src.count + 1), desc="Sampling raster", unit="bands"):
             if geometries:
                 band_array, _ = rasterio.mask.mask(src, geometries, indexes=i, filled=False)
             else:

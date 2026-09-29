@@ -20,6 +20,8 @@ from vhrharmonize.workflow.concurrency import (
 )
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _log_image_completed, _log_image_start, _log_step_start
+from vhrharmonize.io.progress import current_callback, gdal_progress, progress, reports_progress
+from vhrharmonize.io.progress_transport import local_worker_progress, dask_worker_progress
 from vhrharmonize.io.metadata import materialize_geometry
 
 
@@ -41,7 +43,7 @@ def _valid_data_polygon_from_image(path: str, *, eight_connected: bool = True) -
     layer.CreateField(ogr.FieldDefn("val", ogr.OFTInteger))
 
     options = ["8CONNECTED=8"] if eight_connected else None
-    if gdal.Polygonize(mask, None, layer, 0, options=options, callback=None) != gdal.CE_None:
+    if gdal.Polygonize(mask, None, layer, 0, options=options, callback=gdal_progress("Polygonizing valid data")) != gdal.CE_None:
         raise RuntimeError(f"Cannot polygonize valid-data mask: {path}")
 
     layer.ResetReading()
@@ -82,6 +84,7 @@ def _valid_data_polygon_from_image(path: str, *, eight_connected: bool = True) -
     return geometry
 
 
+@reports_progress(worker_progress=True)
 def _calculate_seamline_metadata_geometry(
     image_path: str,
     source_metadata: Mapping[str, Any],
@@ -152,11 +155,14 @@ def _iter_seamline_metadata_results(
         )
         futures = []
         try:
-            futures = [
-                client.submit(_calculate_seamline_metadata_geometry, *task) for task in tasks
-            ]
-            for future in dask_as_completed(futures):
-                yield future.result()
+            with dask_worker_progress(current_callback(), client) as reporter:
+                callback_kwargs = {"progress_callback": reporter} if reporter is not None else {}
+                futures = [
+                    client.submit(_calculate_seamline_metadata_geometry, *task, **callback_kwargs)
+                    for task in tasks
+                ]
+                for future in dask_as_completed(futures):
+                    yield future.result()
         except BaseException:
             if futures:
                 client.cancel(futures)
@@ -167,9 +173,14 @@ def _iter_seamline_metadata_results(
         for task in tasks:
             yield _calculate_seamline_metadata_geometry(*task)
     else:
-        with ProcessPoolExecutor(max_workers=min(worker_count, len(tasks))) as executor:
+        with (
+            local_worker_progress(current_callback(), processes=True) as reporter,
+            ProcessPoolExecutor(max_workers=min(worker_count, len(tasks))) as executor,
+        ):
+            callback_kwargs = {"progress_callback": reporter} if reporter is not None else {}
             futures = [
-                executor.submit(_calculate_seamline_metadata_geometry, *task) for task in tasks
+                executor.submit(_calculate_seamline_metadata_geometry, *task, **callback_kwargs)
+                for task in tasks
             ]
             try:
                 for future in as_completed(futures):
@@ -241,6 +252,7 @@ def _write_seamline_metadata_record(datasource, output_layer, record, geometry):
         raise
 
 
+@reports_progress(worker_progress=True)
 def write_seamline_metadata_gpkg(
     image_paths: List[str],
     output_path: str,
@@ -327,7 +339,7 @@ def write_seamline_metadata_gpkg(
                 epsg,
                 record["scene_basename"],
                 output_path,
-                log_to_console,
+                log_to_console and current_callback() is None,
             )
         )
 
@@ -345,7 +357,9 @@ def write_seamline_metadata_gpkg(
     )
     datasource = output_layer = None
     try:
-        for completed, (image_basename, geometry) in enumerate(results, start=1):
+        for completed, (image_basename, geometry) in enumerate(
+            progress(results, total=len(tasks), desc="Writing footprints", unit="images"), start=1
+        ):
             if datasource is None:
                 datasource, output_layer = _open_seamline_metadata_writer(
                     output_path,

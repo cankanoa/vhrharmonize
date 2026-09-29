@@ -45,6 +45,7 @@ dependencies = [
     "requests>=2.32.3",
     "pyproj>=3.7",
     "tqdm",
+    "rich>=13.7",
     "wcmatch>=10.0",
 ]
 

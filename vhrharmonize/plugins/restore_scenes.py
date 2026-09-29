@@ -4,12 +4,14 @@ from copy import deepcopy
 import os
 from vhrharmonize.workflow.values import assign, lookup, path, remap_paths
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import progress, reports_progress
 
 
+@reports_progress(worker_progress=True)
 def restore_scenes(records: list[dict], directory_locations: dict | None = None) -> dict:
     """Return saved scene variables and their declared file bookkeeping."""
     scenes = []
-    for original in records:
+    for original in progress(records, desc="Restoring scenes", unit="scenes"):
         record = deepcopy(original)
         expanded_paths = {p: os.path.expanduser(p) for p in record.get("file_paths", [])}
         variables = remap_paths(record["context"]["var"], expanded_paths)

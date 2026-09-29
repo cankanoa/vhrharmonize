@@ -163,12 +163,16 @@ class SeamlineMetadataTests(unittest.TestCase):
             dataset = None
             states.append(self.state(image_path))
         self.kwargs["concurrent_processing"] = 2
+        snapshots = []
+        self.kwargs["progress_callback"] = lambda **stats: snapshots.append(stats)
         with patch.object(seamline_metadata, "ProcessPoolExecutor", wraps=ProcessPoolExecutor) as executor:
             self.write(states)
         executor.assert_called_once_with(max_workers=2)
         result = self.read()
         self.assertEqual(set(result.image_basename), {"a.tif", "b.tif", "c.tif"})
         self.assertTrue(all(geometry.equals(box(0, 0, 4, 4)) for geometry in result.geometry))
+        self.assertTrue(any(s["prefix"] == "Polygonizing valid data" and s["n"] > 0 for s in snapshots))
+        self.assertTrue(any(s["unit"] == "images" and s["n"] == s["total"] == 3 for s in snapshots))
 
     def test_diagonally_connected_pixels_are_repaired_before_saving(self):
         image_path = str(Path(self.temp.name) / "diagonal.tif")

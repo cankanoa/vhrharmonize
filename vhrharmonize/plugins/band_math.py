@@ -1,6 +1,7 @@
 """band_math: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,13 +10,14 @@ def _upstream():
     return band_math
 
 
+@reports_progress
 def band_math(*args, **kwargs):
     """Call SpectralMatch's band_math with its native parameters."""
 
     for name in ("dask_scheduler",):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 band_math.__parameter_sources__ = (_upstream,)

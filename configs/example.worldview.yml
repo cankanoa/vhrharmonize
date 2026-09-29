@@ -91,6 +91,8 @@ shared:
   # core:check_validity: true # true | false; default: true. Verify raster readability, TIFF bounds and JSON syntax.
   # core:validity_check_grid_size: 2048 # integer >= 0; default: 2048. 0 disables sampling; 1 checks every pixel; N samples one pixel per NxN cell.
   # core:log_to_console: true # true | false; default: true.
+  # core:show_progress: true # true | false; default: true. Live Rich dashboard; one final summary in redirected logs.
+  # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
   param:log_to_console: true # true | false; default: NA. Use this to pass logging preferences to the plugins.
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
@@ -503,6 +505,21 @@ alignment:
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
   core:calculate_overviews: true # true | false; default: false.
 
+
+# Optional low-resolution test after alignment. Uncomment this block to resample every scene
+# to 30 m and use those copies for all subsequent image steps. Inputs must use a projected CRS
+# with metre units; align_rasters preserves the input CRS. The _30m suffix distinguishes test outputs.
+# test_low_resolution_run:
+#   plugin: align_rasters
+#   core:run: true # true | false; default: false. Enable when this block is uncommented.
+#   core:scope: aggregate # scene | aggregate; default: aggregate. Process all current scene rasters.
+#   param:input_images: collect:current_image_paths # path list; required. Aligned images for every scene.
+#   var:suffix: expr:var.suffix & '_30m'
+#   var:current_image_paths: expr:const.temp_dir & '/test_low_resolution_run/' & var.basename & var.suffix & '.tif'
+#   param:output_images: collect:current_image_paths # path list; required. One temporary 30 m copy per scene.
+#   param:resolution: 30 # positive CRS pixel size | highest | average | lowest | null; default: null. 30 m square pixels.
+#   param:resampling_method: bilinear # nearest | bilinear | cubic; default: bilinear.
+#   param:tap: true # true | false; default: false. Snap extents to the common 30 m grid.
 
 # SpectralMatch functions run in the order shown: matching -> footprints -> Markov -> mask -> merge.
 # The final merge is last so the completed mosaic also determines the final metadata snapshot.

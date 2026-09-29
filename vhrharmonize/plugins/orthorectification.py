@@ -8,6 +8,7 @@ import pyproj
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
+from vhrharmonize.io.progress import gdal_progress, progress
 
 
 def resolve_output_resolution_for_crs(
@@ -33,6 +34,7 @@ def resolve_output_resolution_for_crs(
     "orthorectification",
     inputs=("input_image_path", "dem_image_path"),
     outputs=("output_image_path",),
+    worker_progress=True,
 )
 def gcp_refined_rpc_orthorectification(
     input_image_path: str,
@@ -119,6 +121,9 @@ def gcp_refined_rpc_orthorectification(
             raise ValueError(f"Unsupported GDAL data type: {output_dtype}")
         translate_kwargs["outputType"] = gdal_dtype
 
+    callback = gdal_progress("Preparing orthorectification raster")
+    if callback is not None:
+        translate_kwargs["callback"] = callback
     translate_options = gdal.TranslateOptions(**translate_kwargs)
     gdal.Translate(temp_image_path, input_image_path, options=translate_options)
 
@@ -174,6 +179,7 @@ def gcp_refined_rpc_orthorectification(
         transformerOptions=[f"RPC_DEM={dem_image_path}"],
         resampleAlg="bilinear",
         copyMetadata=True,  # Copies metadata excluding original RPC
+        **({"callback": callback} if (callback := gdal_progress("Orthorectifying raster")) else {}),
     )
     warp_result = gdal.Warp(
         destNameOrDestDS=output_image_path,
@@ -208,7 +214,7 @@ def gcp_refined_rpc_orthorectification(
     )
 
 
-@_logged_operation("qgis_gcps_to_csv", inputs=("input_gcp_path",))
+@_logged_operation("qgis_gcps_to_csv", inputs=("input_gcp_path",), worker_progress=True)
 def qgis_gcps_to_csv(
     input_gcp_path: str,
     output_epsg: Optional[int] = None,
@@ -238,7 +244,7 @@ def qgis_gcps_to_csv(
         transformer = None
 
     with open(input_gcp_path, "r") as infile:
-        for line_number, line in enumerate(infile, start=1):
+        for line_number, line in enumerate(progress(infile, desc="Reading GCPs", unit="lines"), start=1):
             stripped_line = line.strip()
 
             # Skip metadata lines or empty lines
@@ -312,6 +318,7 @@ def geo_to_image_coords(dataset: Any, x: float, y: float) -> tuple[int, tuple[fl
     "qgis_gcps_to_geojson",
     inputs=("input_image_path", "qgis_gcp_file_path"),
     outputs=("output_geojson_path",),
+    worker_progress=True,
 )
 def qgis_gcps_to_geojson(
     input_image_path: str,
@@ -377,7 +384,7 @@ def qgis_gcps_to_geojson(
     with open(qgis_gcp_file_path, "r") as file:
         lines = file.readlines()
 
-    for line in lines:
+    for line in progress(lines, desc="Converting GCPs", unit="points"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue

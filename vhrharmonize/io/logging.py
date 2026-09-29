@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from inspect import signature
+from .progress import reports_progress
 
 
 _active_scene = ContextVar("processing_scene", default=None)
@@ -34,7 +35,7 @@ def _log_image_completed(scene_basename: str, index: int, total: int, *, process
 
 
 @contextmanager
-def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, index=1, total=1, processing_total=None, announce_step=True, allow_nested=False, on_completed=None):
+def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, allow_nested=False):
     """Log successful completion only; nested operations share the scene context."""
     if _active_scene.get() is not None and not allow_nested:
         yield
@@ -48,16 +49,13 @@ def _processing_step(step, scene_basename, inputs, outputs, *, enabled=False, in
         _log(f"Failed | {type(exc).__name__}: {exc}", enabled=enabled, scene_basename=scene_basename)
         raise
     else:
-        if on_completed is not None:
-            on_completed()
-        else:
-            _log_image_completed(scene_basename, index, total, processing_total=processing_total, enabled=enabled)
+        _log("Completed", enabled=enabled, scene_basename=scene_basename)
     finally:
         _active_step.reset(step_token)
         _active_scene.reset(token)
 
 
-def _logged_operation(step: str, *, inputs=(), outputs=(), allow_nested=False):
+def _logged_operation(step: str, *, inputs=(), outputs=(), allow_nested=False, worker_progress=False):
     """Give standalone preprocessing calls the same lifecycle as workflow steps."""
     def _decorate(function):
         parameters = signature(function)
@@ -73,11 +71,10 @@ def _logged_operation(step: str, *, inputs=(), outputs=(), allow_nested=False):
             with _processing_step(
                 step, scene_basename, input_paths, output_paths,
                 enabled=values.get("log_to_console", False),
-                index=values.get("scene_index", 1), total=values.get("scene_total", 1),
                 allow_nested=allow_nested,
             ):
                 return function(*args, **kwargs)
-        return _wrapped
+        return reports_progress(_wrapped, worker_progress=worker_progress)
     return _decorate
 
 

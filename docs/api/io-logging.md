@@ -1,1 +1,51 @@
+# Logging and progress callbacks
+
+Processing functions accept an optional Python-only `progress_callback`. The same callback contract works for standalone calls, workflow tasks and custom plugins. It receives keyword fields from tqdm's `format_dict`, including:
+
+| Field | Meaning |
+| --- | --- |
+| `n` | Completed units in this operation |
+| `total` | Expected units, or `None` for an indeterminate operation |
+| `prefix` | Operation description (tqdm's `desc`) |
+| `unit` | Unit label, such as `tiles`, `bands` or `images` |
+| `elapsed` | Elapsed seconds |
+| `rate` | Units per second, or `None` before a rate is available |
+| `operation` | Identifier for a bar; changes when a new phase starts |
+| `scene` | Optional input image identifier for work inside an aggregate call |
+
+Accept `**stats` so additional tqdm fields remain compatible. Lifecycle failures also include `status="failed"` and never report successful completion.
+
+```python
+from vhrharmonize import align_image_pair
+
+def report(**stats):
+    print(stats["prefix"], stats["n"], stats["total"])
+
+align_image_pair(
+    "moving.tif", "reference.tif", "aligned.tif",
+    progress_callback=report,
+)
+```
+
+A callback is a Python callable, not a YAML expression or CLI option. With `core:report_progress: true`, `core:show_progress: true`, or an application progress callback, core supplies the reporting context automatically. It exposes a [public workflow snapshot API](progress.md); the optional Rich frontend consumes those snapshots. Functions remain independent of Rich. Python messages from each workflow worker are routed back to the snapshot's recent messages. Unmanaged backend console bars are disabled when the backend accepts `log_to_console`.
+
+To report measurable work in a custom function, use the tqdm-compatible helper:
+
+```python
+from vhrharmonize.io.progress import progress
+
+def process_images(images, progress_callback=None):
+    with progress(total=len(images), desc="Processing", unit="images",
+                  callback=progress_callback) as bar:
+        for image in images:
+            process_one(image)
+            bar.update(1)
+```
+
+`progress` uses tqdm for counters, throttling and rate estimates. When a callback exists, it sends snapshots without rendering; otherwise it is silent by default. Use `disable=False` for an ordinary standalone tqdm display. Functions decorated with `reports_progress` inherit callbacks through nested calls and expose the optional `progress_callback` keyword. Workflow plugin calls also receive this lifecycle reporting automatically. Use `@reports_progress(worker_progress=True)` when the function forwards measurable progress from its workers. Lifecycle-only functions display `(no cb)` beside their step name; counts and core completion tracking still work.
+
+SpectralMatch uses the same callback fields. Its shared image-task runner reports completed images after the parent has committed each result, and forwards worker GDAL progress through queues for local threads/processes or Dask events for remote workers. The application callback stays in the parent process and can be a closure; renderers are never pickled. VHR's own nested footprint and FLAASH tasks use the same transport pattern. Aggregate functions can therefore report both batch progress and work inside individual images. Install the updated SpectralMatch code on the execution host and all Dask workers to enable these callbacks; older versions remain usable but show `(no cb)`.
+
+Callbacks provide only progress the function can measure. Raster loops, Py6S bands, atmosphere sample points and seamline results report increments; GDAL orthorectification reports its fractional callback. Opaque third-party calls and rasterio's overview building display their current phase until the call returns. Callback updates never mark an entire workflow task complete; core does that after output validation.
+
 ::: vhrharmonize.io.logging

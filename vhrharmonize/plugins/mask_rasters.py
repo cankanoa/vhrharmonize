@@ -1,6 +1,7 @@
 """mask_rasters: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,13 +10,14 @@ def _upstream():
     return mask_rasters
 
 
+@reports_progress
 def mask_rasters(*args, **kwargs):
     """Call SpectralMatch's mask_rasters with its native parameters."""
 
     for name in ("dask_scheduler", "vector_mask"):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 mask_rasters.__parameter_sources__ = (_upstream,)

@@ -1,6 +1,7 @@
 """postprocess_footprints: thin adapter for the installed SpectralMatch function."""
 
 from .base import FunctionPlugin
+from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
 def _upstream():
@@ -9,13 +10,14 @@ def _upstream():
     return postprocess_footprints
 
 
+@reports_progress
 def postprocess_footprints(*args, **kwargs):
     """Call SpectralMatch's postprocess_footprints with its native parameters."""
 
     for name in ("dask_scheduler",):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return _upstream()(*args, **kwargs)
+    return call_with_progress(_upstream(), *args, **kwargs)
 
 
 postprocess_footprints.__parameter_sources__ = (_upstream,)

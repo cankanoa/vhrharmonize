@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 import inspect
 import os
 from pathlib import Path
+from time import monotonic
 
 from vhrharmonize.plugins.base import (
     file_parameter_names,
@@ -15,6 +17,7 @@ from vhrharmonize.plugins.base import (
     OUTPUT_PATH_FEATURES,
 )
 from vhrharmonize.io.metadata import write_json
+from vhrharmonize.io.logging import _log
 from vhrharmonize.io.validation import _existing_output_failures
 from vhrharmonize.io.workflow_utils import remove_output_files
 from .config import validate_config, steps, shared_settings
@@ -195,8 +198,22 @@ class ConstantBindings:
 
 
 def _execute(payload):
-    plugin_name, params, shared = payload
-    return load_plugin(plugin_name).run(params=params, shared=shared)
+    plugin_name, params, shared, *reporters = payload
+    if not reporters:
+        return load_plugin(plugin_name).run(params=params, shared=shared)
+    from vhrharmonize.io.progress import capture_messages, progress_context
+
+    reporter = reporters[0]
+    started = monotonic()
+    reporter.event("start")
+    try:
+        with progress_context(reporter, reporter.message), capture_messages():
+            result = load_plugin(plugin_name).run(params=params, shared=shared)
+    except BaseException:
+        reporter.event("failed")
+        raise
+    reporter.event("computed", duration=monotonic() - started)
+    return result
 
 
 class Workflow:
@@ -222,6 +239,8 @@ class Workflow:
         self.metadata_writer = FinalMetadataWriter(delete_first=core["delete_final_json_first"])
         self._exported_nodes = set()
         self._executing = False
+        self._progress = None
+        self._last_progress_snapshot = None
         self.records = []
         self.initial_context = deepcopy(self.shared_context)
         self.preflight_steps = set()
@@ -1120,9 +1139,10 @@ class Workflow:
                 raise ValueError("core:calculate_overviews requires shared.param:window_scales")
             for filename in overview_paths:
                 if Path(filename).suffix.lower() in {".tif", ".tiff"}:
-                    calculate_raster_overviews(
-                        filename, scales, log_to_console=self.controls["log_to_console"]
-                    )
+                    with self._progress.overview(node, filename) if self._progress else nullcontext():
+                        calculate_raster_overviews(
+                            filename, scales, log_to_console=self.controls["log_to_console"]
+                        )
         failures = self._failures(node, node.paths("output_validation_paths"))
         if failures:
             raise RuntimeError(
@@ -1131,6 +1151,8 @@ class Workflow:
         node.status = "completed"
         if self._executing:
             self._save_final_metadata(node)
+        if self._progress:
+            self._progress.complete(node)
 
     def _cleanup(self, *, final=False):
         # Later scenes can reference any earlier result; retain files until their
@@ -1299,6 +1321,19 @@ class Workflow:
         self._protected_keys = None
         self._build(step_index + 1)
         self.plan()
+        if self._progress:
+            self._progress.sync()
+
+    def _log_node_start(self, node, index, processing_total, total):
+        """Report dispatch order using counts owned by the workflow scheduler."""
+        if self._progress:
+            return
+        _log(
+            f"Start {index}/{processing_total}/{total}",
+            enabled=self.controls["log_to_console"],
+            step=f"core:{node.step['name']}",
+            scene_basename=self.records[node.record]["id"] if node.record is not None else None,
+        )
 
     def _run_horizontal_step(self, step_index, workers, backend):
         self._prepare_constants(step_index)
@@ -1312,6 +1347,13 @@ class Workflow:
             self._advance_scenes(step_index)
             return
         payloads = [(node, self._payload(node)) for node in pending]
+        total = sum(node.step_index == step_index for node in self.nodes)
+
+        def dispatches(*, remote=False):
+            for index, (node, payload) in enumerate(payloads, start=1):
+                self._log_node_start(node, index, len(pending), total)
+                yield node, self._progress.payload(node, payload, remote=remote) if self._progress else payload
+
         if backend == "dask" and pending[0].record is not None:
             from dask.distributed import Client, as_completed as dask_completed
 
@@ -1323,10 +1365,10 @@ class Workflow:
                 raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
             with (
                 Client(address) if address else Client(scheduler_file=scheduler_file)
-            ) as client:
+            ) as client, self._progress.dask_client(client) if self._progress else nullcontext():
                 futures = {
                     client.submit(_execute, payload, pure=False): node
-                    for node, payload in payloads
+                    for node, payload in dispatches(remote=True)
                 }
                 try:
                     for future in dask_completed(futures):
@@ -1336,7 +1378,7 @@ class Workflow:
         elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
             with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as executor:
                 futures = {
-                    executor.submit(_execute, payload): node for node, payload in payloads
+                    executor.submit(_execute, payload): node for node, payload in dispatches()
                 }
                 try:
                     for future in as_completed(futures):
@@ -1345,10 +1387,8 @@ class Workflow:
                     for future in futures:
                         future.cancel()
         else:
-            for node, payload in payloads:
+            for node, payload in dispatches():
                 self._finish(node, _execute(payload))
-        if self.controls["log_to_console"]:
-            print(f"[{pending[0].step['name']}] Completed {len(pending)}/{len(nodes)}")
         self._cleanup()
         self._advance_scenes(step_index)
 
@@ -1384,18 +1424,18 @@ class Workflow:
             index: sum(n.status == "processing" for n in nodes if n.step_index == index)
             for index in range(start, end)
         }
-        finished = {index: 0 for index in totals}
+        started = {index: 0 for index in totals}
+        all_totals = {
+            index: sum(n.step_index == index for n in self.nodes)
+            for index in range(start, end)
+        }
 
         def finish(node, result):
             self._finish(node, result)
             completed.add(node.index)
             self._cleanup()
-            finished[node.step_index] += 1
-            if self.controls["log_to_console"] and finished[node.step_index] == totals[node.step_index]:
-                total = sum(n.step_index == node.step_index for n in nodes)
-                print(f"[{node.step['name']}] Completed {finished[node.step_index]}/{total}")
 
-        def schedule(submit=None, next_completed=None, limit=1):
+        def schedule(submit=None, next_completed=None, limit=1, remote=False):
             while waiting or running:
                 ready = sorted(
                     (n for n in waiting.values() if dependencies[n.index] <= completed),
@@ -1415,10 +1455,19 @@ class Workflow:
                         self._save_final_metadata(node)
                         completed.add(node.index)
                         self._cleanup()
-                    elif submit is None:
-                        finish(node, _execute(self._payload(node)))
                     else:
-                        running[submit(node, self._payload(node))] = node
+                        payload = self._payload(node)
+                        started[node.step_index] += 1
+                        self._log_node_start(
+                            node, started[node.step_index], totals[node.step_index],
+                            all_totals[node.step_index],
+                        )
+                        if self._progress:
+                            payload = self._progress.payload(node, payload, remote=remote)
+                        if submit is None:
+                            finish(node, _execute(payload))
+                        else:
+                            running[submit(node, payload)] = node
                     # Reconsider downstream nodes immediately instead of filling
                     # the queue with every scene's upstream work first.
                     break
@@ -1441,7 +1490,9 @@ class Workflow:
             scheduler_file = self.controls.get("dask_scheduler_file")
             if not address and not scheduler_file:
                 raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
-            with (Client(address) if address else Client(scheduler_file=scheduler_file)) as client:
+            with (
+                Client(address) if address else Client(scheduler_file=scheduler_file)
+            ) as client, self._progress.dask_client(client) if self._progress else nullcontext():
                 try:
                     schedule(
                         lambda node, payload: client.submit(
@@ -1449,6 +1500,7 @@ class Workflow:
                         ),
                         lambda futures: next(iter(dask_completed(futures))),
                         limit=len(previous),
+                        remote=True,
                     )
                 finally:
                     client.cancel(list(running))
@@ -1468,7 +1520,51 @@ class Workflow:
         # All cached contexts in this segment have been restored before cleanup.
         self._cleanup()
 
-    def run(self):
+    def get_progress(self):
+        """Return a detached progress snapshot during/after a reported run, else None."""
+        reporter = self._progress
+        if reporter is not None:
+            return reporter.snapshot()
+        return deepcopy(self._last_progress_snapshot)
+
+    def run(self, *, progress_callback=None, progress_path=None):
+        """Execute the workflow, optionally publishing snapshots to a parent callback.
+
+        Reporting is enabled by a callback, an explicit snapshot path, or either
+        core:report_progress or core:show_progress. Only show_progress starts Rich.
+        """
+        if progress_callback is not None and not callable(progress_callback):
+            raise TypeError("progress_callback must be callable")
+        self.plan()
+        self._last_progress_snapshot = None
+        if not (self.controls["show_progress"] or self.controls["report_progress"]
+                or progress_callback is not None or progress_path is not None):
+            return self._run()
+        from contextlib import ExitStack
+        from .progress import WorkflowProgress
+
+        with ExitStack() as stack:
+            callbacks = []
+            if self.controls["show_progress"]:
+                from .progress_rich import RichProgressDisplay
+
+                display = stack.enter_context(RichProgressDisplay())
+                callbacks.append(display.update)
+            if progress_callback is not None:
+                callbacks.append(progress_callback)
+            reporter = WorkflowProgress(
+                self, callbacks=callbacks,
+                snapshot_path=progress_path if progress_path is not None else getattr(self, "progress_path", None),
+            )
+            self._progress = reporter
+            try:
+                with reporter:
+                    return self._run()
+            finally:
+                self._last_progress_snapshot = reporter.snapshot()
+                self._progress = None
+
+    def _run(self):
         self.plan()
         self._executing = True
         if self.controls["log_to_console"]:

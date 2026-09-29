@@ -6,12 +6,14 @@ import rasterio
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
+from vhrharmonize.io.progress import raster_windows
 
 
 @_logged_operation(
     "pansharpen",
     inputs=("input_low_resolution_path", "input_high_resolution_path"),
     outputs=("output_image_path",),
+    worker_progress=True,
 )
 def pansharpen_image(
     input_low_resolution_path: str,
@@ -77,7 +79,7 @@ def _change_nodata_value(
     replaced_any = False
     with rasterio.open(input_image_path, "r+") as src:
         for band_idx in range(1, src.count + 1):
-            for _, window in src.block_windows(band_idx):
+            for _, window in raster_windows(src, band_idx, desc=f"Updating nodata in band {band_idx}"):
                 band_data = src.read(band_idx, window=window)
                 if np.issubdtype(band_data.dtype, np.floating):
                     mask = np.isclose(band_data, old_nodata)
