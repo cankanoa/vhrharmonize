@@ -9,7 +9,10 @@ import json
 import inspect
 import os
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time_ns
+from threading import RLock
+from uuid import uuid4
+import warnings
 
 from vhrharmonize.plugins.base import (
     file_parameter_names,
@@ -20,6 +23,7 @@ from vhrharmonize.io.metadata import write_json
 from vhrharmonize.io.logging import _log
 from vhrharmonize.io.validation import _existing_output_failures
 from vhrharmonize.io.workflow_utils import remove_output_files
+from .timing import timed_core, timed_preflight
 from .config import validate_config, steps, shared_settings
 from .registry import load_plugin
 from .paths import DIRECTORY_FEATURES, directory_values, directory_bindings
@@ -204,20 +208,27 @@ def _execute(payload):
     from vhrharmonize.io.progress import capture_messages, progress_context
 
     reporter = reporters[0]
-    started = monotonic()
-    reporter.event("start")
+    started, started_ns = monotonic(), time_ns()
+    reporter.event("start", started_ns=started_ns)
     try:
         with progress_context(reporter, reporter.message), capture_messages():
             result = load_plugin(plugin_name).run(params=params, shared=shared)
-    except BaseException:
-        reporter.event("failed")
+    except BaseException as exc:
+        reporter.event("failed", duration=monotonic() - started, started_ns=started_ns, error_type=type(exc).__name__)
         raise
-    reporter.event("computed", duration=monotonic() - started)
+    reporter.event("computed", duration=monotonic() - started, started_ns=started_ns)
     return result
 
 
 class Workflow:
+    @timed_core("initialization")
     def __init__(self, config, *, config_dir=".", selected_plugin=None):
+        self._timing_lock = RLock()
+        self._timing_buffer = []
+        self._timing_callbacks = None
+        self._timing_finished = False
+        self._run_id = uuid4().hex
+        self._run_started_ns, self._run_started = time_ns(), monotonic()
         self.selected_plugin = selected_plugin
         self.config = validate_config(config)
         self.steps = steps(self.config)
@@ -228,6 +239,7 @@ class Workflow:
             self.steps = self.steps[: max(matching) + 1]
         core, params, assignments = shared_settings(self.config)
         self.controls = core
+        self._log_core_start("workflow")
         self.shared = params
         self.shared_context = empty_context()
         for block in assignments:
@@ -247,7 +259,17 @@ class Workflow:
         self._retained_protected_paths = set()
         self.completed_counts = {}
         self.start_index = 0
+        self._discover_inputs()
+        self.initial_records = deepcopy(self.records)
+        self.nodes = []
+        self._planned = False
+        self._protected_keys = None
+        self._build(self.start_index)
+
+    @timed_core("discovery")
+    def _discover_inputs(self):
         # Scene functions establish their records during planning whenever possible.
+        self._log_core_start("discovery")
         for index, step in enumerate(self.steps):
             if not step["run"]:
                 self.start_index = index + 1
@@ -301,7 +323,8 @@ class Workflow:
                 if name not in params and name in shared:
                     params[name] = shared[name]
             params = _arguments(features, params, current, settings, self.config_dir)
-            returned = plugin.run(params=params, shared=shared)
+            with timed_preflight(self, step, weight=max(1, len(self.records))):
+                returned = plugin.run(params=params, shared=shared)
             _, _, current, _ = evaluate_settings(
                 settings, self.initial_context, returned=returned, constants=frozen,
                 aggregate=True, records=scene_records, scene_ids=scene_ids,
@@ -309,11 +332,10 @@ class Workflow:
             self._update_scenes(plugin, step, returned, current)
             self.preflight_steps.add(index)
             self.start_index = index + 1
-        self.initial_records = deepcopy(self.records)
-        self.nodes = []
-        self._planned = False
-        self._protected_keys = None
-        self._build(self.start_index)
+
+    def _log_core_start(self, stage):
+        """Announce core work before it starts, using the standard step log format."""
+        _log("Start", enabled=self.controls["log_to_console"], step=f"core:{stage}")
 
     @staticmethod
     def _discovered_constants(step):
@@ -446,7 +468,9 @@ class Workflow:
         self.records = records
         self.initial_context = {"const": deepcopy(context["const"]), "var": {}}
 
+    @timed_core("build")
     def _build(self, start_index=0):
+        self._log_core_start("build")
         self.barrier_index = None
         self.contexts = [deepcopy(r["context"]) for r in self.records]
         self.runtime_values = [{} for _ in self.records]
@@ -757,9 +781,11 @@ class Workflow:
         paths, identities = self._protected_keys
         return os.path.realpath(filename) in paths or identity(filename) in identities
 
+    @timed_core("planning")
     def plan(self):
         if self._planned:
             return self
+        self._log_core_start("planning")
         for node in self.nodes:
             node.loaded = self._valid(node, node.paths("output_reuse_paths"))
         consumed = {index for node in self.nodes for index in node.dependencies}
@@ -1154,6 +1180,7 @@ class Workflow:
         if self._progress:
             self._progress.complete(node)
 
+    @timed_core("cleanup")
     def _cleanup(self, *, final=False):
         # Later scenes can reference any earlier result; retain files until their
         # readers are known. A scene reset must never invalidate its own inputs.
@@ -1165,6 +1192,8 @@ class Workflow:
             and self.controls["delete_temp_dir"]
         ):
             return
+        if final:
+            self._log_core_start("cleanup")
         for node in self.nodes:
             if node.status not in {"completed", "loaded"}:
                 continue
@@ -1249,14 +1278,20 @@ class Workflow:
                     and previous.step["plugin"] is None
                     and previous.status == "processing"
                 ):
-                    self._finish(previous, _execute(self._payload(previous)))
+                    self._execute_preflight(previous)
         if node.status == "processing":
-            self._finish(node, _execute(self._payload(node)))
+            self._execute_preflight(node)
         self._advance_scenes(node.step_index)
         if not self._executing:
             self.preflight_steps.update(range(node.step_index + 1))
             self.start_index = node.step_index + 1
             self.initial_records = deepcopy(self.records)
+
+    def _execute_preflight(self, node):
+        scene = self.records[node.record]["id"] if node.record is not None else "all scenes"
+        weight = 1 if node.record is not None else max(1, len(self.records))
+        with timed_preflight(self, node.step, scene=scene, weight=weight):
+            self._finish(node, _execute(self._payload(node)))
 
     def final_nodes(self):
         if self.barrier_index is not None:
@@ -1527,7 +1562,85 @@ class Workflow:
             return reporter.snapshot()
         return deepcopy(self._last_progress_snapshot)
 
-    def run(self, *, progress_callback=None, progress_path=None):
+    def _emit_timing(self, kind, name, started_ns, duration, *, status="completed", attributes=None):
+        values = (kind, name, started_ns, duration, status, attributes or {})
+        with self._timing_lock:
+            if self._timing_callbacks is None:
+                if not self._timing_finished:
+                    self._timing_buffer.append(values)
+                return
+            event = {
+                "version": 1, "run_id": self._run_id, "run_started_ns": self._run_started_ns,
+                "kind": kind, "name": name, "start_time_ns": started_ns,
+                "duration_seconds": max(0.0, duration), "status": status,
+                "attributes": {key: value for key, value in {
+                    "vhr.backend": self.controls["concurrent_processing_backend"],
+                    "vhr.processing_direction": self.controls["processing_direction"],
+                    "vhr.concurrent_processing": self.controls["concurrent_processing"],
+                    "vhr.job_id": os.environ.get("SLURM_JOB_ID"),
+                    "vhr.config": getattr(self, "config_path", None), **(attributes or {}),
+                }.items() if value is not None},
+            }
+            for callback in self._timing_callbacks[:]:
+                try:
+                    callback(deepcopy(event))
+                except Exception as exc:
+                    self._timing_callbacks.remove(callback)
+                    try:
+                        warnings.warn(f"Timing consumer disabled: {exc}", RuntimeWarning, stacklevel=2)
+                    except RuntimeWarning:
+                        pass  # A caller's warnings-as-errors filter must not abort processing.
+
+    def run(self, *, progress_callback=None, progress_path=None, event_callback=None):
+        """Execute with optional snapshot and unthrottled timing-event callbacks.
+
+        core:statistics_path enables append-only raw timing data, even with console
+        logging and the progress display disabled. Callbacks stay in the parent.
+        """
+        from contextlib import ExitStack
+
+        for name, callback in (("progress_callback", progress_callback), ("event_callback", event_callback)):
+            if callback is not None and not callable(callback):
+                raise TypeError(f"{name} must be callable")
+        if self._timing_finished:
+            self._run_id = uuid4().hex
+            self._run_started_ns, self._run_started = time_ns(), monotonic()
+        self._timing_finished = False
+        with ExitStack() as stack:
+            callbacks = [event_callback] if event_callback is not None else []
+            filename = self.controls["statistics_path"]
+            if filename is not None:
+                from vhrharmonize.statistics import StatisticsRecorder
+
+                filename = os.path.expanduser(filename)
+                if not os.path.isabs(filename):
+                    filename = os.path.join(self.config_dir, filename)
+                recorder = stack.enter_context(StatisticsRecorder(filename))
+                callbacks.append(recorder)
+            self._timing_callbacks = callbacks
+            buffered, self._timing_buffer = self._timing_buffer, []
+            for kind, name, start, duration, status, attributes in buffered:
+                self._emit_timing(kind, name, start, duration, status=status, attributes=attributes)
+            outcome, attributes = "completed", {}
+            try:
+                return self._run_with_progress(progress_callback=progress_callback, progress_path=progress_path)
+            except BaseException as exc:
+                outcome, attributes = "failed", {"error.type": type(exc).__name__}
+                raise
+            finally:
+                snapshot = self.get_progress()
+                if snapshot is not None:
+                    for row in snapshot["rows"]:
+                        self._emit_timing("step_summary", row["name"], time_ns(), 0,
+                                          status=row["status"] if row["status"] != "running" else "incomplete",
+                                          attributes={"vhr." + key: row[key] for key in
+                                                      ("done", "run", "all", "unused", "reused")})
+                self._emit_timing("workflow", "workflow", self._run_started_ns,
+                                  monotonic() - self._run_started, status=outcome, attributes=attributes)
+                self._timing_callbacks = None
+                self._timing_finished = True
+
+    def _run_with_progress(self, *, progress_callback=None, progress_path=None):
         """Execute the workflow, optionally publishing snapshots to a parent callback.
 
         Reporting is enabled by a callback, an explicit snapshot path, or either
@@ -1538,7 +1651,7 @@ class Workflow:
         self.plan()
         self._last_progress_snapshot = None
         if not (self.controls["show_progress"] or self.controls["report_progress"]
-                or progress_callback is not None or progress_path is not None):
+                or progress_callback is not None or progress_path is not None or self._timing_callbacks):
             return self._run()
         from contextlib import ExitStack
         from .progress import WorkflowProgress
@@ -1564,9 +1677,11 @@ class Workflow:
                 self._last_progress_snapshot = reporter.snapshot()
                 self._progress = None
 
+    @timed_core("execution")
     def _run(self):
         self.plan()
         self._executing = True
+        self._log_core_start("execution")
         if self.controls["log_to_console"]:
             print(f"[workflow] Discovered {len(self.records)} input records")
             disabled_steps = {step["name"] for step in self.steps if not step["run"]}

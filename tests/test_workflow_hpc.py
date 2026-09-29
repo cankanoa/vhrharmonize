@@ -50,8 +50,9 @@ def test_hpc_status_prints_saved_workflow_progress(tmp_path, monkeypatch, capsys
     output = capsys.readouterr().out
     assert "cat '/remote/my recipe.yml.progress.json'" in commands
     assert result["workflow_progress"] == snapshot
-    assert "Unused" in output and "20(8%)" in output and "264(100%)" in output
-    assert "matching tiles" in output and "120 / 200 tiles" in output
+    assert "Unused" in output and "Loaded" in output and "20(8%)" in output and "264(100%)" in output
+    operation = next(line for line in output.splitlines() if "working" in line)
+    assert all(value in operation for value in ("alignment", "P004", "60s"))
     assert "Alignment wrote output.tif" in output and "gray: reused" not in output
     assert "\x1b[" not in output
     # A new Slurm submission cannot reuse the previous job's saved snapshot.

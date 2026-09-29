@@ -51,6 +51,23 @@ class ProgressSnapshot(TypedDict):
 ProgressCallback = Callable[[ProgressSnapshot], None]
 
 
+class TimingEvent(TypedDict):
+    """One completed core measurement, delivered independently of UI refreshes."""
+
+    version: int
+    run_id: str
+    run_started_ns: int
+    kind: str
+    name: str
+    start_time_ns: int
+    duration_seconds: float
+    status: str
+    attributes: dict
+
+
+TimingCallback = Callable[[TimingEvent], None]
+
+
 def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
     """Validate and detach a versioned snapshot received from another process.
 
@@ -136,4 +153,5 @@ def render_progress(snapshot: ProgressSnapshot, *, console=None):
 
 
 __all__ = ["PROGRESS_VERSION", "ProgressRow", "ActiveOperation", "ProgressSnapshot",
-           "ProgressCallback", "read_progress_snapshot", "validate_progress_snapshot", "render_progress"]
+           "ProgressCallback", "TimingEvent", "TimingCallback", "read_progress_snapshot",
+           "validate_progress_snapshot", "render_progress"]

@@ -15,7 +15,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from tempfile import NamedTemporaryFile
 from threading import RLock, Thread
-from time import monotonic
+from time import monotonic, time_ns
 from uuid import uuid4
 
 from vhrharmonize.progress import PROGRESS_VERSION, ProgressCallback, ProgressSnapshot
@@ -75,6 +75,11 @@ class TaskProgress:
     computed: bool = False
     stats: dict = field(default_factory=dict)
     stats_updated: float | None = None
+    plugin: str = ""
+    started_ns: int | None = None
+    worker_failed: bool = False
+    error_type: str | None = None
+    timing_reported: bool = False
 
     @property
     def active(self):
@@ -101,12 +106,18 @@ class ProgressState:
             task = self.tasks.get(event["task"])
             if task is None:
                 return
+            if "started_ns" in event:
+                task.started_ns = event["started_ns"]
             if kind == "computed":
                 task.duration = max(0.0, event["duration"])
                 task.computed = True
             elif kind == "failed":
                 task.failed = True
                 self.failed = True
+                task.worker_failed = "duration" in event
+                task.error_type = event.get("error_type")
+                if task.worker_failed:
+                    task.duration = max(0.0, event["duration"])
             elif not (task.done or task.failed or task.computed):
                 if kind == "start":
                     task.started = task.started or monotonic()
@@ -172,7 +183,7 @@ class WorkflowProgress:
         self.dask_topic = None
         self.snapshot_path = snapshot_path
         self.snapshot_status = "running"
-        self.run_id = uuid4().hex
+        self.run_id = getattr(workflow, "_run_id", None) or uuid4().hex
         self.callbacks: list[ProgressCallback] = list(callbacks)
         self._last_snapshot = 0
         self._last_publish = 0
@@ -263,7 +274,7 @@ class WorkflowProgress:
             name = self.overview_name(node.step)
             scene, weight = Path(overview).name, 1
         with self.state.lock:
-            self.state.tasks[identity] = TaskProgress(name, scene, weight)
+            self.state.tasks[identity] = TaskProgress(name, scene, weight, plugin=node.step["plugin"] or "")
         return EventReporter(_DaskEvents(self.dask_topic) if remote else self.queue, identity)
 
     def payload(self, node, payload, *, remote=False):
@@ -273,21 +284,24 @@ class WorkflowProgress:
         identity = self.identity(node)
         if identity in self.state.tasks:
             self.state.complete(identity)
+            self.queue.put({"kind": "accepted", "task": identity})
 
     @contextmanager
     def overview(self, node, filename):
         reporter = self.reporter(node, overview=filename)
-        started = monotonic()
-        reporter.event("start")
+        started, started_ns = monotonic(), time_ns()
+        reporter.event("start", started_ns=started_ns)
         try:
             with progress_context(reporter, reporter.message):
                 yield
-        except BaseException:
-            reporter.event("failed")
+        except BaseException as exc:
+            reporter.event("failed", duration=monotonic() - started, started_ns=started_ns,
+                           error_type=type(exc).__name__)
             raise
         else:
-            reporter.event("computed", duration=monotonic() - started)
+            reporter.event("computed", duration=monotonic() - started, started_ns=started_ns)
             self.state.complete(reporter.task)
+            self.queue.put({"kind": "accepted", "task": reporter.task})
 
     @contextmanager
     def dask_client(self, client):
@@ -298,6 +312,18 @@ class WorkflowProgress:
         try:
             yield
         finally:
+            if self.workflow._timing_callbacks and hasattr(client, "get_events"):
+                # The last worker event can still be waiting for subscription
+                # delivery after its future resolves. Read scheduler history
+                # before unsubscribing; timing_reported deduplicates these events.
+                try:
+                    events = client.get_events(topic)
+                except Exception as exc:
+                    events = ()
+                    self.queue.put({"kind": "message", "text": f"Cannot drain Dask timing events: {exc}"})
+                for _, event in events:
+                    if event["kind"] in {"computed", "failed"}:
+                        self.queue.put(event)
             self.dask_topic = None
             client.unsubscribe_topic(topic)
 
@@ -311,7 +337,29 @@ class WorkflowProgress:
             if event is None:
                 return
             self.state.handle(event)
+            if "task" in event:
+                self._record_task_timing(event["task"])
             self.publish()
+
+    def _record_task_timing(self, identity, *, final=False):
+        with self.state.lock:
+            task = self.state.tasks.get(identity)
+            if task is None or task.timing_reported or task.started_ns is None:
+                return
+            measured = task.computed or task.worker_failed
+            if not final and (not measured or not (task.done or task.failed)):
+                return
+            task.timing_reported = True
+            status = "incomplete" if not measured else "completed" if task.done else "failed"
+            duration = task.duration if measured else monotonic() - (task.started or task.dispatched)
+            values = (task.step, task.started_ns, duration, status, {
+                "vhr.plugin": task.plugin, "vhr.scene": str(task.scene),
+                "vhr.scene_units": task.weight, "vhr.task_id": identity,
+                "vhr.measured": measured, "error.type": task.error_type,
+            })
+        # Consumers can call get_progress(); never invoke them while holding state.lock.
+        name, started, duration, status, attributes = values
+        self.workflow._emit_timing("task", name, started, duration, status=status, attributes=attributes)
 
     def _row_snapshot(self, row, *, total=False):
         failed = self.state.failed if total else any(t.failed for t in self.state.tasks.values() if t.step == row.name)
@@ -431,6 +479,8 @@ class WorkflowProgress:
                         if not task.done:
                             task.failed = True
                 self.snapshot_status = "failed" if self.state.failed else "completed"
+            for identity in list(self.state.tasks):
+                self._record_task_timing(identity, final=True)
             self.publish(force=True)
         finally:
             if self.manager is not None:

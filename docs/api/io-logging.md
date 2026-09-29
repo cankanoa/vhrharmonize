@@ -1,5 +1,18 @@
 # Logging and progress callbacks
 
+When `core:log_to_console` is true, core prints `[core:workflow] Start` before input
+discovery or processing, then announces its discovery, build, planning, execution
+and enabled final cleanup stages with the same format. Planning announces only
+actual work, including replanning after scene changes. With progress reporting
+active, execution-time logs are captured in snapshot messages; early startup logs
+print immediately before the dashboard is initialized.
+
+For persistent timings, set `shared.core:statistics_path` to an append-only JSONL
+file. Core's unthrottled `event_callback` API reports measurements independently
+of console logging and UI refreshes; the OpenTelemetry recorder is one consumer.
+Use `vhr statistics` or `summarize_statistics()` to produce a separate report.
+See [statistics and timing](statistics.md) for the formats and Python API.
+
 Processing functions accept an optional Python-only `progress_callback`. The same callback contract works for standalone calls, workflow tasks and custom plugins. It receives keyword fields from tqdm's `format_dict`, including:
 
 | Field | Meaning |

@@ -46,6 +46,9 @@ dependencies = [
     "pyproj>=3.7",
     "tqdm",
     "rich>=13.7",
+    "opentelemetry-sdk>=1.36,<2",
+    "filelock>=3.16",
+    "pandas>=2.0",
     "wcmatch>=10.0",
 ]
 

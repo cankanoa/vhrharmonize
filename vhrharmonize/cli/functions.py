@@ -56,7 +56,7 @@ def build_parser(function, *, parser=None, prog=None):
     parser = parser or argparse.ArgumentParser(prog=prog, description=description, allow_abbrev=False)
     descriptions = parameter_descriptions(function)
     for name, parameter in function_parameters(function).items():
-        if name == "progress_callback":
+        if name in {"progress_callback", "event_callback"}:
             continue  # Python callable; the workflow supplies this at runtime.
         option = "--" + name.replace("_", "-")
         default = "required" if parameter.default is parameter.empty else f"default: {parameter.default!r}"

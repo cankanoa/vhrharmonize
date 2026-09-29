@@ -287,6 +287,13 @@ def stage_workflow(config, *, config_dir, remote_output_dir, remote_temp_dir, re
             if None in metadata_targets
             else "var:staged_final_json_path"
         )
+    if workflow.controls["statistics_path"] is not None:
+        # Timing history is generated remotely. Never upload an older local copy
+        # over a remote append-only file when preparing or restarting a job.
+        local = path(os.path.expanduser(workflow.controls["statistics_path"]), base_dir=config_dir)
+        remote = os.path.join(remote_output_dir, "statistics", _hash(local), Path(local).name)
+        downloads[local] = remote
+        staged[shared_name]["core:statistics_path"] = remote
     staged = rewrite(staged)
 
     # Preserve a single workflow-wide constant scope, even with no imported scenes.

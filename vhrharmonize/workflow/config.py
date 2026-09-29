@@ -44,6 +44,7 @@ DEFAULT_SHARED = {
     "log_to_console": True,
     "show_progress": True,
     "report_progress": False,
+    "statistics_path": None,
     "concurrent_processing": 1,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
@@ -100,6 +101,11 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError(
                     "core:output_metadata_path must be a path/reference string or null"
                 )
+            if name == "statistics_path" and value is not None and (
+                not isinstance(value, str) or not value.strip()
+                or value.startswith(("var:", "const:", "expr:", "returned:", "collect:"))
+            ):
+                raise ValueError("core:statistics_path must be a literal file path or null")
             if name == "scope" and value not in {"scene", "aggregate"}:
                 raise ValueError("core:scope must be scene or aggregate")
             if name == "processing_direction" and value not in ("horizontal", "vertical"):

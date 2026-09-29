@@ -37,6 +37,7 @@ nav:
       - workflow.engine: api/workflow-engine.md
       - workflow.api: api/workflow-api.md
       - Progress: api/progress.md
+      - Statistics: api/statistics.md
       - slurm: api/slurm.md
       - plugins.fetch_atmosphere: api/plugins-fetch-atmosphere.md
       - plugins.fetch_dem: api/plugins-fetch-dem.md

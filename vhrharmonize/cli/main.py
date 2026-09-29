@@ -5,6 +5,7 @@ from pathlib import Path
 from vhrharmonize import slurm
 from vhrharmonize.workflow.api import run_plugin, run_workflow
 from vhrharmonize.workflow.registry import plugin_names
+from vhrharmonize.statistics import summarize_statistics
 from .functions import commands_cli
 
 
@@ -26,6 +27,7 @@ def _plugin_command(name):
 def main(argv=None):
     commands = {
         "workflow": run_workflow,
+        "statistics": summarize_statistics,
         "hpc-prepare": slurm.prepare_slurm_plan,
         "hpc-upload": slurm.upload_slurm_files,
         "hpc-start": slurm.start_slurm_job,

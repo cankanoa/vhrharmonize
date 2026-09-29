@@ -15,9 +15,14 @@ from rich.text import Text
 from vhrharmonize.progress import validate_progress_snapshot
 
 
+# Fixed mid-tone colors keep headers and bars visible on light and dark terminals.
+COLORS = {"unused": "#4b87b9", "reused": "#956ac3", "done": "#298845", "run": "#858585"}
+COUNT_COLUMNS = (("Unused", "unused"), ("Loaded", "reused"), ("Done", "done"), ("Run", "run"), ("All", "all"))
+
+
 def _duration(seconds):
     if seconds is None:
-        return "estimating…"
+        return "TBD"
     seconds = max(0, round(seconds))
     hours, seconds = divmod(seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
@@ -26,18 +31,25 @@ def _duration(seconds):
 
 def _bar(row, width=22):
     total = max(row["all"], 1)
-    reused = min(width, round(width * row["reused"] / total))
-    complete = min(width - reused, round(width * row["done"] / total))
+    # Cached scenes may also be unused. Keep them in Loaded, so each scene
+    # occupies the bar once; Done is the completed portion of Run.
+    counts = (("unused", max(0, row["all"] - row["reused"] - row["run"])),
+              ("reused", row["reused"]), ("done", row["done"]),
+              ("run", max(0, row["run"] - row["done"])))
     bar = Text()
-    bar.append("━" * reused, style="grey50")
-    bar.append("━" * complete, style="green")
-    bar.append("━" * (width - reused - complete), style="grey23")
+    units = end = 0
+    for key, count in counts:
+        units = min(total, units + count)
+        boundary = round(width * units / total)
+        bar.append("━" * (boundary - end), style=COLORS[key])
+        end = boundary
+    bar.append("━" * (width - end), style=COLORS["run"])
     return bar
 
 
 def _eta(row):
     status = row["status"]
-    return _duration(row["eta_seconds"]) if status == "running" else "done" if status == "completed" else status
+    return _duration(row["eta_seconds"]) if status in {"running", "waiting"} else "done" if status == "completed" else status
 
 
 @dataclass
@@ -72,10 +84,11 @@ class RichProgressDisplay:
     def table(self, data=None, max_rows=None):
         data = self.snapshot if data is None else data
         table = Table(expand=True, box=None, padding=(0, 1), pad_edge=False)
-        bar_width = max(5, min(22, self.console.width - 94))
+        bar_width = max(5, min(22, self.console.width - 105))
         table.add_column("Step", ratio=1, min_width=12, overflow="ellipsis", no_wrap=True)
-        for name in ("Unused", "Done", "Run", "All"):
-            table.add_column(name, justify="right")
+        for name, key in COUNT_COLUMNS:
+            table.add_column(Text(name, style=f"bold {COLORS[key]}" if key in COLORS else "bold"),
+                             justify="right", no_wrap=True)
         table.add_column("Progress", min_width=bar_width, no_wrap=True)
         table.add_column("Active", justify="right", min_width=6, no_wrap=True)
         table.add_column("ETA", justify="right", max_width=11, no_wrap=True)
@@ -91,11 +104,36 @@ class RichProgressDisplay:
         for row in [data["total"], *rows]:
             table.add_row(
                 _StepLabel(row),
-                *(f"{row[key]}({row['percentages'][key]:.0f}%)" for key in ("unused", "done", "run", "all")),
+                *(f"{row[key]}({row['percentages'][key]:.0f}%)" for _, key in COUNT_COLUMNS),
                 _bar(row, width=bar_width), str(row["active"]), _eta(row),
             )
         if hidden:
-            table.add_row(Text(f"… {hidden} more steps", style="dim"), "", "", "", "", "", "", "")
+            table.add_row(Text(f"… {hidden} more steps", style="dim"), *("" for _ in table.columns[1:]))
+        return table
+
+    def operations(self, active, *, max_rows=None):
+        table = Table(expand=True, box=None, padding=(0, 1), pad_edge=False)
+        table.add_column("Step", ratio=1, min_width=8, no_wrap=True, overflow="ellipsis")
+        table.add_column("ID", ratio=2, min_width=10, no_wrap=True, overflow="ellipsis")
+        table.add_column("Progress", ratio=1, min_width=8, no_wrap=True)
+        table.add_column("Status", no_wrap=True, overflow="ellipsis", max_width=16)
+        table.add_column("Elapsed", justify="right", no_wrap=True)
+        table.add_column("ETA", justify="right", no_wrap=True)
+        shown = active if max_rows is None else active[:max_rows]
+        for task in shown:
+            stats = task["stats"]
+            scene = str(stats.get("scene", task["scene"]))
+            scene = scene if len(scene) <= 48 else "…" + scene[-47:]
+            status = stats.get("status") or ("starting" if stats["prefix"] == "starting" else "working")
+            table.add_row(
+                Text(task["step"]), Text(scene),
+                ProgressBar(total=stats["total"], completed=stats["n"], width=None,
+                            style=COLORS["run"], complete_style=COLORS["done"],
+                            finished_style=COLORS["done"], pulse_style=COLORS["done"]),
+                Text(status), f"{stats['elapsed']:.0f}s", _duration(task["eta_seconds"]),
+            )
+        if len(shown) < len(active):
+            table.add_row(Text(f"+{len(active) - len(shown)} more", style="dim"))
         return table
 
     def render(self, *, live=None):
@@ -105,23 +143,11 @@ class RichProgressDisplay:
         if data is None:
             return Text("Waiting for progress", style="dim")
         active = data["active"]
-        operations = []
-        for task in active[:3]:
-            stats = task["stats"]
-            scene = str(stats.get("scene", task["scene"]))
-            scene = scene if len(scene) <= 48 else "…" + scene[-47:]
-            operations.append(Text(f"{scene} · {task['step']} · {stats['prefix']}", no_wrap=True, overflow="ellipsis"))
-            n, total = stats["n"], stats["total"]
-            count = f"{n:g} / {total:g} {stats['unit']}" if total is not None else "working"
-            meter = Table.grid(padding=(0, 1))
-            meter.add_row(ProgressBar(total=total, completed=n, width=25),
-                          Text(f"{count} · {stats['elapsed']:.0f}s · ETA {_duration(task['eta_seconds'])}", style="dim"))
-            operations.append(meter)
-        if len(active) > 3:
-            operations.append(Text(f"+ {len(active) - 3} other active operations", style="dim"))
-        if not operations:
-            operations = [Text("No active operations", style="dim")]
-        active_height = min(len(operations) + 2, 10)
+        max_operations = max(1, (self.console.height - 8) // 2) if live else len(active)
+        operations = (self.operations(active, max_rows=max_operations) if active
+                      else Text("No active operations", style="dim"))
+        active_height = (3 + min(len(active), max_operations) + int(len(active) > max_operations)
+                         if active else 3)
         available = max(6, self.console.height - active_height - 3)
         max_rows = len(data["rows"])
         table = self.table(data)
@@ -138,7 +164,7 @@ class RichProgressDisplay:
         steps = Panel(table, title="Workflow progress", title_align="left")
         recent = Panel(Group(*(Text(m) for m in data["messages"])) if data["messages"] else Text("Waiting for messages", style="dim"),
                        title="Recent messages", title_align="left")
-        active_panel = Panel(Group(*operations), title="Active operation", title_align="left")
+        active_panel = Panel(operations, title="Active operation", title_align="left")
         if live:
             layout = Layout()
             layout.split_column(Layout(recent, minimum_size=3), Layout(steps, size=step_height),

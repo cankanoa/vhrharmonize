@@ -18,7 +18,7 @@ from rich.console import Console
 from vhrharmonize.io.progress import current_callback, progress, reports_progress
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.progress import ProgressState, StepProgress, TaskProgress, WorkflowProgress
-from vhrharmonize.workflow.progress_rich import RichProgressDisplay, _bar
+from vhrharmonize.workflow.progress_rich import COLORS, RichProgressDisplay, _bar
 from vhrharmonize.progress import read_progress_snapshot, render_progress, validate_progress_snapshot
 from workflow_helpers import copy_step, import_settings, install_function
 
@@ -78,8 +78,11 @@ def test_counts_reuse_and_totals_with_real_workers(tmp_path, dashboards, directi
     assert state.active() == 0
     assert all(t.duration is not None and t.done for t in state.tasks.values())
     output = dashboard.test_display.console.file.getvalue()
-    assert "file_source" not in output and "core:" not in output
-    assert "Unused" in output and "Done" in output and "Run" in output and "All" in output
+    assert "file_source" not in output
+    step_table = Console(file=StringIO(), width=120)
+    step_table.print(dashboard.test_display.table())
+    assert "core:" not in step_table.file.getvalue()  # Core log prefixes belong to messages only.
+    assert "Unused" in output and "Loaded" in output and "Done" in output and "Run" in output and "All" in output
     assert "3(50%)" in output and "6(100%)" in output
     assert state.rows["prepare"].unused == 1
     assert "gray: reused" not in output
@@ -244,11 +247,11 @@ def test_reused_segment_and_eta_exclude_cached_work():
     state.rows[row.name] = row
     state.tasks["completed"] = TaskProgress(row.name, "scene", weight=3, done=True, duration=30)
     assert state.remaining_work(row) == 170
-    bar = _bar({"all": row.all, "reused": row.reused, "done": row.done}, width=264)
+    bar = _bar({"all": row.all, "reused": row.reused, "done": row.done, "run": row.run}, width=264)
     assert len(bar.plain.split(" ")[0]) == 264
     assert "%" not in bar.plain
-    assert any(s.style == "grey50" and s.end - s.start == 244 for s in bar.spans)
-    assert any(s.style == "green" and s.end - s.start == 3 for s in bar.spans)
+    assert any(s.style == COLORS["reused"] and s.end - s.start == 244 for s in bar.spans)
+    assert any(s.style == COLORS["done"] and s.end - s.start == 3 for s in bar.spans)
 
 
 def test_opaque_operation_elapsed_time_keeps_updating(tmp_path, monkeypatch):
@@ -262,7 +265,9 @@ def test_opaque_operation_elapsed_time_keeps_updating(tmp_path, monkeypatch):
     monkeypatch.setattr("vhrharmonize.workflow.progress.monotonic", lambda: 110)
     console.print(render_progress(dashboard.snapshot(), console=console))
     output = console.file.getvalue()
-    assert "opaque backend" in output and "working · 10s · ETA estimating" in output
+    operation = next(line for line in output.splitlines() if "working" in line)
+    assert all(value in operation for value in ("prepare", "scene", "10s", "TBD"))
+    assert "estimating" not in output
 
 
 def test_runtime_scene_discovery_replans_dashboard(tmp_path, monkeypatch, dashboards):
@@ -493,7 +498,8 @@ def test_callback_failure_is_isolated_and_explicit_path_enables_reporting(tmp_pa
     from vhrharmonize import run_workflow
 
     config = recipe(tmp_path)
-    config["shared"]["core:show_progress"] = False
+    # Isolate the consumer error from the rotating window of recent core messages.
+    config["shared"].update({"core:show_progress": False, "core:log_to_console": False})
     calls = []
 
     def broken(snapshot):

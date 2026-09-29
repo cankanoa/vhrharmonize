@@ -13,6 +13,7 @@ shared:
   # core:log_to_console: true # true | false; default: true.
   # core:show_progress: true # true | false; default: true. Live Rich dashboard; one final summary in redirected logs.
   # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
+  # core:statistics_path: null # path | null; default: null. Append core timings as OpenTelemetry JSONL; relative to this YAML. Analyze with vhr statistics.
   # Workflow-wide constants. They remain available to every scene and aggregate.
 
   const:reference_path: /path/to/reference.tif

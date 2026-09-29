@@ -1,12 +1,13 @@
 # CLI commands
 
-All commands use one executable and the same configuration flag:
+All commands use one executable. Workflow, plugin and HPC commands take a configuration file:
 
 ```bash
 vhr workflow --config configs/example.worldview.yml --dry-run
 vhr hpc-prepare --config configs/example.hpc.yml
 vhr hpc-start --config configs/1.staged.hpc.yml
 vhr cloud_mask --config configs/example.worldview.yml
+vhr statistics --input-path history.jsonl --output-path summary.json
 ```
 
 `workflow` runs the enabled steps in YAML order. A plugin command runs only that
@@ -38,3 +39,8 @@ normally use the generated staged HPC YAML. See [HPC](hpc.md).
 Options and help are generated from Python signatures and docstrings. Validation
 and execution errors come from those Python APIs. The old `vhr-*` executables and
 `--config-path` flag are removed. `python -m vhrharmonize.cli` is equivalent to `vhr`.
+
+`statistics` summarizes recorded core timings using pandas Table Schema JSON.
+Use `--per-run` to separate executions or `--run-id ID` to select one. Enable raw
+recording with `shared.core:statistics_path` in the workflow YAML. See
+[Statistics](../api/statistics.md) for append behavior and measurement boundaries.

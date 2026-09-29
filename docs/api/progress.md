@@ -5,6 +5,10 @@ from serial, process-pool and Dask workers; Rich is one consumer of the resultin
 snapshots. Apps do not need to import Rich, access scheduler internals, or parse
 terminal output.
 
+For durable task timings, use the related [statistics and timing API](statistics.md).
+Its `event_callback` delivers every ended measurement without UI throttling;
+`core:statistics_path` enables its append-only OpenTelemetry file consumer.
+
 ## Receive updates in Python
 
 ```python
@@ -125,6 +129,12 @@ overlapping columns do not form an exclusive partition. `fraction_done` is
 Done / Run, or `null` when Run is zero. Total counts sum the step counts, so All
 on the total row represents scene-step work rather than distinct scenes.
 
+Rich labels the `reused` count **Loaded** and orders its count columns as Unused,
+Loaded, Done, Run, All. Their headers and bar segments share fixed blue, purple,
+green and light gray colors, respectively (All remains neutral). Cached
+scenes that also count as unused occupy only the Loaded segment of the bar.
+This display change preserves the version 2 snapshot fields.
+
 Row statuses are `running`, `waiting`, `completed`, `reused`, `skipped`, or
 `failed`. `eta_seconds` is a nonnegative number or `null` when not yet estimable.
 Step ETAs use completed task durations and observed concurrency; the combined ETA
@@ -137,5 +147,9 @@ plus any `operation`, `status`, and `scene` labels emitted by the function.
 `total` and `rate` can be `null` for indeterminate operations. Elapsed and ETA are
 seconds, rate is units per second. Queued tasks are not counted as active, and
 Done advances only after core accepts the completed output.
+
+Rich renders one row per active operation with Step, ID, Progress, Status, Elapsed
+and ETA columns. It shows elapsed seconds and `TBD` for unknown ETAs. Detailed
+phase descriptions and unit counts remain available in `stats` for API consumers.
 
 ::: vhrharmonize.progress
