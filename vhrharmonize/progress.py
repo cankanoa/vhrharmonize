@@ -36,7 +36,16 @@ class ActiveOperation(TypedDict):
     eta_seconds: float | None
 
 
-class ProgressSnapshot(TypedDict):
+class MessageHistory(TypedDict):
+    sequence: int
+    messages: list[str]
+
+
+class _SnapshotExtras(TypedDict, total=False):
+    message_history: MessageHistory
+
+
+class ProgressSnapshot(_SnapshotExtras):
     version: int
     run_id: str
     updated_at: str
@@ -125,13 +134,21 @@ def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
                 string(stats[key])
         for message in result["messages"]:
             string(message)
+        if "message_history" in result:
+            history = result["message_history"]
+            number(history["sequence"])
+            if (not isinstance(history["sequence"], int) or not isinstance(history["messages"], list)
+                    or history["sequence"] < len(history["messages"])):
+                raise ValueError("Invalid message history cursor")
+            for message in history["messages"]:
+                string(message)
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"Malformed workflow progress snapshot: {exc}") from exc
     return result
 
 
 def read_progress_snapshot(path: str | Path) -> ProgressSnapshot:
-    """Read one atomic snapshot file without importing Rich or starting a UI.
+    """Read one atomic snapshot file without importing a frontend or starting a UI.
 
     FileNotFoundError means no snapshot has been published at this path yet.
     Invalid JSON, malformed snapshots and unsupported versions raise ValueError.
@@ -140,18 +157,19 @@ def read_progress_snapshot(path: str | Path) -> ProgressSnapshot:
         return validate_progress_snapshot(json.load(stream))
 
 
-def render_progress(snapshot: ProgressSnapshot, *, console=None):
-    """Build a static Rich renderable from a snapshot; never starts a live UI.
+def render_progress(snapshot: ProgressSnapshot, *, width=120, ascii_only=False):
+    """Build prompt_toolkit formatted text for a static snapshot, without starting a UI.
 
-    Rich is imported only when this optional frontend is requested.
+    Use prompt_toolkit.print_formatted_text() to print it, or
+    prompt_toolkit.formatted_text.to_plain_text() for an unstyled string.
     """
-    from .workflow.progress_rich import RichProgressDisplay
+    from .workflow.progress_terminal import TerminalProgressDisplay
 
-    display = RichProgressDisplay(console=console)
+    display = TerminalProgressDisplay(width=width, ascii_only=ascii_only)
     display.update(snapshot)
-    return display.render(live=False)
+    return display.render()
 
 
-__all__ = ["PROGRESS_VERSION", "ProgressRow", "ActiveOperation", "ProgressSnapshot",
+__all__ = ["PROGRESS_VERSION", "ProgressRow", "ActiveOperation", "ProgressSnapshot", "MessageHistory",
            "ProgressCallback", "TimingEvent", "TimingCallback", "read_progress_snapshot",
            "validate_progress_snapshot", "render_progress"]

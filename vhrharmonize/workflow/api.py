@@ -48,7 +48,7 @@ def run_workflow(
         config_dir: Base for core-managed relative paths; defaults to the YAML directory or cwd.
         dry_run: Discover scenes and return counts without running ordinary processing steps.
         progress_callback: Receive detached progress snapshots in the parent process; Python only.
-        progress_path: Optional snapshot JSON destination, also enables reporting without Rich.
+        progress_path: Optional snapshot JSON destination, also enables reporting without a display.
         event_callback: Receive every core timing event in the parent process; Python only.
 
     Returns:
@@ -83,7 +83,7 @@ def run_plugin(
         config_dir: Base for core-managed relative paths; defaults to the YAML directory or cwd.
         dry_run: Discover scenes and return counts without running ordinary processing steps.
         progress_callback: Receive detached progress snapshots in the parent process; Python only.
-        progress_path: Optional snapshot JSON destination, also enables reporting without Rich.
+        progress_path: Optional snapshot JSON destination, also enables reporting without a display.
         event_callback: Receive every core timing event in the parent process; Python only.
 
     Other enabled processing steps supply existing outputs only and are never computed.

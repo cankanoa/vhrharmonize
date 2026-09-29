@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from inspect import Parameter, signature
+import logging
 from threading import RLock, local
 from time import monotonic
 from uuid import uuid4
@@ -170,18 +171,29 @@ class _MessageStream:
         sink = _messages.get()
         if sink is None:
             return self.original.write(text)
+        if not isinstance(text, str):
+            raise TypeError(f"write() argument must be str, not {type(text).__name__}")
+        size = len(text)
+        if not text:
+            return 0
+        if getattr(self.buffers, "after_cr", False) and text.startswith("\n"):
+            text = text[1:]
+        self.buffers.after_cr = text.endswith("\r")
         value = getattr(self.buffers, "text", "") + text
-        lines = value.replace("\r", "\n").split("\n")
-        self.buffers.text = lines.pop()[-4096:]
+        lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        self.buffers.text = lines.pop()
         for line in lines:
-            if line.strip():
-                sink(line[-4096:])
-        return len(text)
+            sink(line)
+        return size
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
 
     def flush(self):
         sink = _messages.get()
         value = getattr(self.buffers, "text", "")
-        if sink is not None and value.strip():
+        if sink is not None and value:
             self.buffers.text = ""
             sink(value)
         self.original.flush()
@@ -193,22 +205,48 @@ class _MessageStream:
         return getattr(self.original, name)
 
 
+def _redirect_console_handlers(streams):
+    """Retarget existing standard logging handlers without changing their settings."""
+    loggers = [logging.getLogger(), *list(logging.Logger.manager.loggerDict.values())]
+    for logger in loggers:
+        if isinstance(logger, logging.Logger):
+            for handler in logger.handlers[:]:
+                if isinstance(handler, logging.StreamHandler):
+                    for original, replacement in streams:
+                        # Dynamic stderr handlers follow sys.stderr themselves;
+                        # their stream property can be read-only.
+                        if vars(handler).get("stream") is original:
+                            handler.setStream(replacement)
+                            break
+
+
 @contextmanager
 def capture_messages():
-    """Install one context-aware stream router per process, restoring on exit."""
+    """Route stdout/stderr and their logging handlers, restoring them on exit.
+
+    Standard print(), write(), writelines(), flush(), and logging.StreamHandler
+    output share the plain-text message transport. File handlers are unchanged.
+    """
     global _stream_users
     with _stream_lock:
         if _stream_users == 0:
             sys.stdout = _MessageStream(sys.stdout)
             sys.stderr = _MessageStream(sys.stderr)
+            _redirect_console_handlers(((sys.stdout.original, sys.stdout), (sys.stderr.original, sys.stderr)))
         _stream_users += 1
     try:
         yield
     finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        with _stream_lock:
-            _stream_users -= 1
-            if _stream_users == 0:
-                sys.stdout = sys.stdout.original
-                sys.stderr = sys.stderr.original
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            with _stream_lock:
+                _stream_users -= 1
+                if _stream_users == 0:
+                    stdout, stderr = sys.stdout, sys.stderr
+                    try:
+                        _redirect_console_handlers(((stdout, stdout.original), (stderr, stderr.original)))
+                    finally:
+                        sys.stdout = stdout.original
+                        sys.stderr = stderr.original

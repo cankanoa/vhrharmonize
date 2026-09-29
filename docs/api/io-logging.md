@@ -40,7 +40,21 @@ align_image_pair(
 )
 ```
 
-A callback is a Python callable, not a YAML expression or CLI option. With `core:report_progress: true`, `core:show_progress: true`, or an application progress callback, core supplies the reporting context automatically. It exposes a [public workflow snapshot API](progress.md); the optional Rich frontend consumes those snapshots. Functions remain independent of Rich. Python messages from each workflow worker are routed back to the snapshot's recent messages. Unmanaged backend console bars are disabled when the backend accepts `log_to_console`.
+A callback is a Python callable, not a YAML expression or CLI option. With `core:report_progress: true`, `core:show_progress: true`, or an application progress callback, core supplies the reporting context automatically. It exposes a [public workflow snapshot API](progress.md); the optional `prompt_toolkit` frontend consumes those snapshots. Functions remain independent of the frontend. Python messages from each workflow worker are routed back to the snapshot's recent messages. Unmanaged backend console bars are disabled when the backend accepts `log_to_console`.
+
+Messages use ordinary Python text output: `print()`, `sys.stdout` / `sys.stderr`
+(`write`, `writelines`, and `flush`), and standard `logging.StreamHandler` output.
+Console handlers created before a workflow starts are temporarily routed through
+the same capture stream; their formatters, filters and levels remain in effect.
+File handlers keep writing to their original destinations. Streams and console
+handlers are restored when the workflow exits, including on failure. Worker
+messages use the existing queue/Dask transport and reach the UI as plain text
+through the progress API; plugins do not need to call the UI.
+
+Blank lines, partial writes and multiline tracebacks are preserved, with CRLF
+and carriage returns normalized to message boundaries. This captures Python text
+streams; native file-descriptor writes and inherited subprocess output need to be
+explicitly read from a pipe and forwarded to a captured text stream.
 
 To report measurable work in a custom function, use the tqdm-compatible helper:
 

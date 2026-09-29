@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
@@ -901,13 +902,13 @@ def get_slurm_progress(config: str | Path | Mapping[str, Any]) -> ProgressSnapsh
 def _print_workflow_progress(data):
     if data is None:
         return
-    from rich.console import Console
-    from .progress import render_progress
+    from .workflow.progress_terminal import TerminalProgressDisplay
 
-    console = Console()
     print(f"\nWorkflow progress: {data.get('status', 'unknown')} · {data.get('updated_at', '')}")
     # Print every row once; a status command never starts the live terminal UI.
-    console.print(render_progress(data, console=console))
+    display = TerminalProgressDisplay(stream=sys.stdout)
+    display.update(data)
+    display.print_snapshot()
 
 
 def _status_from_text(raw_status_text: str) -> str:

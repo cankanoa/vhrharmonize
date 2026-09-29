@@ -86,13 +86,25 @@ class TaskProgress:
         return self.started is not None and not (self.done or self.failed or self.computed)
 
 
+class MessageHistory(deque):
+    """Bounded history with a cursor that distinguishes repeated log messages."""
+
+    def __init__(self):
+        super().__init__(maxlen=1000)
+        self.sequence = 0
+
+    def append(self, message):
+        super().append(message)
+        self.sequence += 1
+
+
 class ProgressState:
     """Completion accounting is independent of worker event delivery order."""
 
     def __init__(self, workers=1):
         self.rows = {}
         self.tasks = {}
-        self.messages = deque(maxlen=100)
+        self.messages = MessageHistory()
         self.workers = workers
         self.lock = RLock()
         self.failed = False
@@ -390,7 +402,7 @@ class WorkflowProgress:
         }
 
     def snapshot(self) -> ProgressSnapshot:
-        """Return detached JSON data; never callbacks, Rich objects or monotonic clocks."""
+        """Return detached JSON data; never callbacks, UI objects or monotonic clocks."""
         with self.state.lock:
             now = monotonic()
             active = []
@@ -412,6 +424,8 @@ class WorkflowProgress:
                 "total": self._row_snapshot(self.state.total(), total=True),
                 "rows": [self._row_snapshot(row) for row in self.state.rows.values()],
                 "active": active, "messages": list(self.state.messages)[-5:],
+                "message_history": {"sequence": self.state.messages.sequence,
+                                    "messages": list(self.state.messages)},
             }
 
     def publish(self, *, force=False):

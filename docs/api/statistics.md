@@ -122,7 +122,7 @@ run_workflow("workflow.yml", event_callback=events.put)
 ```
 
 `run_workflow()`, `run_plugin()` and `Workflow.run()` accept
-`event_callback(event)`. It works without a statistics file or Rich. Events use
+`event_callback(event)`. It works without a statistics file or terminal display. Events use
 the public `TimingEvent` / `TimingCallback` types in `vhrharmonize.progress`:
 
 | Field | Meaning |

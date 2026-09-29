@@ -1644,7 +1644,7 @@ class Workflow:
         """Execute the workflow, optionally publishing snapshots to a parent callback.
 
         Reporting is enabled by a callback, an explicit snapshot path, or either
-        core:report_progress or core:show_progress. Only show_progress starts Rich.
+        core:report_progress or core:show_progress. Only show_progress starts the UI.
         """
         if progress_callback is not None and not callable(progress_callback):
             raise TypeError("progress_callback must be callable")
@@ -1659,9 +1659,9 @@ class Workflow:
         with ExitStack() as stack:
             callbacks = []
             if self.controls["show_progress"]:
-                from .progress_rich import RichProgressDisplay
+                from .progress_terminal import TerminalProgressDisplay
 
-                display = stack.enter_context(RichProgressDisplay())
+                display = stack.enter_context(TerminalProgressDisplay())
                 callbacks.append(display.update)
             if progress_callback is not None:
                 callbacks.append(progress_callback)

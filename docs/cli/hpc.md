@@ -27,7 +27,7 @@ vhr hpc-download --config configs/1.staged.hpc.yml
 `hpc-progress` fetches just the public progress snapshot and prints JSON when
 available, without changing the staged YAML. Set `shared.core:report_progress: true`
 and `shared.core:show_progress: false` to publish snapshots without a console dashboard. `hpc-status`
-fetches the same data and renders it with Rich alongside scheduler status and
+fetches the same data and renders it with `prompt_toolkit` alongside scheduler status and
 logs. See the [progress API](../api/progress.md) for Python callbacks and polling.
 
 Preparation uses the same dependency plan as local execution. It stages required input files/directories and reusable outputs, including context checkpoints, and maps declared persistent outputs and their checkpoints for download. A cloud-masked image can therefore be uploaded without uploading or rebuilding its raw processing chain.

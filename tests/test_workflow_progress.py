@@ -7,18 +7,19 @@ from threading import Event
 from types import ModuleType
 import inspect
 import json
+import logging
 import os
 import sys
 from time import monotonic, sleep
 import yaml
 
 import pytest
-from rich.console import Console
+from prompt_toolkit.formatted_text import to_plain_text
 
 from vhrharmonize.io.progress import current_callback, progress, reports_progress
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.progress import ProgressState, StepProgress, TaskProgress, WorkflowProgress
-from vhrharmonize.workflow.progress_rich import COLORS, RichProgressDisplay, _bar
+from vhrharmonize.workflow.progress_terminal import COLORS, TerminalProgressDisplay, _bar
 from vhrharmonize.progress import read_progress_snapshot, render_progress, validate_progress_snapshot
 from workflow_helpers import copy_step, import_settings, install_function
 
@@ -27,10 +28,10 @@ from workflow_helpers import copy_step, import_settings, install_function
 def dashboards(monkeypatch):
     result, displays = [], []
     initialize = WorkflowProgress.__init__
-    initialize_display = RichProgressDisplay.__init__
+    initialize_display = TerminalProgressDisplay.__init__
 
     def capture_display(self, **kwargs):
-        initialize_display(self, console=Console(file=StringIO(), width=120))
+        initialize_display(self, stream=StringIO(), width=120)
         displays.append(self)
 
     def capture(self, workflow, **kwargs):
@@ -38,7 +39,7 @@ def dashboards(monkeypatch):
         self.test_display = displays[-1] if displays else None
         result.append(self)
 
-    monkeypatch.setattr(RichProgressDisplay, "__init__", capture_display)
+    monkeypatch.setattr(TerminalProgressDisplay, "__init__", capture_display)
     monkeypatch.setattr(WorkflowProgress, "__init__", capture)
     return result
 
@@ -77,11 +78,10 @@ def test_counts_reuse_and_totals_with_real_workers(tmp_path, dashboards, directi
     assert (state.total().done, state.total().run, state.total().all, state.total().reused) == (3, 3, 6, 2)
     assert state.active() == 0
     assert all(t.duration is not None and t.done for t in state.tasks.values())
-    output = dashboard.test_display.console.file.getvalue()
+    output = dashboard.test_display.stream.getvalue()
     assert "file_source" not in output
-    step_table = Console(file=StringIO(), width=120)
-    step_table.print(dashboard.test_display.table())
-    assert "core:" not in step_table.file.getvalue()  # Core log prefixes belong to messages only.
+    step_table = "\n".join(to_plain_text(line) for line in dashboard.test_display.table())
+    assert "core:" not in step_table  # Core log prefixes belong to messages only.
     assert "Unused" in output and "Loaded" in output and "Done" in output and "Run" in output and "All" in output
     assert "3(50%)" in output and "6(100%)" in output
     assert state.rows["prepare"].unused == 1
@@ -139,21 +139,34 @@ def test_worker_callbacks_and_messages_share_parent_display(tmp_path, monkeypatc
 
     monkeypatch.setattr(engine, "ProcessPoolExecutor", ThreadPoolExecutor)
     config = recipe(tmp_path, workers=2)
+    logger = logging.getLogger("vhr-workflow-stream-test")
+    handler = logging.StreamHandler(sys.stderr)
+    monkeypatch.setattr(logger, "handlers", [handler])
+    monkeypatch.setattr(logger, "propagate", False)
 
     def call(value, progress_callback=None):
         assert callable(progress_callback)
         print(f"processing {value}")
+        sys.stderr.writelines((f"stderr {value}", "\n"))
+        logger.warning("logged %s", value)
         for n in range(3):
             progress_callback(n=n, total=2, prefix="tiles", unit="tiles", elapsed=n, rate=1)
         return value
 
     install_function(monkeypatch, "callback_plugin", call)
     config["measure"] = {"plugin": "callback_plugin", "core:run": True, "param:value": "var:basename"}
-    Workflow(config).run()
+    try:
+        Workflow(config).run()
+    finally:
+        handler.close()
     state = dashboards[-1].state
     assert state.rows["measure"].done == 3
     messages = [str(m) for m in state.messages]
     assert all(f"processing {value}" in messages for value in ("a", "b", "c"))
+    assert all(f"{prefix} {value}" in messages for prefix in ("stderr", "logged") for value in ("a", "b", "c"))
+    history = dashboards[-1].snapshot()["message_history"]
+    assert all(f"processing {value}" in history["messages"] for value in ("a", "b", "c"))
+    assert history["sequence"] >= len(history["messages"])
     assert state.active() == 0
 
 
@@ -224,7 +237,7 @@ def test_failed_call_does_not_advance_and_restores_streams(tmp_path, monkeypatch
     assert state.rows["failure"].done == 0
     assert state.failed and state.active() == 0
     assert (sys.stdout, sys.stderr) == (stdout, stderr)
-    assert "backend failed" in dashboards[-1].test_display.console.file.getvalue()
+    assert "backend failed" in dashboards[-1].test_display.stream.getvalue()
 
 
 def test_overviews_have_separate_counts_after_named_step(tmp_path, make_test_raster, dashboards):
@@ -248,23 +261,21 @@ def test_reused_segment_and_eta_exclude_cached_work():
     state.tasks["completed"] = TaskProgress(row.name, "scene", weight=3, done=True, duration=30)
     assert state.remaining_work(row) == 170
     bar = _bar({"all": row.all, "reused": row.reused, "done": row.done, "run": row.run}, width=264)
-    assert len(bar.plain.split(" ")[0]) == 264
-    assert "%" not in bar.plain
-    assert any(s.style == COLORS["reused"] and s.end - s.start == 244 for s in bar.spans)
-    assert any(s.style == COLORS["done"] and s.end - s.start == 3 for s in bar.spans)
+    assert len(to_plain_text(bar)) == 264
+    assert "%" not in to_plain_text(bar)
+    assert any(style == f"fg:{COLORS['reused']}" and len(text) == 244 for style, text in bar)
+    assert any(style == f"fg:{COLORS['done']}" and len(text) == 3 for style, text in bar)
 
 
 def test_opaque_operation_elapsed_time_keeps_updating(tmp_path, monkeypatch):
     dashboard = WorkflowProgress(Workflow(recipe(tmp_path)))
-    console = Console(file=StringIO(), width=120)
     monkeypatch.setattr("vhrharmonize.workflow.progress.monotonic", lambda: 100)
     dashboard.state.tasks["scene"] = TaskProgress("prepare", "scene", started=100)
     dashboard.state.handle({"task": "scene", "kind": "progress", "stats": {
         "n": 0, "total": None, "prefix": "opaque backend", "elapsed": 0, "rate": None,
     }})
     monkeypatch.setattr("vhrharmonize.workflow.progress.monotonic", lambda: 110)
-    console.print(render_progress(dashboard.snapshot(), console=console))
-    output = console.file.getvalue()
+    output = to_plain_text(render_progress(dashboard.snapshot()))
     operation = next(line for line in output.splitlines() if "working" in line)
     assert all(value in operation for value in ("prepare", "scene", "10s", "TBD"))
     assert "estimating" not in output
@@ -366,9 +377,7 @@ def test_phase_only_plugin_is_labeled_but_explicit_callbacks_are_supported(tmp_p
     panel = dashboards[-1]
     assert not panel.state.rows["opaque"].worker_progress
     assert panel.state.rows["reporting"].worker_progress
-    console = Console(file=StringIO(), width=180)
-    console.print(render_progress(panel.snapshot(), console=console))
-    assert "opaque (no cb)" in console.file.getvalue()
+    assert "opaque (no cb)" in to_plain_text(render_progress(panel.snapshot(), width=180))
 
 
 def test_spectralmatch_aggregate_workers_feed_core_display(tmp_path, make_test_raster, monkeypatch, dashboards):
@@ -403,17 +412,17 @@ def test_spectralmatch_aggregate_workers_feed_core_display(tmp_path, make_test_r
 
 
 @pytest.mark.parametrize("workers", [1, 2])
-def test_public_callback_and_polling_work_without_rich(tmp_path, monkeypatch, workers):
+def test_public_callback_and_polling_work_without_frontend(tmp_path, monkeypatch, workers):
     import builtins
 
     original_import = builtins.__import__
 
-    def no_rich(name, *args, **kwargs):
-        if name == "rich" or name.startswith("rich.") or name.endswith("progress_rich"):
+    def no_frontend(name, *args, **kwargs):
+        if name.startswith(("rich", "prompt_toolkit")) or name.endswith("progress_terminal"):
             raise AssertionError("Headless progress must not import the frontend")
         return original_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", no_rich)
+    monkeypatch.setattr(builtins, "__import__", no_frontend)
     config = recipe(tmp_path, workers=workers)
     config["shared"]["core:show_progress"] = False
     workflow = Workflow(config)
@@ -528,12 +537,10 @@ def test_static_renderer_uses_numeric_snapshot_without_recomputing_eta(tmp_path)
     data = reporter.snapshot()
     assert data["rows"][0]["eta_seconds"] == 5
     data["rows"][0]["eta_seconds"] = 83
-    console = Console(file=StringIO(), width=140)
-    console.print(render_progress(data, console=console))
-    assert "~1m 23s" in console.file.getvalue()
+    assert "~1m 23s" in to_plain_text(render_progress(data, width=140))
 
 
-def test_run_plugin_and_rich_consume_the_same_public_data(tmp_path, dashboards):
+def test_run_plugin_and_terminal_consume_the_same_public_data(tmp_path, dashboards):
     from vhrharmonize import run_plugin
 
     snapshots = []
