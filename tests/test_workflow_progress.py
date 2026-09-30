@@ -137,7 +137,10 @@ def test_callback_uses_tqdm_fields_and_restores_context_on_error():
 def test_worker_callbacks_and_messages_share_parent_display(tmp_path, monkeypatch, dashboards):
     from vhrharmonize.workflow import engine
 
-    monkeypatch.setattr(engine, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(
+        engine, "ProcessPoolExecutor",
+        lambda *, max_workers, mp_context: ThreadPoolExecutor(max_workers=max_workers),
+    )
     config = recipe(tmp_path, workers=2)
     logger = logging.getLogger("vhr-workflow-stream-test")
     handler = logging.StreamHandler(sys.stderr)
@@ -548,3 +551,25 @@ def test_run_plugin_and_terminal_consume_the_same_public_data(tmp_path, dashboar
     assert snapshots[-1]["status"] == "completed"
     assert snapshots[-1] == dashboards[-1].test_display.snapshot
     assert snapshots[-1]["total"]["done"] == 3
+
+
+@pytest.mark.parametrize("direction", ["horizontal", "vertical"])
+def test_workers_do_not_flush_inherited_parent_streams(tmp_path, monkeypatch, dashboards, direction):
+    parent_pid = os.getpid()
+
+    class ParentStream(StringIO):
+        def flush(self):
+            if os.getpid() != parent_pid:
+                raise RuntimeError("Worker inherited the parent output stream")
+            super().flush()
+
+    # A forked worker inherits this stream underneath capture_messages().
+    # Real terminal streams may hang here on a lock held by a vanished UI thread.
+    monkeypatch.setattr(sys, "stdout", ParentStream())
+    config = recipe(tmp_path, direction=direction, workers=2)
+    Workflow(config).run()
+    state = dashboards[-1].state
+    assert state.total().done == state.total().run == 3
+    assert state.active() == 0
+    for name in ("a", "b", "c"):
+        assert (tmp_path / "output" / f"{name}_second.txt").read_text() == name

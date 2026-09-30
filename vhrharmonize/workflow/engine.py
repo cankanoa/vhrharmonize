@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import json
 import inspect
 import os
+from multiprocessing import get_context
 from pathlib import Path
 from time import monotonic, time_ns
 from threading import RLock
@@ -1411,7 +1412,10 @@ class Workflow:
                 finally:
                     client.cancel(list(futures))
         elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
-            with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as executor:
+            # The progress UI has active threads; fork can inherit locked output streams.
+            with ProcessPoolExecutor(
+                max_workers=min(workers, len(pending)), mp_context=get_context("spawn")
+            ) as executor:
                 futures = {
                     executor.submit(_execute, payload): node for node, payload in dispatches()
                 }
@@ -1540,7 +1544,10 @@ class Workflow:
                 finally:
                     client.cancel(list(running))
         elif workers > 1 and len(previous) > 1:
-            with ProcessPoolExecutor(max_workers=min(workers, len(previous))) as executor:
+            # Start clean workers instead of inheriting the progress UI's locks.
+            with ProcessPoolExecutor(
+                max_workers=min(workers, len(previous)), mp_context=get_context("spawn")
+            ) as executor:
                 try:
                     schedule(
                         lambda node, payload: executor.submit(_execute, payload),

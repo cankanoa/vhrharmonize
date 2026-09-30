@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
-from multiprocessing import Manager
+from multiprocessing import get_context
 from pathlib import Path
 from queue import Empty, Queue
 from tempfile import NamedTemporaryFile
@@ -468,7 +468,7 @@ class WorkflowProgress:
 
     def __enter__(self):
         if self.state.workers > 1 and self.workflow.controls["concurrent_processing_backend"] == "process_pool":
-            self.manager = Manager()
+            self.manager = get_context("spawn").Manager()
             self.queue = self.manager.Queue()
         self.context = progress_context(messages=lambda text: self.queue.put({"kind": "message", "text": text}))
         self.context.__enter__()

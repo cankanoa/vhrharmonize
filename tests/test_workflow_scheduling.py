@@ -108,7 +108,10 @@ def test_fast_scene_advances_while_another_scene_is_still_running(monkeypatch):
 
     recipe, events = pipeline(monkeypatch, "vertical")
     recipe["defaults"]["core:concurrent_processing"] = 2
-    monkeypatch.setattr(engine, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(
+        engine, "ProcessPoolExecutor",
+        lambda *, max_workers, mp_context: ThreadPoolExecutor(max_workers=max_workers),
+    )
     advanced = Event()
 
     def first(value):
