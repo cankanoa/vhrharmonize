@@ -1,4 +1,4 @@
-"""Exercise the terminal UI with real key/mouse input and screen rendering."""
+"""Exercise native terminal output and progress-box rendering."""
 
 import asyncio
 from copy import deepcopy
@@ -40,6 +40,9 @@ class ScreenOutput(DummyOutput):
 
     def __init__(self):
         self.entered = self.restored = False
+        self.written = []
+        self.mouse_enabled = False
+        self.cursor_visible = True
 
     def get_size(self):
         return self.size
@@ -50,8 +53,20 @@ class ScreenOutput(DummyOutput):
     def quit_alternate_screen(self):
         self.restored = True
 
+    def write(self, text):
+        self.written.append(text)
 
-def test_scrolling_pins_progress_and_keeps_receiving_updates():
+    def enable_mouse_support(self):
+        self.mouse_enabled = True
+
+    def hide_cursor(self):
+        self.cursor_visible = False
+
+    def show_cursor(self):
+        self.cursor_visible = True
+
+
+def test_native_logs_print_once_above_progress_and_updates_resize():
     async def exercise(pipe):
         output = ScreenOutput()
         display = terminal.TerminalProgressDisplay(stream=StringIO())
@@ -77,30 +92,25 @@ def test_scrolling_pins_progress_and_keeps_receiving_updates():
 
         task = asyncio.create_task(app.run_async(handle_sigint=False, set_exception_handler=False))
         try:
-            first = await frame_when(lambda f: any("message 039" in line for line in f))
-            workflow_y = next(i for i, line in enumerate(first) if "Workflow progress" in line)
-            active_y = next(i for i, line in enumerate(first) if "Active operation" in line)
-            assert "working" in "\n".join(first) and output.entered
-            assert all(line.startswith("message ") for line in first[:workflow_y])
-            # PageUp affects only the message viewport.
-            pipe.send_text("\x1b[5~")
-            paused = await frame_when(lambda f: f[0] != first[0])
-            assert paused[workflow_y:] == first[workflow_y:]
-            assert "message 039" not in "\n".join(paused)
-            # New snapshots keep the paused viewport in place while counts update.
+            first = await frame_when(lambda f: terminal.TITLE in "\n".join(f)
+                                     and "message 039" in "".join(output.written))
+            workflow_y = next(i for i, line in enumerate(first) if terminal.TITLE in line)
+            active_y = next(i for i, line in enumerate(first) if line.startswith("├")) + 1
+            assert "working" in "\n".join(first)
+            assert not output.entered and not output.mouse_enabled
+            assert not app.full_screen and not app.mouse_support()
+            assert "message 039" not in "\n".join(first)  # Logs belong to native scrollback.
+            # New snapshots append only the new log line and update the same box.
             newer = snapshot([f"message {i:03d}" for i in range(41)])
             newer["rows"][0]["done"] = newer["total"]["done"] = 4
             newer["rows"][0]["percentages"]["done"] = newer["total"]["percentages"]["done"] = 100 * 4 / 264
             display.update(newer)
-            updated = await frame_when(lambda f: "4(2%)" in "\n".join(f))
-            assert updated[:workflow_y] == paused[:workflow_y]
-            assert "Active operation" in updated[active_y]
-            # End resumes following, and SGR mouse-wheel input scrolls messages.
-            pipe.send_text("\x1b[F")
-            following = await frame_when(lambda f: "message 040" in "\n".join(f))
-            pipe.send_text("\x1b[<64;4;3M")
-            wheel = await frame_when(lambda f: f[0] != following[0])
-            assert wheel[workflow_y:] == updated[workflow_y:]
+            updated = await frame_when(lambda f: "4(2%)" in "\n".join(f)
+                                       and "message 040" in "".join(output.written))
+            assert terminal.TITLE in updated[workflow_y]
+            assert "ID" in updated[active_y]
+            text = "".join(output.written)
+            assert all(text.count(f"message {i:03d}") == 1 for i in range(41))
             # Resizing does not let panels overflow or hide the overall progress.
             for rows, columns in ((18, 80), (10, 60), (30, 140)):
                 output.size = Size(rows=rows, columns=columns)
@@ -124,7 +134,7 @@ def test_scrolling_pins_progress_and_keeps_receiving_updates():
             if not app.is_done:
                 app.exit()
             await asyncio.wait_for(task, 5)
-        assert output.restored
+        assert not output.entered and output.cursor_visible
 
     with create_pipe_input() as pipe:
         asyncio.run(exercise(pipe))
@@ -156,8 +166,10 @@ def test_ui_thread_restores_terminal_without_moving_processing(monkeypatch, fail
             assert failure and str(exc) == "backend failed"
     assert display.error is None
     assert not display.thread.is_alive()
-    assert output.entered and output.restored
-    assert stream.getvalue().count("Workflow progress") == 1
+    assert not output.entered and output.cursor_visible
+    assert "".join(output.written).count("processing scene") == 1
+    assert stream.getvalue().count(terminal.TITLE) == 1
+    assert "processing scene" not in stream.getvalue()  # Do not repeat logs in the final box.
 
 
 def test_message_history_keeps_bursts_and_repeats_and_is_bounded():
@@ -182,7 +194,7 @@ def test_message_history_keeps_bursts_and_repeats_and_is_bounded():
     assert len(display.messages) == 1013
     newer["run_id"] = "another run"
     display.update(newer)
-    assert len(display.messages) == 1001 and display.follow
+    assert len(display.messages) == 1001
 
 
 def test_static_colors_plain_output_and_old_snapshots(monkeypatch):
@@ -193,6 +205,11 @@ def test_static_colors_plain_output_and_old_snapshots(monkeypatch):
     lines = to_plain_text(value).splitlines()
     assert lines[0].startswith("scene [red] written")
     assert "Recent messages" not in to_plain_text(value)
+    assert sum(line.startswith("╭") for line in lines) == 1
+    assert sum(line.startswith("├") for line in lines) == 1
+    assert sum(line.startswith("╰") for line in lines) == 1
+    assert to_plain_text(value).count(terminal.TITLE) == 1
+    assert "Active operation" not in to_plain_text(value)
     assert [line.strip("│ ").split() for line in lines if line.strip("│ ").startswith("Step ")] == [
         ["Step", "Unused", "Loaded", "Done", "Run", "All", "Active", "ETA", "Progress"],
         ["Step", "ID", "Status", "Elapsed", "ETA", "Progress"],
@@ -210,7 +227,7 @@ def test_static_colors_plain_output_and_old_snapshots(monkeypatch):
         display.update(data)
     stream.seek(0)
     output = stream.read()
-    assert "Workflow progress" in output and "Loaded" in output and "scene" in output
+    assert terminal.TITLE in output and "Loaded" in output and "scene" in output
     assert "\x1b" not in output and output.isascii()
 
 

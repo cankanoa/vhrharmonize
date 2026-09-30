@@ -104,15 +104,19 @@ to obtain an unstyled string. `hpc-status` and redirected workflow output omit
 terminal escape sequences; terminals without Unicode support use ASCII borders.
 These consumers use numeric ETAs from the snapshot; they do not recalculate work.
 
-Interactive workflow runs use a full-screen dashboard. Messages fill the available
-space as a borderless, full-width main window without a heading. Mouse-wheel scrolling,
-Up/Down, and PageUp/PageDown scroll messages while Workflow progress and
-Active operation remain pinned below. Both tables put Progress in the rightmost
-column. Home moves to the oldest retained message;
-End resumes following new messages. Left/Right reveal long message lines.
-The dashboard retains up to 10,000 message lines, restores the terminal on exit,
-and prints one final summary. Processing stays on the calling thread, independently
-of the UI thread. Noninteractive input/output and `TERM=dumb` use a static summary.
+Interactive workflow runs keep the original terminal screen and scrollback.
+Messages are printed once as ordinary terminal lines, using `prompt_toolkit`'s
+`run_in_terminal()` to redraw the live progress box below new output. The display
+does not enter the alternate screen or capture mouse scrolling. Use the terminal's
+usual scrolling, text selection and copy controls; scrolling back can move the
+progress box out of view.
+
+The box is titled **VHRHarmonize Workflow Progress**, with one divider separating
+the workflow totals/steps from active operations. Both tables put Progress in the
+rightmost column. On exit, pending messages are flushed and one final box remains,
+without repeating the last messages. Processing stays on the calling thread,
+independently of the UI thread. Noninteractive input/output and `TERM=dumb` use a
+static summary, including recent messages.
 
 ## Snapshot version 2
 

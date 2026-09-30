@@ -7,15 +7,12 @@ from threading import Event, RLock, Thread
 from time import monotonic
 import warnings
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.data_structures import Point
+from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.formatted_text import FormattedText, to_plain_text
 from prompt_toolkit.input import create_input
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, Window
-from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
-from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.mouse_events import MouseEventType
+from prompt_toolkit.layout import Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import create_output
 from prompt_toolkit.shortcuts import print_formatted_text
 from prompt_toolkit.utils import get_cwidth
@@ -25,6 +22,7 @@ from vhrharmonize.progress import validate_progress_snapshot
 
 COLORS = {"unused": "#4b87b9", "reused": "#956ac3", "done": "#298845", "run": "#858585"}
 COUNT_COLUMNS = (("Unused", "unused"), ("Loaded", "reused"), ("Done", "done"), ("Run", "run"), ("All", "all"))
+TITLE = "VHRHarmonize Workflow Progress"
 
 
 def _duration(seconds):
@@ -86,40 +84,17 @@ def _panel(title, lines, width, *, ascii_only=False):
     label = to_plain_text(FormattedText(_fit([("", " " + title + " ")], width - 4))).rstrip()
     result = [("", left + horizontal + label + horizontal * max(0, width - 3 - get_cwidth(label)) + right + "\n")]
     for line in lines:
-        result += [("", vertical + " "), *_fit(line, width - 4), ("", " " + vertical + "\n")]
+        if line is None:
+            divider_left, divider_right = ("+", "+") if ascii_only else ("├", "┤")
+            result.append(("", divider_left + horizontal * (width - 2) + divider_right + "\n"))
+        else:
+            result += [("", vertical + " "), *_fit(line, width - 4), ("", " " + vertical + "\n")]
     result.append(("", bottom_left + horizontal * (width - 2) + bottom_right + "\n"))
     return result
 
 
-class _Messages(UIControl):
-    def __init__(self, display):
-        self.display = display
-
-    def is_focusable(self):
-        return True
-
-    def create_content(self, width, height):
-        display = self.display
-        with display.lock:
-            display.message_height = height
-            maximum = max(0, len(display.messages) - height)
-            display.message_top = maximum if display.follow else min(display.message_top, maximum)
-            lines = list(display.messages)[display.message_top:display.message_top + height]
-            rendered = [_fit([("", line[display.message_left:])], width) for line in lines]
-            rendered += [[("", " " * width)]] * max(0, height - len(rendered))
-        return UIContent(get_line=lambda index: rendered[index], line_count=height,
-                         cursor_position=Point(0, 0), show_cursor=False)
-
-    def mouse_handler(self, event):
-        if event.event_type == MouseEventType.SCROLL_UP:
-            self.display.scroll(-3)
-        elif event.event_type == MouseEventType.SCROLL_DOWN:
-            self.display.scroll(3)
-        return None
-
-
 class TerminalProgressDisplay:
-    """Display snapshots with scrollable messages and fixed progress rows.
+    """Display progress below logs in the terminal's original screen and scrollback.
 
     The application owns a UI thread only. Processing and application callbacks
     remain on their original threads; redirected output never creates an app.
@@ -132,9 +107,7 @@ class TerminalProgressDisplay:
         self.lock = RLock()
         self.messages = deque(maxlen=10000)
         self.message_sequence = 0
-        self.message_top = self.message_left = 0
-        self.message_height = 1
-        self.follow = True
+        self._message_task = None
         self.app = self.thread = None
         self.ready, self.stopping = Event(), Event()
         self.error = None
@@ -154,8 +127,7 @@ class TerminalProgressDisplay:
             previous = self.snapshot
             if previous is None or data["run_id"] != previous["run_id"]:
                 self.messages.clear()
-                self.message_sequence = self.message_top = 0
-                self.follow = True
+                self.message_sequence = 0
                 previous = None
             history = data.get("message_history")
             if history is not None:
@@ -172,9 +144,7 @@ class TerminalProgressDisplay:
                 incoming = data["messages"][overlap:]
             for message in incoming:
                 for line in message.splitlines() or [""]:
-                    if len(self.messages) == self.messages.maxlen and not self.follow:
-                        self.message_top = max(0, self.message_top - 1)
-                    self.messages.append(line.expandtabs(4))
+                    self.messages.append(line)
             self.snapshot = data
         if self.app is not None:
             self.app.invalidate()
@@ -237,8 +207,8 @@ class TerminalProgressDisplay:
         for task, status in zip(shown, statuses):
             stats, size = task["stats"], widths[-1]
             if stats["total"] is None:
-                start = int(monotonic() * 4) % max(1, size)
-                colors = ["done" if start <= i < start + 3 else "run" for i in range(size)]
+                phase = int(monotonic() * 4) % 6
+                colors = ["done" if (i - phase) % 6 < 3 else "run" for i in range(size)]
             else:
                 done = round(size * min(1, stats["n"] / max(stats["total"], 1)))
                 colors = ["done"] * done + ["run"] * (size - done)
@@ -250,25 +220,25 @@ class TerminalProgressDisplay:
             lines.append([("", f"+ {len(active) - len(shown)} other active operations")])
         return lines
 
-    def render(self, *, width=None):
+    def render(self, *, width=None, include_messages=True):
         with self.lock:
             data = self.snapshot
         if data is None:
             return FormattedText([("", "Waiting for progress\n")])
         width = width or self.width or 120
-        messages = [[("", m)] for m in data["messages"]]
+        messages = [[("", m)] for m in data["messages"]] if include_messages else []
         message_lines = [*messages, []] if messages else []
         return FormattedText(
             [part for line in message_lines for part in _fit(line, width) + [("", "\n")]]
-            + _panel("Workflow failed" if data["status"] == "failed" else "Workflow progress",
-                     self.table(data, width=width - 4), width, ascii_only=self.ascii_only)
-            + _panel("Active operation", self.operations(data["active"], width=width - 4), width,
-                     ascii_only=self.ascii_only))
+            + _panel(TITLE, [*self.table(data, width=width - 4), None,
+                             *self.operations(data["active"], width=width - 4)],
+                     width, ascii_only=self.ascii_only))
 
-    def print_snapshot(self):
+    def print_snapshot(self, *, include_messages=True):
         interactive = getattr(self.stream, "isatty", lambda: False)() and os.environ.get("TERM") != "dumb"
         output = create_output(stdout=self.stream) if interactive else None
-        rendered = self.render(width=output.get_size().columns if output is not None and self.width is None else None)
+        rendered = self.render(width=output.get_size().columns if output is not None and self.width is None else None,
+                               include_messages=include_messages)
         encoding = getattr(self.stream, "encoding", None) or "utf-8"
         rendered = FormattedText([(style, text.encode(encoding, errors="replace").decode(encoding))
                                   for style, text in rendered])
@@ -278,69 +248,67 @@ class TerminalProgressDisplay:
             self.stream.write(to_plain_text(rendered))
             self.stream.flush()
 
-    def scroll(self, amount):
+    def _print_messages(self):
+        """Write complete lines once, using prompt_toolkit's normal terminal output."""
         with self.lock:
-            maximum = max(0, len(self.messages) - self.message_height)
-            top = maximum if self.follow else self.message_top
-            self.message_top = max(0, min(maximum, top + amount))
-            self.follow = self.message_top == maximum
-        if self.app is not None:
-            self.app.invalidate()
+            if not self.messages:
+                return
+            text = "\n".join(self.messages) + "\n"
+            self.app.print_text(FormattedText([("", text)]))
+            self.messages.clear()
+
+    def _messages_printed(self, task):
+        if not task.cancelled() and task.exception() is not None:
+            self.error = task.exception()
+        self.app.invalidate()
+
+    def _after_render(self, app):
+        if app.is_done:
+            app.output.show_cursor()
+            app.output.flush()
 
     def _prepare_screen(self, app):
         size = app.output.get_size()
         width = max(4, size.columns)
         with self.lock:
+            if (self.messages and not self.stopping.is_set() and self.error is None
+                    and (self._message_task is None or self._message_task.done())):
+                # Run in the app's event-loop context. The library temporarily
+                # erases the live box, writes normal terminal lines, and redraws.
+                self._message_task = run_in_terminal(self._print_messages)
+                self._message_task.add_done_callback(self._messages_printed)
             data = self.snapshot
             if data is None:
-                self._pinned, self._pinned_height = FormattedText(), 0
+                self._pinned, self._pinned_height = FormattedText([("", "Waiting for progress")]), 1
                 return
             active_limit = max(1, (size.rows - 10) // 2)
             operations = self.operations(data["active"], width=width - 4, max_rows=active_limit)
             row_limit = max(1, size.rows - len(operations) - 10)
             steps = self.table(data, width=width - 4, max_rows=row_limit)
             if size.rows < 13:
-                # Keep the total visible when even the panel borders will not fit.
-                lines = [[("bold", "Workflow progress")], *steps[:2],
-                         [("bold", "Active operation")], operations[1] if data["active"] else operations[0]]
-                lines = lines[:max(0, size.rows - 3)]
-                self._pinned = FormattedText([part for i, line in enumerate(lines)
-                                             for part in ([("", "\n")] if i else []) + _fit(line, width)])
-                self._pinned_height = len(lines)
-                return
-            self._pinned = FormattedText(
-                _panel("Workflow progress", steps, width, ascii_only=self.ascii_only)
-                + _panel("Active operation", operations, width, ascii_only=self.ascii_only))
+                # Keep the total and first operation visible on short terminals.
+                steps = steps[:2]
+                operations = operations[:2]
+            self._pinned = FormattedText(_panel(TITLE, [*steps, None, *operations], width,
+                                               ascii_only=self.ascii_only))
             # No trailing blank line inside the pinned window.
             self._pinned[-1] = (self._pinned[-1][0], self._pinned[-1][1].rstrip("\n"))
-            self._pinned_height = len(steps) + len(operations) + 4
+            self._pinned_height = len(steps) + len(operations) + 3
 
     def create_application(self, *, input=None, output=None):
         keys = KeyBindings()
-        for key, direction in (("up", -1), ("down", 1), ("pageup", -1), ("pagedown", 1)):
-            def move(event, key=key, direction=direction):
-                self.scroll(direction * (max(1, self.message_height - 1) if key.startswith("page") else 1))
-            keys.add(key)(move)
-        keys.add("home")(lambda event: self.scroll(-len(self.messages)))
-        keys.add("end")(lambda event: self.scroll(len(self.messages)))
-        for key, delta in (("left", -8), ("right", 8)):
-            def horizontal(event, delta=delta):
-                with self.lock:
-                    self.message_left = max(0, min(max(map(len, self.messages), default=0), self.message_left + delta))
-            keys.add(key)(horizontal)
 
         @keys.add("c-c")
         def interrupt(event):
             from _thread import interrupt_main
             interrupt_main()  # Preserve Ctrl-C processing cancellation on the calling main thread.
 
-        messages = Window(_Messages(self), height=Dimension(min=1, weight=1), always_hide_cursor=True)
-        body = HSplit([messages,
-                       Window(FormattedTextControl(lambda: self._pinned), height=lambda: self._pinned_height,
-                              always_hide_cursor=True)])
-        self.app = Application(layout=Layout(body, focused_element=messages), key_bindings=keys,
-                               full_screen=True, mouse_support=True, refresh_interval=0.25,
-                               before_render=self._prepare_screen, input=input, output=output)
+        body = Window(FormattedTextControl(lambda: self._pinned), height=lambda: self._pinned_height,
+                      dont_extend_height=True, always_hide_cursor=True)
+        self.app = Application(layout=Layout(body), key_bindings=keys,
+                               full_screen=False, mouse_support=False, erase_when_done=True, refresh_interval=0.25,
+                               before_render=self._prepare_screen, after_render=self._after_render,
+                               input=input, output=output)
         return self.app
 
     def __enter__(self):
@@ -361,6 +329,8 @@ class TerminalProgressDisplay:
                 except Exception as exc:
                     self.error = exc
                 finally:
+                    self.app.output.show_cursor()
+                    self.app.output.flush()
                     self.ready.set()
                     self.app.input.close()
 
@@ -383,5 +353,7 @@ class TerminalProgressDisplay:
             self.thread.join(5)
         if self.error is not None:
             warnings.warn(f"Interactive dashboard unavailable: {self.error}", RuntimeWarning, stacklevel=2)
+        if self.app is not None:
+            self._print_messages()  # Flush final lines that arrived just before shutdown.
         if self.snapshot is not None:
-            self.print_snapshot()
+            self.print_snapshot(include_messages=self.app is None)
