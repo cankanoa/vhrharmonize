@@ -25,12 +25,12 @@ def pipeline(monkeypatch, direction="horizontal"):
     recipe = {
         "defaults": {"plugin": "shared", "core:run": True,
                      "core:log_to_console": False, "core:processing_direction": direction},
-        "source": {"plugin": "scenes", "core:run": True},
+        "source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},
     }
     for index in range(1, 4):
         install_function(monkeypatch, f"stage{index}", function(index))
         recipe[f"stage{index}"] = {
-            "plugin": f"stage{index}", "core:run": True,
+            "plugin": f"stage{index}", "core:run": True, "core:require_outputs": True,
             "param:value": "var:name" if index == 1 else "var:value",
             "var:value": "returned:$",
         }
@@ -81,7 +81,7 @@ def test_collect_waits_for_all_preceding_scene_values(monkeypatch, aggregate):
         events.append(("gather", tuple(values)))
 
     install_function(monkeypatch, "gather", gather, scope="aggregate" if aggregate else "scene")
-    recipe["stage2"] = {"plugin": "gather", "core:run": True, "param:values": "collect:value"}
+    recipe["stage2"] = {"plugin": "gather", "core:run": True, "core:require_outputs": True, "param:values": "collect:value"}
     Workflow(recipe).run()
     assert events == [(1, "a"), (1, "b"), *[("gather", ("a", "b"))] * (1 if aggregate else 2),
                       (3, "a"), (3, "b")]
@@ -95,7 +95,7 @@ def test_shared_returned_constants_synchronize_before_consumption(monkeypatch):
         return 7
 
     install_function(monkeypatch, "shared_value", shared_value)
-    recipe["stage1"] = {"plugin": "shared_value", "core:run": True,
+    recipe["stage1"] = {"plugin": "shared_value", "core:run": True, "core:require_outputs": True,
                         "param:value": "var:name", "const:common": "returned:$"}
     recipe["stage2"]["param:value"] = "const:common"
     Workflow(recipe).run()
@@ -169,6 +169,7 @@ def test_dask_prioritizes_downstream_work_and_resolves_scene_returns(monkeypatch
     distributed.Client = Client
     distributed.as_completed = lambda futures: iter(sorted(futures, key=lambda f: f.result()))
     monkeypatch.setitem(sys.modules, "dask.distributed", distributed)
+    recipe["defaults"].update({"core:show_progress": False, "core:save_statistics_path": None, "core:load_statistics_path": None})
     result = Workflow(recipe).run()
     assert [r["context"]["var"]["value"] for r in result] == ["a", "b"]
     assert events.index((3, "a")) < events.index((2, "b"))
@@ -186,7 +187,7 @@ def test_vertical_copy_chain_reuses_checkpoints_cleans_up_and_stages(tmp_path, w
                    "core:processing_direction": "vertical", "core:concurrent_processing": workers},
         "files": import_settings(tmp_path / "source/*.txt", tmp_path),
         "first": {**copy_step("first", "mul", suffix="_first"), "var:copied": "returned:$"},
-        "second": copy_step("second", "first", suffix="_second", folder="output_dir"),
+        "second": copy_step("second", "first", suffix="_second", folder="output_dir", require_outputs=True),
     }
     Workflow(recipe).run()
     assert sorted(p.read_text() for p in (tmp_path / "output").glob("*.txt")) == ["a", "b"]
@@ -213,9 +214,9 @@ def test_cross_scene_file_dependencies_are_respected_without_collect(tmp_path):
     recipe = {
         "shared": {"plugin": "shared", "core:run": True, "core:processing_direction": "vertical"},
         "files": import_settings(tmp_path / "source/*.txt", tmp_path),
-        "first": copy_step("first", "mul", suffix="_first"),
+        "first": copy_step("first", "mul", suffix="_first", require_outputs=True),
         "second": {
-            **copy_step("second", "first", suffix="_second", folder="output_dir"),
+            **copy_step("second", "first", suffix="_second", folder="output_dir", require_outputs=True),
             "param:input_path": "expr:const.temp_dir & '/' & (var.basename = 'a' ? 'b' : 'a') & '_first.txt'",
         },
     }

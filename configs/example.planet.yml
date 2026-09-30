@@ -13,18 +13,30 @@ shared:
   # core:log_to_console: true # true | false; default: true.
   # core:show_progress: true # true | false; default: true. Live prompt_toolkit dashboard; one final summary in redirected logs.
   # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
-  # core:statistics_path: null # path | null; default: null. Append core timings as OpenTelemetry JSONL; relative to this YAML. Analyze with vhr statistics.
+  # core:save_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Append raw timings; null disables saving.
+  # core:load_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Seed ETAs from past timings; null disables loading.
   # Workflow-wide constants. They remain available to every scene and aggregate.
+  const:reference_root: path:/path/to # Shared DEM/alignment directory.
 
-  const:reference_path: /path/to/reference.tif
+  const:reference_path: expr:const.reference_root & '/reference.tif'
   const:red_band_index: 3 # one-based; recipe setting.
   const:green_band_index: 2 # one-based; recipe setting.
   const:nir_band_index: 4 # one-based; recipe setting.
 
-import_files:
+discover_inputs:
   plugin: import_files
-  param:output_dir: ../processed_planet # path; default: ./output, relative to each matched file. Persistent products.
-  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the first matched file by default.
+  # Explicit persistence only. Missing load files warn (when logs are on), then discovery continues.
+  # To refresh from the original metadata, leave load_context commented during that run.
+  # core:save_context:
+  #   "path:./context/import_metadata.json": [defined, var.file_path, var.output_dir, var.metadata, const.temp_dir]
+  # core:load_context:
+  #   "path:./context/import_metadata.json": [defined, var.file_path, var.output_dir, var.metadata, const.temp_dir]
+  # core:save_upsert_context: {"path:./context/metadata.json": [var.metadata]}
+  # core:load_upsert_context: {"path:./context/metadata.json": [var.metadata]}
+  # dependencies selects recursive param references; defined selects this step's assignments.
+  # Use all instead of the selector list to save/load every context field.
+  param:output_dir: literal:expr:$replace(var.file_path, /[^\/]+$/, '') & '../processed_planet' # path; default: ./output. Explicitly relative to each original input.
+  param:temp_dir: path:sys # path; default: sys. Create one system temporary directory for this import.
   # param:temp_dir_scope: const # const | var; default: const. Share one temporary root across scenes.
   # param:output_dir_scope: var # const | var; default: var. Resolve an output root for each scene.
   core:run: true # true | false; default: false. Enable this step.
@@ -43,6 +55,7 @@ import_files:
 cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
+  core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:reflectance
   var:suffix: expr:var.suffix & '_cloudmasked'
   var:cloudmasked: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
@@ -55,6 +68,7 @@ cloud_mask:
 alignment:
   plugin: alignment
   core:run: true # true | false; default: false. Enable this step.
+  core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   param:temp_dir: const:temp_dir
   param:moving_image_path: var:cloudmasked
   param:fixed_image_path: const:reference_path

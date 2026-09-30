@@ -1,3 +1,4 @@
+from workflow_helpers import context_controls
 from pathlib import Path
 import json
 from types import SimpleNamespace
@@ -84,7 +85,7 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
                     "const:temp_dir": str(tmp_path / "temp"),
                 },
                 "file_source": {"plugin": 'file_source', 
-                    "core:run": True,
+                    "core:run": True, "core:require_outputs": True,
                     "param:input_path": "var:raw",
                     "var:result": "expr:const.output_dir & '/' & var.input_name",
                     "param:output_path": "var:result",
@@ -120,7 +121,7 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
         tmp_path / "remote" / "output" / "image.tif"
     )
     config = load_config(plan["staged_workflow_file"])
-    assert list(config) == ["shared", "restore_scenes", "import_files", "file_source"]
+    assert list(config) == ["shared", "import_files", "file_source"]
     for local, remote in plan["uploaded_input_paths"].items():
         Path(remote).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local, remote)
@@ -149,7 +150,7 @@ def test_hpc_stages_declared_rpc_companions_beside_the_raster(tmp_path, make_tes
             "const:temp_dir": str(tmp_path / "temp"),
         },
         "file_source": {"plugin": 'file_source', 
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "core:requires": "var:rpc",
             "param:input_path": "var:raw",
             "var:result": "expr:const.output_dir & '/result.tif'",
@@ -173,7 +174,7 @@ def test_hpc_stages_declared_rpc_companions_beside_the_raster(tmp_path, make_tes
     assert (tmp_path / "remote/out/result.tif").exists()
 
 
-def test_hpc_downloads_metadata_checkpoints_for_local_resume(tmp_path, make_test_raster):
+def test_hpc_downloads_explicit_context_for_local_resume(tmp_path, make_test_raster):
     from vhrharmonize.workflow.staging import stage_workflow
 
     source = make_test_raster(tmp_path / "source.tif")
@@ -190,13 +191,14 @@ def test_hpc_downloads_metadata_checkpoints_for_local_resume(tmp_path, make_test
             "const:output_dir": str(tmp_path / "out"),
         },
         "file_source": {"plugin": 'file_source', 
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:raw",
             "var:result": "expr:const.output_dir & '/result.tif'",
             "param:output_path": "var:result",
             "var:saved_image": "returned:$",
         },
     }
+    config["file_source"].update(context_controls(tmp_path / "saved.json", "var.saved_image"))
     staged, uploads, downloads = stage_workflow(
         config,
         config_dir=str(tmp_path),
@@ -204,7 +206,7 @@ def test_hpc_downloads_metadata_checkpoints_for_local_resume(tmp_path, make_test
         remote_temp_dir=str(tmp_path / "remote/temp"),
         remote_reference_dir=str(tmp_path / "remote/ref"),
     )
-    checkpoint = str(tmp_path / "out/result.tif.context.json")
+    checkpoint = str(tmp_path / "saved.json")
     assert checkpoint in downloads
     for local, remote in uploads.items():
         Path(remote).parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +240,7 @@ def test_hpc_uploads_declared_directory_inputs(tmp_path, make_test_raster):
             "const:output_dir": str(tmp_path / "out"),
         },
         "file_source": {"plugin": 'file_source', 
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:raw",
             "core:requires": str(calibration),
             "var:result": "expr:const.output_dir & '/result.tif'",

@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 import os
+import tempfile
 from functools import lru_cache
 
 from jsonata import Jsonata
@@ -23,6 +24,23 @@ class _NoScene(dict):
 
 
 _NO_SCENE = _NoScene()
+
+
+class PathResolver:
+    """Resolve explicit path values and keep system directories stable per binding."""
+
+    def __init__(self, base_dir="."):
+        self.base_dir = os.path.abspath(base_dir)
+        self.system_directories = {}
+
+    def __call__(self, value, key=()):
+        if isinstance(value, list) and any(not isinstance(v, str) or not v.strip() for v in value):
+            raise ValueError("path: must resolve to a path or flat list of paths")
+        if value == "sys":
+            if key not in self.system_directories:
+                self.system_directories[key] = tempfile.mkdtemp(prefix="vhr-")
+            return self.system_directories[key]
+        return path(value, base_dir=self.base_dir)
 
 
 def require_scene_variables(context):
@@ -258,14 +276,17 @@ def expression(source, context, *, aggregate=False):
     return value if "var" in context else json.loads(json.dumps(value, allow_nan=False))
 
 
-def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, returned_fields=None):
+def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, returned_fields=None,
+            path_resolver=None, path_key=()):
     if isinstance(value, list):
         return [resolve(v, context, returned=returned, records=records,
-                        aggregate=aggregate, returned_fields=returned_fields) for v in value]
+                        aggregate=aggregate, returned_fields=returned_fields,
+                        path_resolver=path_resolver, path_key=(*path_key, i)) for i, v in enumerate(value)]
     if isinstance(value, dict):
         return {
             k: resolve(v, context, returned=returned, records=records,
-                       aggregate=aggregate, returned_fields=returned_fields) for k, v in value.items()
+                       aggregate=aggregate, returned_fields=returned_fields,
+                       path_resolver=path_resolver, path_key=(*path_key, k)) for k, v in value.items()
         }
     if not isinstance(value, str):
         return value
@@ -274,6 +295,11 @@ def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, re
         return value
     if kind == "literal":
         return text
+    if kind == "path":
+        resolved = resolve(text, context, returned=returned, records=records,
+                           aggregate=aggregate, returned_fields=returned_fields,
+                           path_resolver=path_resolver, path_key=path_key)
+        return (path_resolver or PathResolver())(resolved, path_key)
     if kind in {"var", "const"}:
         if kind == "var":
             require_scene_variables(context)
@@ -305,6 +331,8 @@ def references(value):
     if not isinstance(value, str):
         return set()
     kind, _, text = value.partition(":")
+    if kind == "path":
+        return references(text)
     if kind in {"var", "const"}:
         return {kind + "." + (text.split(".")[0] if text not in {"", "$"} else "*")}
     if kind == "collect":
@@ -319,6 +347,8 @@ def uses_returned(value):
         return any(uses_returned(v) for v in value)
     if isinstance(value, dict):
         return any(uses_returned(v) for v in value.values())
+    if isinstance(value, str) and value.startswith("path:"):
+        return uses_returned(value[5:])
     return isinstance(value, str) and value.startswith("returned:")
 
 
@@ -364,6 +394,8 @@ def _returned_scene_fields(template, returned, scene_ids, name):
         for item in template.values() if isinstance(template, dict) else template:
             fields.update(_returned_scene_fields(item, returned, scene_ids, name))
         return fields
+    if isinstance(template, str) and template.startswith("path:"):
+        return _returned_scene_fields(template[5:], returned, scene_ids, name)
     if isinstance(template, str) and template.startswith("returned:"):
         selector = template[9:]
         return {selector: scene_values(lookup(returned, selector), scene_ids, name=name)}
@@ -371,7 +403,7 @@ def _returned_scene_fields(template, returned, scene_ids, name):
 
 
 def aggregate_variables(records):
-    """Internal columns for planning, checkpoints and directory bookkeeping."""
+    """Internal columns for planning and directory bookkeeping."""
     if not records:
         return {}
     fields = set.intersection(*(set(record["var"]) for record in records))
@@ -397,7 +429,8 @@ def path(value, *, base_dir):
 
 def evaluate_settings(
     settings, context, *, records=None, planning=False, returned=UNSET, constants=None,
-    scene_ids=None, aggregate=None,
+    scene_ids=None, aggregate=None, path_resolver=None, path_scope=(), restored=None,
+    parameter_overrides=None,
 ):
     """Resolve ordered assignments and arguments without mutating the input context.
 
@@ -415,6 +448,12 @@ def evaluate_settings(
         if aggregate:
             current["var"] = aggregate_variables(records)
     params, updates, post = {}, {}, set()
+    parameter_overrides = parameter_overrides or {}
+    overridden_variables = {
+        settings["param:" + name]: value for name, value in parameter_overrides.items()
+        if isinstance(settings.get("param:" + name), str)
+        and settings["param:" + name].startswith(("var:", "const:"))
+    }
     for key, template in settings.items():
         kind, name = key.split(":", 1)
         if kind == "core":
@@ -422,6 +461,16 @@ def evaluate_settings(
         if kind == "var":
             require_scene_variables(current)
         qualified = kind + "." + name
+        if key in overridden_variables:
+            assign(current[kind], name, overridden_variables[key])
+            updates[qualified] = deepcopy(overridden_variables[key])
+            continue
+        if kind == "param" and name in parameter_overrides:
+            params[name] = deepcopy(parameter_overrides[name])
+            if isinstance(template, str) and template.startswith(("var:", "const:")):
+                scope, field = template.split(":", 1)
+                assign(current[scope], field, params[name])
+            continue
         if kind == "const" and constants is not None and qualified in constants:
             # The workflow resolves scene-independent constants once per step.
             # Insert them at their original position to preserve argument ordering.
@@ -437,11 +486,24 @@ def evaluate_settings(
         if kind == "param" and after:
             raise ValueError(f"param:{name} cannot depend on this function's returned values")
 
-        def evaluate(scope, *, returned_fields=None, batch=False):
+        def evaluate(scope, *, returned_fields=None, batch=False, scene=None):
             try:
                 return resolve(template, scope, records=records, returned=returned,
-                               aggregate=batch, returned_fields=returned_fields)
-            except Deferred:
+                               aggregate=batch, returned_fields=returned_fields,
+                               path_resolver=path_resolver, path_key=(*path_scope, key, scene))
+            except ValueError as exc:
+                deferred = isinstance(exc, Deferred) or planning and (
+                    str(exc).startswith("Undefined variable field:")
+                    or str(exc).startswith("JSONata expression returned undefined:")
+                )
+                if not deferred:
+                    raise
+                if restored is not None:
+                    try:
+                        saved = restored.get("scenes", {}).get(scene, restored) if scene is not None else restored
+                        return deepcopy(lookup(saved, qualified))
+                    except ValueError:
+                        pass
                 if kind in {"var", "const"} or planning:
                     return Pending(qualified)
                 raise
@@ -450,7 +512,8 @@ def evaluate_settings(
             fields = _returned_scene_fields(template, returned, scene_ids, key)
             value = [
                 evaluate({"const": current["const"], "var": record["var"]},
-                         returned_fields={field: items[i] for field, items in fields.items()} if fields else None)
+                         returned_fields={field: items[i] for field, items in fields.items()} if fields else None,
+                         scene=scene_ids[i])
                 for i, record in enumerate(records)
             ]
         elif aggregate and kind == "const" and (

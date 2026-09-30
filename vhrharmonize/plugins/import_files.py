@@ -175,6 +175,13 @@ def import_files(
     return {"const": published, "scenes": scenes}
 
 
+def exact_glob(filename):
+    """Escape file names while retaining remote home expansion."""
+    if isinstance(filename, list):
+        return [exact_glob(value) for value in filename]
+    return "~/" + glob.escape(filename[2:]) if filename.startswith("~/") else glob.escape(filename)
+
+
 class ImportFiles(FunctionPlugin):
     """Add imported scenes and missing fields while retaining earlier workflow state."""
 
@@ -183,6 +190,63 @@ class ImportFiles(FunctionPlugin):
     scene_records_mode = "merge"
     constant_values_return = "const"
     scene_id_return = "scene_id"  # The function computes this from its scene_id argument.
+    scene_path_return = "file_path"
     source_file_protection_paths_return = "source_paths"
     temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")
     output_directory_context_paths = ("var.output_dir", "const.output_dir")
+    directory_parameters = {"var.temp_dir": "temp_dir", "const.temp_dir": "temp_dir",
+                            "var.output_dir": "output_dir", "const.output_dir": "output_dir"}
+    discovery_input_parameter = "search_glob"
+
+    def stage_settings(self, *, settings, params, returned, path_mappings, file_paths,
+                       discovery_paths, config_dir):
+        from copy import deepcopy
+        from vhrharmonize.workflow.staging_files import per_scene_value
+        from vhrharmonize.workflow.values import lookup, remap_paths
+
+        original_settings = deepcopy(settings)
+        candidates = [path(remap_paths(filename, path_mappings), base_dir=config_dir)
+                      for filename in discovery_paths]
+        items = lookup(returned, self.scene_records_return)
+        if not items:
+            return {}
+        if any(item["file_path"] in file_paths for item in items):
+            # Explicit primary files avoid rerunning an obsolete directory glob
+            # or importing companions now placed beside the images.
+            settings["param:search_glob"] = [exact_glob(remap_paths(item["file_path"], path_mappings)) for item in items]
+        rules = params.get("create_metadata_json") or {}
+        for field, rule in rules.items():
+            kind, template = next(iter(rule.items()))
+            pairs, unchanged = [], True
+            staged_rule = settings.get("param:create_metadata_json", {}).get(field, {}).get(kind, template)
+            # literal: is removed by core before the function receives its rule.
+            if isinstance(staged_rule, str) and staged_rule.startswith("literal:"):
+                staged_rule = staged_rule[8:]
+            for item in items:
+                source = item["file_path"]
+                original = item[field] if kind == "path" else path(
+                    resolve(template, {"var": item}, returned=item), base_dir=os.path.dirname(source))
+                expected = remap_paths(original, path_mappings)
+                remote = remap_paths(item, path_mappings)
+                pairs.append((remote["file_path"], exact_glob(expected) if kind == "path" else expected))
+                try:
+                    actual = path(resolve(staged_rule, {"var": remote}, returned=remote),
+                                  base_dir=os.path.dirname(remote["file_path"]))
+                    expected_normalized = path(expected, base_dir=config_dir)
+                    if kind == "to_json":
+                        unchanged &= actual == expected_normalized
+                    else:
+                        # Empty matches must stay empty, even if flattening would
+                        # put another scene's sidecars inside an old broad glob.
+                        patterns = actual if isinstance(actual, list) else [actual]
+                        matched = sorted({p for p in candidates if glob.globmatch(p, patterns, flags=FLAGS)})
+                        unchanged &= matched == sorted(expected_normalized)
+                except (ValueError, TypeError):
+                    unchanged = False
+            if not unchanged:
+                # A per-step override of a shared rule map must retain all rules.
+                inherited = {field: {kind: "literal:" + value if isinstance(value, str) else value
+                                    for kind, value in rule.items()} for field, rule in rules.items()}
+                settings.setdefault("param:create_metadata_json", inherited).setdefault(field, {})[kind] = per_scene_value(pairs, selector="var." + self.scene_path_return, path_key=True, literal=True)
+        return {key: value for key, value in settings.items()
+                if key not in original_settings or value != original_settings[key]}

@@ -34,7 +34,6 @@ class JointCoregistration(FunctionPlugin):
         ["output_images", "tie_save_path", "tie_save_crs_path"]
     )
     output_dependency_paths = output_path_resolution_paths
-    output_target_paths = output_path_resolution_paths
     output_parent_creation_paths = output_path_resolution_paths
     output_collision_check_paths = output_path_resolution_paths
     output_validation_paths = output_path_resolution_paths
@@ -43,5 +42,4 @@ class JointCoregistration(FunctionPlugin):
     output_hpc_staging_paths = output_path_resolution_paths
     output_hpc_download_paths = output_path_resolution_paths
     output_reuse_paths = output_path_resolution_paths
-    output_context_checkpoint_paths = frozenset(["output_images"])
     output_overview_calculation_paths = frozenset(["output_images"])

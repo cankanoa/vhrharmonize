@@ -24,7 +24,6 @@ BUILTINS = {
     "search_paths": "search_paths:SearchPaths",
     "create_paths": "create_paths:CreatePaths",
     "match_paths": "match_paths:MatchPaths",
-    "restore_scenes": "restore_scenes:RestoreScenes",
     "import_files": "import_files:ImportFiles",
     "file_source": "file_source:FileSource",
     "fetch_atmosphere": "fetch_atmosphere:FetchAtmosphere",

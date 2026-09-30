@@ -85,7 +85,8 @@ def invoke(parser, argv=None):
     function = arguments.pop("_function")
     arguments.pop("_command", None)
     result = function(**arguments)
-    _print_result(result)
+    if getattr(function, "__cli_output__", True):
+        _print_result(result)
     return 0
 
 

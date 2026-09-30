@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import yaml
 from .registry import plugin_names
+from .context_io import CONTEXT_CONTROLS, validate_operation
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -28,9 +29,11 @@ STEP_CONTROLS = {
     "reuse",
     "check_validity",
     "calculate_overviews",
-    "required",
+    "require_outputs",
     "requires",
     "processing_direction",
+    "satisfies",
+    *CONTEXT_CONTROLS,
 }
 DEFAULT_SHARED = {
     "protect_source_files": True,
@@ -44,7 +47,8 @@ DEFAULT_SHARED = {
     "log_to_console": True,
     "show_progress": True,
     "report_progress": False,
-    "statistics_path": None,
+    "save_statistics_path": "statistics.jsonl",
+    "load_statistics_path": "statistics.jsonl",
     "concurrent_processing": 1,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
@@ -55,7 +59,6 @@ BOOLEANS = {
     "delete_final_json_first",
     "run",
     "reuse",
-    "required",
     "check_validity",
     "calculate_overviews",
     "run_from_existing",
@@ -93,6 +96,23 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError(f"Unknown {'shared ' if shared else ''}core setting: {name}")
             if name in BOOLEANS and not isinstance(value, bool):
                 raise ValueError(f"{key} must be a boolean")
+            if name in CONTEXT_CONTROLS:
+                validate_operation(value, name)
+            if name == "satisfies" and (
+                not isinstance(value, dict) or not value
+                or any(not isinstance(target, str) or not target.strip()
+                       or not isinstance(parameter, str) or not parameter.isidentifier()
+                       for target, parameter in value.items())
+            ):
+                raise ValueError("core:satisfies must map step names to output parameter names")
+            if name == "require_outputs":
+                selected = [value] if isinstance(value, str) else value
+                if not isinstance(value, bool) and (
+                    not isinstance(selected, list) or not selected
+                    or any(not isinstance(v, str) or not v.startswith("param:")
+                           or not v[6:].isidentifier() for v in selected)
+                ):
+                    raise ValueError("core:require_outputs must be false, true, param:name, or a list of param:name selectors")
             if (
                 name == "output_metadata_path"
                 and value is not None
@@ -101,11 +121,11 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError(
                     "core:output_metadata_path must be a path/reference string or null"
                 )
-            if name == "statistics_path" and value is not None and (
+            if name in {"save_statistics_path", "load_statistics_path"} and value is not None and (
                 not isinstance(value, str) or not value.strip()
                 or value.startswith(("var:", "const:", "expr:", "returned:", "collect:"))
             ):
-                raise ValueError("core:statistics_path must be a literal file path or null")
+                raise ValueError(f"core:{name} must be a literal file path or null")
             if name == "scope" and value not in {"scene", "aggregate"}:
                 raise ValueError("core:scope must be scene or aggregate")
             if name == "processing_direction" and value not in ("horizontal", "vertical"):
@@ -121,6 +141,8 @@ def _uses_returned(value):
         return any(_uses_returned(v) for v in value.values())
     if isinstance(value, (list, tuple)):
         return any(_uses_returned(v) for v in value)
+    if isinstance(value, str) and value.startswith("path:"):
+        return _uses_returned(value[5:])
     return isinstance(value, str) and value.startswith("returned:")
 
 

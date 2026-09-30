@@ -24,6 +24,11 @@ from vhrharmonize.progress import read_progress_snapshot, render_progress, valid
 from workflow_helpers import copy_step, import_settings, install_function
 
 
+@pytest.fixture(autouse=True)
+def isolated_statistics_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.fixture
 def dashboards(monkeypatch):
     result, displays = [], []
@@ -59,7 +64,7 @@ def recipe(tmp_path, *, direction="vertical", workers=1):
                    "core:concurrent_processing": workers},
         "files": import_settings(tmp_path / "source/*.txt", tmp_path),
         "prepare": copy_step("first", "mul", suffix="_first"),
-        "deliver": copy_step("second", "first", 'expr:const.output_dir & "/" & var.basename & "_second.txt"'),
+        "deliver": copy_step("second", "first", 'expr:const.output_dir & "/" & var.basename & "_second.txt"', require_outputs=True),
     }
 
 
@@ -96,7 +101,8 @@ def test_counts_reuse_and_totals_with_real_workers(tmp_path, dashboards, directi
 
 def test_disable_does_not_start_dashboard(tmp_path, dashboards):
     config = recipe(tmp_path)
-    config["shared"].update({"core:show_progress": False, "core:log_to_console": False})
+    config["shared"].update({"core:show_progress": False, "core:log_to_console": False,
+                              "core:save_statistics_path": None, "core:load_statistics_path": None})
     Workflow(config).run()
     assert dashboards == []
 
@@ -157,7 +163,7 @@ def test_worker_callbacks_and_messages_share_parent_display(tmp_path, monkeypatc
         return value
 
     install_function(monkeypatch, "callback_plugin", call)
-    config["measure"] = {"plugin": "callback_plugin", "core:run": True, "param:value": "var:basename"}
+    config["measure"] = {"plugin": "callback_plugin", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     try:
         Workflow(config).run()
     finally:
@@ -232,7 +238,7 @@ def test_failed_call_does_not_advance_and_restores_streams(tmp_path, monkeypatch
 
     install_function(monkeypatch, "fail", fail)
     config = recipe(tmp_path)
-    config["failure"] = {"plugin": "fail", "core:run": True, "param:value": "var:basename"}
+    config["failure"] = {"plugin": "fail", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     stdout, stderr = sys.stdout, sys.stderr
     with pytest.raises(RuntimeError, match="backend failed"):
         Workflow(config).run()
@@ -248,7 +254,7 @@ def test_overviews_have_separate_counts_after_named_step(tmp_path, make_test_ras
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:show_progress": True, "param:window_scales": [2]},
         "files": import_settings(source, tmp_path),
-        "deliver": {**copy_step("result", "mul", 'expr:const.output_dir & "/result.tif"'), "core:calculate_overviews": True},
+        "deliver": {**copy_step("result", "mul", 'expr:const.output_dir & "/result.tif"', require_outputs=True), "core:calculate_overviews": True},
     }
     Workflow(config).run()
     state = dashboards[-1].state
@@ -291,10 +297,10 @@ def test_runtime_scene_discovery_replans_dashboard(tmp_path, monkeypatch, dashbo
     install_function(monkeypatch, "consume", lambda value: value)
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:show_progress": True},
-        "source": {"plugin": "seed", "core:run": True},
-        "first": {"plugin": "double", "core:run": True, "param:n": "var:n", "var:doubled": "returned:$"},
-        "reset": {"plugin": "reset", "core:run": True, "param:values": "collect:doubled"},
-        "last": {"plugin": "consume", "core:run": True, "param:value": "var:total"},
+        "source": {"plugin": "seed", "core:run": True, "core:require_outputs": True},
+        "first": {"plugin": "double", "core:run": True, "core:require_outputs": True, "param:n": "var:n", "var:doubled": "returned:$"},
+        "reset": {"plugin": "reset", "core:run": True, "core:require_outputs": True, "param:values": "collect:doubled"},
+        "last": {"plugin": "consume", "core:run": True, "core:require_outputs": True, "param:value": "var:total"},
     }
     workflow = Workflow(config)
     assert workflow.counts()["last"]["pending"]
@@ -324,7 +330,7 @@ def test_real_dask_cluster(tmp_path, monkeypatch, dashboards):
 
     install_function(monkeypatch, "measure_remote", measure)
     config = recipe(tmp_path)
-    config["measure"] = {"plugin": "measure_remote", "core:run": True, "param:value": "var:basename"}
+    config["measure"] = {"plugin": "measure_remote", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     with distributed.LocalCluster(n_workers=2, threads_per_worker=1, processes=False,
                                   dashboard_address=None) as cluster:
         config["shared"].update({"core:concurrent_processing_backend": "dask",
@@ -357,7 +363,7 @@ def test_progress_snapshot_is_readable_during_work_and_after_completion(tmp_path
 
     install_function(monkeypatch, "measure_snapshot", measure)
     config = recipe(tmp_path)
-    config["measure"] = {"plugin": "measure_snapshot", "core:run": True, "param:value": "var:basename"}
+    config["measure"] = {"plugin": "measure_snapshot", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     filename.write_text(yaml.safe_dump(config, sort_keys=False))
     run_workflow(filename)
     final = json.loads(snapshot.read_text())
@@ -375,7 +381,7 @@ def test_phase_only_plugin_is_labeled_but_explicit_callbacks_are_supported(tmp_p
     config = recipe(tmp_path)
     config["settings"] = {"core:run": True, "const:example": 1}
     for name in ("opaque", "reporting"):
-        config[name] = {"plugin": name, "core:run": True, "param:value": "var:basename"}
+        config[name] = {"plugin": name, "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     Workflow(config).run()
     panel = dashboards[-1]
     assert not panel.state.rows["opaque"].worker_progress
@@ -402,7 +408,7 @@ def test_spectralmatch_aggregate_workers_feed_core_display(tmp_path, make_test_r
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:show_progress": True},
         "files": import_settings(tmp_path / "source/*.tif", tmp_path),
-        "resize": {"plugin": "align_rasters", "core:run": True,
+        "resize": {"plugin": "align_rasters", "core:run": True, "core:require_outputs": True,
                    "param:input_images": "collect:mul",
                    "var:resized": 'expr:const.output_dir & "/" & var.basename & "_resized.tif"',
                    "param:output_images": "collect:resized", "param:image_threads": 2},
@@ -470,7 +476,7 @@ def test_public_callback_receives_live_dask_operations_without_a_display(tmp_pat
     install_function(monkeypatch, "measure_remote_api", measure)
     config = recipe(tmp_path)
     config["shared"]["core:show_progress"] = False
-    config["measure"] = {"plugin": "measure_remote_api", "core:run": True, "param:value": "var:basename"}
+    config["measure"] = {"plugin": "measure_remote_api", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     with distributed.LocalCluster(n_workers=2, threads_per_worker=1, processes=False,
                                   dashboard_address=None) as cluster:
         config["shared"].update({"core:concurrent_processing_backend": "dask",
@@ -492,7 +498,7 @@ def test_headless_hpc_reporting_and_failed_run_publish_final_snapshot(tmp_path, 
     install_function(monkeypatch, "fail_api", fail)
     config = recipe(tmp_path)
     config["shared"].update({"core:show_progress": False, "core:report_progress": True})
-    config["failure"] = {"plugin": "fail_api", "core:run": True, "param:value": "var:basename"}
+    config["failure"] = {"plugin": "fail_api", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     filename = tmp_path / "headless.yml"
     filename.write_text(yaml.safe_dump(config, sort_keys=False))
     with pytest.raises(RuntimeError, match="processing failed"):
@@ -550,7 +556,7 @@ def test_run_plugin_and_terminal_consume_the_same_public_data(tmp_path, dashboar
     run_plugin("file_source", recipe(tmp_path), progress_callback=snapshots.append)
     assert snapshots[-1]["status"] == "completed"
     assert snapshots[-1] == dashboards[-1].test_display.snapshot
-    assert snapshots[-1]["total"]["done"] == 3
+    assert snapshots[-1]["total"]["done"] == 4
 
 
 @pytest.mark.parametrize("direction", ["horizontal", "vertical"])

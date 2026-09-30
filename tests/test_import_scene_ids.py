@@ -138,7 +138,7 @@ def test_hpc_preserves_custom_ids_and_merged_input_aliases(tmp_path, monkeypatch
         ),
         "inspect": {
             "plugin": "inspect_scene",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:scene_id": "var:scene_id",
             "param:mul": "var:mul",
             "param:pan": "var:pan",

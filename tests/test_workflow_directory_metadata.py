@@ -8,6 +8,7 @@ import pytest
 from vhrharmonize.plugins.import_files import import_files
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.metadata import FinalMetadataWriter
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
 
 
@@ -33,7 +34,7 @@ def test_metadata_appends_each_completion_and_clears_an_old_file_once(tmp_path, 
     install_function(monkeypatch, "process", process)
     recipe = recipe_for(tmp_path)
     recipe["shared"]["core:output_metadata_path"] = str(destination)
-    recipe["process"] = {"plugin": 'process', "core:run": True, "param:name": "var:basename", "var:result": "returned:$"}
+    recipe["process"] = {"plugin": 'process', "core:run": True, "core:require_outputs": True, "param:name": "var:basename", "var:result": "returned:$"}
     Workflow(recipe).run()
     entries = json.loads(destination.read_text())
     assert len(observed) == 1  # The first scene was exported before the second finished.
@@ -62,7 +63,7 @@ def test_scene_specific_metadata_destinations_use_arbitrary_yaml_variables(tmp_p
     recipe = recipe_for(tmp_path)
     recipe["shared"]["core:output_metadata_path"] = "var:my_json"
     recipe["process"] = {"plugin": 'process', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "var:my_json": "expr:const.output_dir & '/' & var.basename & '.json'",
         "var:score": "returned:$",
     }
@@ -95,14 +96,14 @@ def test_dry_run_does_not_clear_final_json(tmp_path, monkeypatch):
     target.write_text("old")
     recipe = recipe_for(tmp_path)
     recipe["shared"]["core:output_metadata_path"] = str(target)
-    recipe["process"] = {"plugin": 'process', "core:run": True}
+    recipe["process"] = {"plugin": 'process', "core:run": True, "core:require_outputs": True}
     Workflow(recipe).counts()
     assert target.read_text() == "old"
 
 
 def test_roots_are_not_invented_by_core_and_cleanup_requires_registration(tmp_path, monkeypatch):
     install_function(monkeypatch, "plain", lambda: None)
-    workflow = Workflow({"plain": {"plugin": 'plain', "core:run": True}}, config_dir=tmp_path)
+    workflow = Workflow({"plain": {"plugin": 'plain', "core:run": True, "core:require_outputs": True}}, config_dir=tmp_path)
     assert workflow.context["const"] == {}
     install_function(
         monkeypatch,
@@ -112,10 +113,9 @@ def test_roots_are_not_invented_by_core_and_cleanup_requires_registration(tmp_pa
     )
     config = {
         "shared": {"plugin": 'shared', "core:run": True, "const:temp_dir": str(tmp_path)},
-        "cleanup": {"plugin": 'cleanup', "core:run": True, "param:output_path": str(tmp_path / "a.bin")},
+        "cleanup": {"plugin": 'cleanup', "core:run": True, "core:require_outputs": True, "param:output_path": str(tmp_path / "a.bin")},
     }
-    with pytest.raises(ValueError, match="temporary_directory_context_paths"):
-        Workflow(config)
+    assert Workflow(config).nodes[0].directories["temp_dir"] == []
 
 
 def test_custom_scene_json_locations_drive_output_paths_and_cleanup(tmp_path, monkeypatch):
@@ -145,8 +145,8 @@ def test_custom_scene_json_locations_drive_output_paths_and_cleanup(tmp_path, mo
     )
     Workflow(
         {
-            "source": {"plugin": 'source', "core:run": True},
-            "produce": {"plugin": 'produce', "core:run": True, "param:output_path": "image.tif"},
+            "source": {"plugin": 'source', "core:run": True, "core:require_outputs": True},
+            "produce": {"plugin": 'produce', "core:run": True, "core:require_outputs": True, "param:output_path": "path:expr:var.paths.products & '/image.tif'"},
         }
     ).run()
     assert outputs == [str(tmp_path / name / "out/image.tif") for name in ("a", "b")]
@@ -195,8 +195,8 @@ def test_source_protection_has_an_explicit_shared_switch(tmp_path, monkeypatch, 
     )
     config = {
         "shared": {"plugin": 'shared', "core:run": True, "core:protect_source_files": protect},
-        "source": {"plugin": 'source', "core:run": True},
-        "replace": {"plugin": 'replace', "core:run": True, "param:output": str(raw)},
+        "source": {"plugin": 'source', "core:run": True, "core:require_outputs": True},
+        "replace": {"plugin": 'replace', "core:run": True, "core:require_outputs": True, "param:output": str(raw)},
     }
     if protect:
         with pytest.raises(ValueError, match="protected input"):
@@ -216,7 +216,7 @@ def test_hpc_rewrites_and_downloads_explicit_final_json_path(tmp_path, monkeypat
         {"core:output_metadata_path": str(target), "core:delete_final_json_first": False}
     )
     recipe["process"] = {"plugin": 'process', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:name": "var:basename",
         "var:processed": "returned:$",
     }
@@ -241,11 +241,12 @@ def test_final_metadata_restores_cached_results(tmp_path, monkeypatch):
     destination = tmp_path / "final.json"
     recipe["shared"]["core:output_metadata_path"] = str(destination)
     recipe["produce"] = {"plugin": 'produce', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:name": "var:basename",
         "param:output_path": "expr:const.output_dir & '/' & var.filename",
         "var:score": "returned:score",
     }
+    recipe["produce"].update(context_controls(tmp_path / "scores.json", "var.score"))
     Workflow(recipe).run()
     resumed = Workflow(recipe)
     resumed.run()
@@ -260,7 +261,7 @@ def test_final_aggregate_metadata_includes_returned_constants(tmp_path, monkeypa
     destination = tmp_path / "final.json"
     recipe["shared"]["core:output_metadata_path"] = str(destination)
     recipe["aggregate"] = {"plugin": 'aggregate', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:names": "collect:basename",
         "const:summary": "returned:$",
     }
@@ -276,6 +277,7 @@ def test_discovery_only_hpc_exports_final_metadata(tmp_path):
     recipe["shared"]["core:output_metadata_path"] = str(target)
     staged, uploads, downloads = stage(recipe, tmp_path)
     assert str(target) not in uploads and str(target) in downloads
+    transfer(uploads)
     Workflow(staged).run()
     assert len(json.loads(Path(downloads[str(target)]).read_text())) == 2
 
@@ -303,9 +305,9 @@ def test_runtime_directory_return_drives_temporary_cleanup(tmp_path, monkeypatch
     )
     recipe = {
         "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False, "core:delete_temp_steps_proactively": True},
-        "directories": {"plugin": 'directories', "core:run": True, "const:work": "returned:$"},
-        "produce": {"plugin": 'produce', "core:run": True, "param:output_path": str(cache / "intermediate.txt")},
-        "consume": {"plugin": 'consume', "core:run": True, "param:input_path": str(cache / "intermediate.txt")},
+        "directories": {"plugin": 'directories', "core:run": True, "core:require_outputs": True, "const:work": "returned:$"},
+        "produce": {"plugin": 'produce', "core:run": True, "core:require_outputs": False, "param:output_path": str(cache / "intermediate.txt")},
+        "consume": {"plugin": 'consume', "core:run": True, "core:require_outputs": True, "param:input_path": str(cache / "intermediate.txt")},
     }
     Workflow(recipe).run()
     assert observed == ["made"]
@@ -333,15 +335,20 @@ def test_hpc_preserves_distinct_scene_directory_locations(tmp_path, monkeypatch)
     )
     recipe = {
         "shared": {"plugin": 'shared', "core:run": True, 
-            "core:log_to_console": False,
+            "core:log_to_console": False, "core:save_statistics_path": None, "core:load_statistics_path": None,
             "core:output_metadata_path": "expr:var.paths.products & '/final.json'",
         },
-        "source": {"plugin": 'source', "core:run": True},
-        "produce": {"plugin": 'produce', "core:run": True, "param:output_path": "image.txt"},
+        "source": {"plugin": 'source', "core:run": True, "core:require_outputs": True},
+        "produce": {"plugin": 'produce', "core:run": True, "core:require_outputs": True, "param:output_path": "path:expr:var.paths.products & '/image.txt'"},
     }
-    staged, uploads, downloads = stage(recipe, tmp_path)
-    assert not uploads and len(downloads) == 4
-    assert len(set(downloads.values())) == 4
+    from vhrharmonize.workflow.staging import stage_workflow
+    recipe["shared"]["const:root"] = str(tmp_path)
+    recipe["source"].update(context_controls(tmp_path / "scenes.json", "var.paths"))
+    staged, uploads, downloads = stage_workflow(recipe, config_dir=tmp_path,
+        remote_work_dir=str(tmp_path / "remote"), path_mappings={"const:root": str(tmp_path / "remote")})
+    assert uploads and len(downloads) == 5
+    transfer(uploads)
+    assert len(set(downloads.values())) == 5
     Workflow(staged).run()
     for name in ("a", "b"):
         image = tmp_path / name / "out/image.txt"
@@ -351,7 +358,7 @@ def test_hpc_preserves_distinct_scene_directory_locations(tmp_path, monkeypatch)
         assert entry["var"]["paths"]["products"] == str(Path(downloads[str(image)]).parent)
 
 
-def test_missing_declared_temp_directory_is_an_error(tmp_path, monkeypatch):
+def test_missing_declared_temp_directory_disables_cleanup(tmp_path, monkeypatch):
     install_function(
         monkeypatch,
         "source",
@@ -365,10 +372,10 @@ def test_missing_declared_temp_directory_is_an_error(tmp_path, monkeypatch):
         lambda output_path: None,
         output_temporary_cleanup_paths={"output_path"},
     )
-    with pytest.raises(ValueError, match="temp_dir is required"):
-        Workflow(
-            {
-                "source": {"plugin": 'source', "core:run": True},
-                "produce": {"plugin": 'produce', "core:run": True, "param:output_path": str(tmp_path / "image")},
-            }
-        )
+    workflow = Workflow(
+        {
+            "source": {"plugin": 'source', "core:run": True, "core:require_outputs": True},
+            "produce": {"plugin": 'produce', "core:run": True, "core:require_outputs": True, "param:output_path": str(tmp_path / "image")},
+        }
+    )
+    assert workflow.nodes[0].directories["temp_dir"] == []

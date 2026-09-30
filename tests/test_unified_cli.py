@@ -11,6 +11,7 @@ from vhrharmonize.workflow.api import load_workflow, run_plugin, run_workflow
 from vhrharmonize.workflow.config import validate_config
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow import registry
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, copy_step
 
 
@@ -26,7 +27,7 @@ def recipe(tmp_path):
             "const:output_dir": "./products",
             "const:temp_dir": "./work",
         },
-        "file_source": copy_step("copied", "mul", "expr:const.output_dir & '/' & var.filename"),
+        "file_source": copy_step("copied", "mul", "expr:const.output_dir & '/' & var.filename", require_outputs=True),
     }
 
 
@@ -93,7 +94,7 @@ def test_shared_settings_require_prefixes(recipe):
 
 
 def test_repeated_plugin_uses_names_and_position_without_ids(recipe, tmp_path):
-    recipe.update({'file_source_1': {**(recipe.pop("file_source")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("final", "copied", "expr:const.output_dir & '/final.bin'")), "plugin": 'file_source'}})
+    recipe.update({'file_source_1': {**(recipe.pop("file_source")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("final", "copied", "expr:const.output_dir & '/final.bin'", require_outputs=True)), "plugin": 'file_source'}})
     counts = run_plugin("file_source", recipe, config_dir=str(tmp_path))
     assert list(counts) == ["file_source_1", "file_source_2"]
     assert (tmp_path / "products/final.bin").is_file()
@@ -132,14 +133,14 @@ def test_new_registration_automatically_gets_cli_and_only_runs_selected_plugin(
     assert help_result.value.code == 0
     assert "consumer" in capsys.readouterr().out
     recipe["consumer"] = {"plugin": 'consumer', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:source": "var:copied",
         "param:settings": "const:$",
         "var:result": "expr:const.output_dir & '/final.bin'",
         "param:destination": "var:result",
     }
     recipe["alignment"] = {"plugin": 'alignment', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:moving_image_path": "var:result",
         "param:fixed_image_path": "var:mul",
         "param:output_image_path": "expr:const.output_dir & '/later.bin'",
@@ -185,8 +186,8 @@ def test_hpc_staging_rewrites_metadata_roots(recipe, tmp_path):
     )
     assert recipe == original
     assert "temp_dir" not in staged["shared"]
-    assert staged["import_files"]["core:run"] is False
-    assert staged["restore_scenes"]["core:run"] is True
+    assert staged["import_files"]["core:run"] is True
+    assert "restore_scenes" not in staged
     assert "id" not in staged["import_files"]
     metadata = Workflow(staged).initial_context["const"]
     assert metadata["temp_dir"] == str(remote / "temp")
@@ -258,13 +259,15 @@ def test_cached_metadata_preserves_current_system_temp_root(recipe, tmp_path, mo
     recipe["import_files"].pop("const:temp_dir")
     recipe["import_files"]["var:custom"] = {"sensor_setting": 3}
     recipe["file_source"]["var:saved"] = "returned:$"
+    recipe["file_source"].update(context_controls(tmp_path / "selected.json", "var.saved"))
     first = load_workflow(recipe, config_dir=str(tmp_path))
     first.run()
     old_temp = first.records[0]["context"]["const"]["temp_dir"]
-    checkpoint = json.loads((tmp_path / "products" / "sample.bin.context.json").read_text())
-    assert checkpoint["values"]["var.saved"].endswith("sample.bin")
-    assert "temp_dir" not in checkpoint["values"]
-    assert "output_dir" not in checkpoint["values"]
+    checkpoint = json.loads((tmp_path / "selected.json").read_text())
+    saved = next(iter(checkpoint["scenes"].values()))
+    assert saved["saved"].endswith("sample.bin")
+    assert set(saved) == {"saved"}
+    assert checkpoint["const"] == {}
     second = load_workflow(recipe, config_dir=str(tmp_path))
     new_temp = second.records[0]["context"]["const"]["temp_dir"]
     assert new_temp != old_temp

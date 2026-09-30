@@ -7,8 +7,10 @@ actual work, including replanning after scene changes. With progress reporting
 active, execution-time logs are captured in snapshot messages; early startup logs
 print immediately before the dashboard is initialized.
 
-For persistent timings, set `shared.core:statistics_path` to an append-only JSONL
-file. Core's unthrottled `event_callback` API reports measurements independently
+For persistent timings, set `shared.core:save_statistics_path` to an append-only JSONL
+file. It and `core:load_statistics_path` default to `statistics.jsonl` beside the YAML;
+the latter seeds runtime estimates in execution logs and progress snapshots. Set either
+to `null` to disable it. Core's unthrottled `event_callback` API reports measurements independently
 of console logging and UI refreshes; the OpenTelemetry recorder is one consumer.
 Use `vhr statistics` or `summarize_statistics()` to produce a separate report.
 See [statistics and timing](statistics.md) for the formats and Python API.

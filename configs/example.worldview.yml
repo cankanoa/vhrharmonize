@@ -45,8 +45,8 @@
 #   core:calculate_overviews: false # true | false; default: false. Selected raster outputs; requires shared.param:window_scales.
 #   core:reuse: true # true | false; default: shared.core:run_from_existing.
 #   core:check_validity: true # true | false; default: shared.core:check_validity.
-#   core:required: false # true | false; default: false. Require even an otherwise unused temporary product.
-# Requested non-temp outputs are deliverables. A valid cached downstream output stops
+#   core:require_outputs: false # false | true | param:name | [param:name, ...]; default: false. Request these outputs regardless of their directory.
+# core:require_outputs selects deliverables. A valid cached downstream output stops
 # upstream recomputation; missing intermediate temporary files do not prevent resume.
 
 shared:
@@ -93,24 +93,36 @@ shared:
   # core:log_to_console: true # true | false; default: true.
   # core:show_progress: true # true | false; default: true. Live prompt_toolkit dashboard; one final summary in redirected logs.
   # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
-  # core:statistics_path: null # path | null; default: null. Append core timings as OpenTelemetry JSONL; relative to this YAML. Analyze with vhr statistics.
+  # core:save_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Append raw timings; null disables saving.
+  # core:load_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Seed ETAs from past timings; null disables loading.
   param:log_to_console: true # true | false; default: NA. Use this to pass logging preferences to the plugins.
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
   # Workflow-wide constants. They remain available to every scene and aggregate.
-  const:dem_path: /path/to/dem.tif # path; recipe setting. Shared local DEM; fetch_dem replaces this when enabled.
-  const:reference_path: /path/to/reference.tif # path; recipe setting. Alignment reference for every scene.
+  const:temp_dir: path:/path/to/temp # Stable temp directory beside this YAML; holds intermediates and saved import context.
+  const:dem_path: path:/path/to/dem.tif # path; recipe setting. Shared local DEM; fetch_dem replaces this when enabled.
+  const:reference_path: path:/path/to/reference.tif # path; recipe setting. Alignment reference; may share an HPC folder with the DEM.
   const:red_band_index: 5 # one-based integer; recipe setting. WorldView red.
   const:green_band_index: 3 # one-based integer; recipe setting. WorldView green.
   const:nir_band_index: 7 # one-based integer; recipe setting. WorldView NIR1.
 
-import_files:
+discover_inputs:
   plugin: import_files
+  # Explicit persistence only. Missing load files warn (when logs are on), then discovery continues.
+  # To refresh from the original metadata, leave load_context commented during that run.
+  core:save_context:
+    "path:expr:const.temp_dir & '/import_metadata.json'": all
+  core:load_context:
+    "path:expr:const.temp_dir & '/import_metadata.json'": all
+  # core:save_upsert_context: {"path:expr:const.temp_dir & '/metadata.json'": [var.metadata]}
+  # core:load_upsert_context: {"path:expr:const.temp_dir & '/metadata.json'": [var.metadata]}
+  # dependencies selects recursive param references; defined selects this step's assignments.
+  # all saves/loads every context field; a successful load skips rediscovery and saving.
   core:run: true # true | false; default: false. Enable this step.
   # Later import_files steps add scenes and missing metadata fields; existing values and roots are preserved.
   # Output filenames are defined by YAML expressions; functions receive complete explicit paths.
-  param:output_dir: ../../processed # path; default: ./output, relative to each matched file. Persistent products.
-  # param:temp_dir: sys # sys | path; default: sys. System temp directory; relative paths use the first matched file by default.
+  param:output_dir: literal:expr:$replace(var.file_path, /[^\/]+$/, '') & '../../processed' # path; default: ./output. Explicitly relative to each original input.
+  param:temp_dir: const:temp_dir # path; default: sys. Reuse the shared temp directory so saved context survives between runs.
   # param:temp_dir_scope: const # const | var; default: const. Share one temporary root across scenes.
   # param:output_dir_scope: var # const | var; default: var. Resolve an output root for each scene.
   # Sensor constants shared by all imported images.
@@ -159,6 +171,7 @@ import_files:
     metadata:
       to_json: literal:expr:$replace(var.file_path, '.TIF', '.IMD') # IMD/JSON/GeoJSON/XML/YAML -> object; kept in memory.
   var:mul: returned:file_path # Original multispectral image; retained for source metadata.
+  var:metadata_path: expr:$replace(var.mul, '.TIF', '.IMD') # Source metadata file; enables an individual HPC mapping.
   var:current_image_paths: returned:file_path # Current image for this scene; updated by enabled image steps.
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # Original filename without extension.
   var:suffix: "" # Naming state; enabled processing steps append their suffixes in YAML.
@@ -205,6 +218,7 @@ import_files:
 file_source:
   plugin: file_source
   core:run: false # true | false; default: false. Skip this step and retain the previous image path.
+  # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
   param:input_path: var:current_image_paths # path; required.
   param:companions: var:mul_companions # path list | null; default: null. Copy RPC sidecars with the image.
   var:suffix: expr:var.suffix & ''
@@ -223,6 +237,7 @@ file_source:
 fetch_dem:
   plugin: fetch_dem
   core:run: false # true | false; default: false.
+  # core:require_outputs: param:output_tif_path # Default: false. Uncomment to request this output explicitly.
   core:scope: aggregate # scene | aggregate; default: scene. Fetch once for the combined image extent.
   param:image_paths: collect:current_image_paths # path | path list | null; default: null. Union of image bounds, transformed to WGS84.
   # param:min_lon: null # number | null; default: null. Alternative bbox west edge; omit image_paths and supply all four edges.
@@ -241,7 +256,13 @@ fetch_dem:
 # Fetch atmosphere separately so it can be reused or replaced by another source.
 fetch_atmosphere:
   plugin: fetch_atmosphere
+  # Optional explicit metadata reuse; no implicit output sidecars or restore hooks.
+  # core:save_context:
+  #   "path:expr:var.output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
+  # core:load_context:
+  #   "path:expr:var.output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
   # param:source: nasa_power # nasa_power | modis_gee; default: nasa_power.
   param:day_utc: var:day_utc  # ISO date; required for nasa_power.
   param:min_lon: var:min_lon  # number; required. WGS84 bbox west edge.
@@ -278,6 +299,7 @@ fetch_atmosphere:
 atmospheric_correction:
   plugin: atmospheric_correction
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_raster # Default: false. Uncomment to request this output explicitly.
   # param:method: py6s # py6s | flaash; default: py6s. run: false retains the previous image path.
   core:requires: var:mul_companions # path list; default: []. Preserve access to external RPC metadata.
   param:input_raster: var:current_image_paths # path; required. Previous enabled image step.
@@ -390,6 +412,7 @@ atmospheric_correction:
 orthorectify_mul:
   plugin: orthorectification
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   param:input_image_path: var:current_image_paths # path; required.
   param:dem_image_path: const:dem_path # path; required. Or var:dem from fetch_dem.
   # param:gcp_geojson_file_path: /path/to/rpc_refinement_gcps.geojson # path | null; default: null. Refine RPCs with Orthority-format GCPs.
@@ -410,6 +433,7 @@ orthorectify_mul:
 orthorectify_pan:
   plugin: orthorectification
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   core:requires: var:pan_companions # path list; default: []. External PAN RPC sidecars.
   param:input_image_path: var:pan # path; required.
   param:dem_image_path: const:dem_path # path; required. Or var:dem from fetch_dem.
@@ -421,6 +445,7 @@ orthorectify_pan:
 pansharpen:
   plugin: pansharpen
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   param:input_low_resolution_path: var:current_image_paths # path; required.
   param:input_high_resolution_path: var:pan # path; required.
   var:suffix: expr:var.suffix & '_pansharpen'
@@ -435,6 +460,7 @@ pansharpen:
 cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
+  core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:current_image_paths # path; required.
   var:cloudmask: expr:var.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
@@ -477,6 +503,7 @@ cloud_mask:
 alignment:
   plugin: alignment
   core:run: true # true | false; default: false. Enable this step.
+  core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   param:moving_image_path: var:current_image_paths # path; required. Cached image can satisfy this dependency directly.
   param:fixed_image_path: const:reference_path # path; required when alignment runs.
   var:suffix: expr:var.suffix & '_aligned'
@@ -513,6 +540,7 @@ alignment:
 # test_low_resolution_run:
 #   plugin: align_rasters
 #   core:run: true # true | false; default: false. Enable when this block is uncommented.
+#   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
 #   core:scope: aggregate # scene | aggregate; default: aggregate. Process all current scene rasters.
 #   param:input_images: collect:current_image_paths # path list; required. Aligned images for every scene.
 #   var:suffix: expr:var.suffix & '_30m'
@@ -546,6 +574,7 @@ setup_spectralmatch:
 joint_coregistration:
   plugin: joint_coregistration
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_coreg'
   var:current_image_paths: expr:const.temp_dir & '/joint_coregistration/' & var.basename & var.suffix & '.tif'
@@ -594,10 +623,11 @@ joint_coregistration:
 seamline_metadata:
   plugin: seamline_metadata
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
   param:image_paths: collect:current_image_paths # path list; required. Ordered across imported records.
   param:metadata_records: collect:footprint_metadata # JSON object list; required. Same length as image_paths.
   const:footprints: expr:const.temp_dir & '/seamline_metadata/seamline_metadata.gpkg'
-  param:output_path: const:footprints # path; required. Temporary input to seamlines; use a persistent path to keep it as a deliverable.
+  param:output_path: const:footprints # path; required. Input to seamlines; set core:require_outputs to param:output_path to retain it as a deliverable.
   param:layer: const:spectralmatch.polygon_layer # layer name; default: seamline_metadata. Previous example: footprints.
   param:image_field_name: const:spectralmatch.image_field_name # field name; default: image_path. Use the same field in SpectralMatch seamline options.
   # param:footprint_source: calculate_bounds # calculate_bounds | metadata; default: calculate_bounds. metadata uses mapped IMD corners; calculate_bounds polygonizes valid raster data.
@@ -615,6 +645,7 @@ seamline_metadata:
 global_regression:
   plugin: global_regression
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_global'
@@ -663,6 +694,7 @@ global_regression:
 local_block_adjustment:
   plugin: local_block_adjustment
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_local'
@@ -698,6 +730,7 @@ local_block_adjustment:
 postprocess_footprints:
   plugin: postprocess_footprints
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_polygons # Default: false. Uncomment to request this output explicitly.
   param:input_polygons: const:footprints # path; required. Current footprints.
   param:input_layer: const:spectralmatch.polygon_layer # string; default: footprints. Layer in current footprints.
   const:footprints: expr:const.temp_dir & '/postprocess_footprints/postprocess_footprints.gpkg'
@@ -724,6 +757,7 @@ postprocess_footprints:
 # voronoi_center_seamline:
 #   plugin: voronoi_center_seamline
 #   core:run: true # true | false; default: false. Enable this step.
+#   # core:require_outputs: param:output_mask # Default: false. Uncomment to request this output explicitly.
 #   const:spectralmatch.mask: expr:const.temp_dir & '/voronoi_center_seamline/voronoi_center_seamline.gpkg'
 #   param:input_polygons: const:footprints # path; required. Polygons from the selected footprint step.
 #   param:output_mask: const:spectralmatch.mask # string; required. Output path for the final seamline polygon vector file.
@@ -744,6 +778,7 @@ postprocess_footprints:
 # weighted_seamline:
 #   plugin: weighted_seamline
 #   core:run: true # true | false; default: false. Enable this step.
+#   # core:require_outputs: param:output_mask # Default: false. Uncomment to request this output explicitly.
 #   const:spectralmatch.mask: expr:const.temp_dir & '/weighted_seamline/weighted_seamline.gpkg'
 #   param:input_polygons: const:footprints # path; required. Footprints and attributes from the selected footprint step.
 #   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path for the ranked seamline polygons.
@@ -760,6 +795,7 @@ postprocess_footprints:
 markov_triangles:
   plugin: markov_triangles
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_mask # Default: false. Uncomment to request this output explicitly.
   const:spectralmatch.mask: expr:const.temp_dir & '/markov_triangles/markov_triangles.gpkg'
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Raster folder, glob or path list; basenames without extensions must be unique.
   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path, distinct from input vectors; stores image identifiers, image_path and raw quality_score.
@@ -789,6 +825,7 @@ markov_triangles:
 mask_rasters:
   plugin: mask_rasters
   core:run: true # true | false; default: false. Enable this step.
+  # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_masked'
@@ -814,6 +851,7 @@ mask_rasters:
 merge_rasters:
   plugin: merge_rasters
   core:run: true # true | false; default: false. Enable this step.
+  core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Defines input files from a glob path, folder, or list of paths.
   const:mosaic_output_dirs: collect:output_dir # Explicitly collect scene roots for this one shared product.

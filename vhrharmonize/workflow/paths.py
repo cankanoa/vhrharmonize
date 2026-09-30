@@ -8,6 +8,21 @@ DIRECTORY_FEATURES = {
 }
 
 
+def validate_path_mappings(mappings):
+    """Map workflow references to directory strings/expressions; sharing is allowed."""
+    if not isinstance(mappings, dict):
+        raise ValueError("path_mappings must map var:name or const:name to remote directories")
+    for selector, remote in mappings.items():
+        if not isinstance(selector, str):
+            raise ValueError("path_mappings keys must be var:name or const:name")
+        scope, colon, name = selector.partition(":")
+        if scope not in {"var", "const"} or not colon or not all(p.isidentifier() for p in name.split(".")):
+            raise ValueError(f"Invalid path_mappings reference: {selector!r}")
+        if not isinstance(remote, str) or not remote.strip():
+            raise ValueError(f"path_mappings {selector} needs a remote directory")
+    return mappings
+
+
 def directory_values(context, locations, *, base_dir, required=()):
     """Return normalized roots by role and update only existing declared fields."""
     roots, pending = {role: [] for role in DIRECTORY_FEATURES}, set()
@@ -40,7 +55,7 @@ def directory_values(context, locations, *, base_dir, required=()):
 
 
 def directory_bindings(context, locations):
-    """Capture scope-qualified roots for checkpoint rebasing and HPC transfers."""
+    """Capture scope-qualified roots for directory bookkeeping and HPC transfers."""
     result = {}
     for selectors in locations.values():
         for selector in selectors:

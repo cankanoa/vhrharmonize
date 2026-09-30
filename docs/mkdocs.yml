@@ -20,6 +20,7 @@ nav:
       - HPC: cli/hpc.md
   - Configuration:
       - Workflow Configuration: configuration/workflow-config.md
+  - Saved File Formats: saved-file-formats.md
   - Pre-Processing Steps:
       - Py6S: pre-processing-steps/py6s.md
       - Plugin Workflow: pre-processing-steps/workflow.md

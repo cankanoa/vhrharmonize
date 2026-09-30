@@ -9,7 +9,7 @@ import warnings
 
 from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.formatted_text import FormattedText, to_plain_text
-from prompt_toolkit.input import create_input
+from prompt_toolkit.input import create_input, create_pipe_input
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -100,7 +100,9 @@ class TerminalProgressDisplay:
     remain on their original threads; redirected output never creates an app.
     """
 
-    def __init__(self, *, stream=None, width=None, ascii_only=None):
+    title = TITLE
+
+    def __init__(self, *, stream=None, width=None, ascii_only=None, read_input=True):
         self.stream = stream if stream is not None else sys.stderr
         self.width = width
         self.snapshot = None
@@ -111,6 +113,8 @@ class TerminalProgressDisplay:
         self.app = self.thread = None
         self.ready, self.stopping = Event(), Event()
         self.error = None
+        self.read_input = read_input
+        self._input_context = None
         self._pinned = FormattedText()
         self._pinned_height = 0
         if ascii_only is None:
@@ -230,7 +234,7 @@ class TerminalProgressDisplay:
         message_lines = [*messages, []] if messages else []
         return FormattedText(
             [part for line in message_lines for part in _fit(line, width) + [("", "\n")]]
-            + _panel(TITLE, [*self.table(data, width=width - 4), None,
+            + _panel(self.title, [*self.table(data, width=width - 4), None,
                              *self.operations(data["active"], width=width - 4)],
                      width, ascii_only=self.ascii_only))
 
@@ -289,7 +293,7 @@ class TerminalProgressDisplay:
                 # Keep the total and first operation visible on short terminals.
                 steps = steps[:2]
                 operations = operations[:2]
-            self._pinned = FormattedText(_panel(TITLE, [*steps, None, *operations], width,
+            self._pinned = FormattedText(_panel(self.title, [*steps, None, *operations], width,
                                                ascii_only=self.ascii_only))
             # No trailing blank line inside the pinned window.
             self._pinned[-1] = (self._pinned[-1][0], self._pinned[-1][1].rstrip("\n"))
@@ -314,7 +318,13 @@ class TerminalProgressDisplay:
     def __enter__(self):
         if (getattr(self.stream, "isatty", lambda: False)() and sys.stdin.isatty()
                 and os.environ.get("TERM") != "dumb"):
-            self.create_application(input=create_input(stdin=sys.stdin), output=create_output(stdout=self.stream))
+            if self.read_input:
+                terminal_input = create_input(stdin=sys.stdin)
+            else:
+                # Uploads leave terminal input available to SSH authentication.
+                self._input_context = create_pipe_input()
+                terminal_input = self._input_context.__enter__()
+            self.create_application(input=terminal_input, output=create_output(stdout=self.stream))
 
             def ready():
                 self.ready.set()
@@ -351,6 +361,8 @@ class TerminalProgressDisplay:
             except RuntimeError:
                 pass  # The input stream may already have closed the event loop.
             self.thread.join(5)
+        if self._input_context is not None:
+            self._input_context.__exit__(None, None, None)
         if self.error is not None:
             warnings.warn(f"Interactive dashboard unavailable: {self.error}", RuntimeWarning, stacklevel=2)
         if self.app is not None:

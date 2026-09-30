@@ -21,10 +21,11 @@ def import_settings(source, tmp_path):
     }
 
 
-def copy_step(name, source, destination=None, *, suffix="", run=True, folder="temp_dir"):
+def copy_step(name, source, destination=None, *, suffix="", run=True, folder="temp_dir", require_outputs=False):
     return {
         "plugin": "file_source",
         "core:run": run,
+        "core:require_outputs": "param:output_path" if require_outputs else False,
         "param:input_path": "var:" + source,
         "var:suffix": "expr:var.suffix & " + repr(suffix),
         "var:" + name: destination
@@ -74,3 +75,9 @@ def transfer(mapping):
     for source, target in mapping.items():
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+
+
+def context_controls(filename, selectors="defined"):
+    """Opt a test recipe into explicit persistence of selected context fields."""
+    return {"core:" + operation: {str(filename): selectors}
+            for operation in ("load_context", "save_context")}

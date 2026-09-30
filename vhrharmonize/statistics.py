@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 import platform
 from tempfile import NamedTemporaryFile
@@ -141,6 +143,102 @@ def _raw_lines(source):
             yield line
 
 
+def validate_statistics_record(span: dict) -> dict:
+    """Validate one saved SDK span and VHR timing attributes; return it unchanged.
+
+    Raises ValueError for malformed records or unsupported VHR schema versions.
+    Unknown attributes are allowed. Incomplete workflow spans may omit duration.
+    """
+    def require(condition, field):
+        if not condition:
+            raise ValueError(f"Invalid statistics field: {field}")
+
+    def number(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value >= 0)
+
+    try:
+        require(isinstance(span, dict), "record")
+        for key in ("name", "kind"):
+            require(isinstance(span[key], str) and bool(span[key]), key)
+        for key, digits in (("trace_id", 32), ("span_id", 16)):
+            require(bool(re.fullmatch(r"0x[0-9a-f]{%d}" % digits, span["context"][key])), key)
+        require(isinstance(span["context"]["trace_state"], str), "context.trace_state")
+        require(span["parent_id"] is None or bool(re.fullmatch(r"0x[0-9a-f]{16}", span["parent_id"])), "parent_id")
+        start, end = (datetime.fromisoformat(span[key].replace("Z", "+00:00"))
+                      for key in ("start_time", "end_time"))
+        require(start.tzinfo is not None and end.tzinfo is not None and end >= start, "timestamps")
+        require(span["status"]["status_code"] in {"OK", "ERROR", "UNSET"}, "status.status_code")
+        if "description" in span["status"]:
+            require(isinstance(span["status"]["description"], str), "status.description")
+        require(all(isinstance(span[key], list) for key in ("events", "links")), "events/links")
+        require(isinstance(span["resource"]["attributes"], dict)
+                and isinstance(span["resource"]["schema_url"], str), "resource")
+        attributes = span["attributes"]
+        require(isinstance(attributes, dict), "attributes")
+        require(type(attributes["vhr.schema_version"]) is int and attributes["vhr.schema_version"] == 1,
+                "vhr.schema_version (expected 1)")
+        for key in ("vhr.run_id", "vhr.name"):
+            require(isinstance(attributes[key], str) and bool(attributes[key]), key)
+        require(attributes["vhr.kind"] in {"workflow", "core", "task", "step_summary"}, "vhr.kind")
+        require(attributes["vhr.status"] in {"completed", "failed", "incomplete", "reused", "skipped", "waiting"},
+                "vhr.status")
+        duration = attributes.get("vhr.duration_seconds")
+        require(number(duration) or duration is None and attributes["vhr.status"] == "incomplete",
+                "vhr.duration_seconds")
+        for key in ("scene_units", "done", "run", "all", "reused", "unused"):
+            if "vhr." + key in attributes:
+                value = attributes["vhr." + key]
+                require(type(value) is int and value >= (1 if key == "scene_units" else 0), "vhr." + key)
+        for key in ("plugin", "backend", "processing_direction", "config", "job_id", "scene", "task_id", "phase"):
+            if "vhr." + key in attributes:
+                require(isinstance(attributes["vhr." + key], str), "vhr." + key)
+        if "vhr.measured" in attributes:
+            require(isinstance(attributes["vhr.measured"], bool), "vhr.measured")
+        if "error.type" in attributes:
+            require(isinstance(attributes["error.type"], str), "error.type")
+        json.dumps(span, allow_nan=False)
+    except (KeyError, TypeError, AttributeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"Malformed statistics record: {exc}") from exc
+    return span
+
+
+def _statistics_records(source):
+    seen = set()
+    for number, line in enumerate(_raw_lines(source), 1):
+        if not line.strip():
+            continue
+        try:
+            span = validate_statistics_record(json.loads(line))
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid statistics record at {source}:{number}: {exc}") from exc
+        identity = (span["context"]["trace_id"], span["context"]["span_id"])
+        if identity not in seen:
+            seen.add(identity)
+            yield span
+
+
+def load_statistics(input_path: str | Path) -> dict:
+    """Load successful task totals keyed by (step, plugin, backend) for ETA estimates.
+
+    Values are (seconds, scene_units). Missing files return an empty dictionary;
+    malformed existing files raise ValueError identifying the line. No size/type
+    classification is performed; callers choose the history file.
+    """
+    source = Path(input_path).expanduser().resolve()
+    if not source.exists():
+        return {}
+    timings = {}
+    for span in _statistics_records(source):
+        a = span["attributes"]
+        if a["vhr.kind"] != "task" or a["vhr.status"] != "completed" or not a.get("vhr.measured", True):
+            continue
+        key = (a["vhr.name"], a.get("vhr.plugin", ""), a.get("vhr.backend", ""))
+        seconds, units = timings.get(key, (0.0, 0))
+        timings[key] = (seconds + a["vhr.duration_seconds"], units + a.get("vhr.scene_units", 1))
+    return timings
+
+
 def summarize_statistics(
     input_path: str | Path,
     output_path: str | Path,
@@ -169,40 +267,23 @@ def summarize_statistics(
         raise ValueError("Statistics output_path must differ from the raw input_path")
     if not isinstance(per_run, bool):
         raise TypeError("per_run must be a boolean")
-    records, seen, finished_runs = [], set(), set()
-    for number, line in enumerate(_raw_lines(source), 1):
-        if not line.strip():
+    records, finished_runs = [], set()
+    for span in _statistics_records(source):
+        attributes = span["attributes"]
+        identity_run = attributes["vhr.run_id"]
+        if run_id is not None and identity_run != run_id:
             continue
-        try:
-            span = json.loads(line)
-            attributes = span["attributes"]
-            if attributes["vhr.schema_version"] != 1:
-                raise ValueError("unsupported statistics schema")
-            identity = (span["context"]["trace_id"], span["context"]["span_id"])
-            if identity in seen:
-                continue
-            seen.add(identity)
-            identity_run = attributes["vhr.run_id"]
-            if run_id is not None and identity_run != run_id:
-                continue
-            kind, status = attributes["vhr.kind"], attributes["vhr.status"]
-            duration = attributes.get("vhr.duration_seconds")
-            if duration is not None and (isinstance(duration, bool) or not isinstance(duration, (int, float))
-                                         or not math.isfinite(duration) or duration < 0):
-                raise ValueError("invalid timing duration")
-            if kind == "workflow" and status in {"completed", "failed"}:
-                finished_runs.add(identity_run)
-            record = {
-                "run_id": identity_run, "kind": kind, "step": attributes["vhr.name"],
-                "plugin": attributes.get("vhr.plugin", ""),
-                "backend": attributes.get("vhr.backend", ""), "status": status,
-                "seconds": duration if kind != "step_summary" and status != "incomplete" else None,
-                "scene_units": attributes.get("vhr.scene_units", 0),
-                **{key: attributes.get("vhr." + key, 0) for key in ("done", "run", "all", "reused", "unused")},
-            }
-            records.append(record)
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            raise ValueError(f"Invalid statistics record at {source}:{number}: {exc}") from exc
+        kind, status = attributes["vhr.kind"], attributes["vhr.status"]
+        if kind == "workflow" and status in {"completed", "failed"}:
+            finished_runs.add(identity_run)
+        records.append({
+            "run_id": identity_run, "kind": kind, "step": attributes["vhr.name"],
+            "plugin": attributes.get("vhr.plugin", ""),
+            "backend": attributes.get("vhr.backend", ""), "status": status,
+            "seconds": attributes.get("vhr.duration_seconds") if kind != "step_summary" and status != "incomplete" else None,
+            "scene_units": attributes.get("vhr.scene_units", 0),
+            **{key: attributes.get("vhr." + key, 0) for key in ("done", "run", "all", "reused", "unused")},
+        })
     if run_id is not None and not records:
         raise ValueError(f"No statistics for run_id {run_id!r}")
     columns = (["run_id"] if per_run else []) + ["kind", "step", "plugin", "backend", "status"]
@@ -243,4 +324,4 @@ def summarize_statistics(
     return result
 
 
-__all__ = ["StatisticsRecorder", "summarize_statistics"]
+__all__ = ["StatisticsRecorder", "validate_statistics_record", "load_statistics", "summarize_statistics"]

@@ -9,6 +9,7 @@ from vhrharmonize.workflow.api import load_workflow
 from vhrharmonize.workflow.config import load_config
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.values import resolve, expression, evaluate_settings, Pending
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, copy_step, install_function, stage, transfer
 
 
@@ -51,12 +52,12 @@ def test_file_and_metadata_names_are_explicit(recipe):
 def test_disabled_steps_require_explicit_links_and_do_not_change_names(
     recipe, first_enabled, second_enabled, expected
 ):
-    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", run=first_enabled)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("second", "first" if first_enabled else "mul", suffix="_two", run=second_enabled)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step(
+    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", run=first_enabled, require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("second", "first" if first_enabled else "mul", suffix="_two", run=second_enabled, require_outputs=True)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step(
             "final",
             "second" if second_enabled else "first" if first_enabled else "mul",
             suffix="_final",
             folder="output_dir",
-        )), "plugin": 'file_source'}})
+         require_outputs=True)), "plugin": 'file_source'}})
     workflow = Workflow(recipe)
     workflow.run()
     final = Path(workflow.nodes[-1].params["output_path"])
@@ -77,7 +78,7 @@ def test_disabled_steps_do_not_load_resolve_export_or_change_metadata(recipe, mo
 
     monkeypatch.setattr(engine, "load_plugin", guarded)
     recipe["alignment"] = {"plugin": 'alignment', 
-        "core:run": False,
+        "core:run": False, "core:require_outputs": True,
         "core:scope": scope,
         "var:disabled": "expr:var.invalid ! var.expression",
         "param:moving_image_path": "var:undefined",
@@ -95,16 +96,17 @@ def test_disabled_step_does_not_export_a_file_even_if_it_exists(recipe, cached):
         saved = Path(recipe["import_files"]["const:temp_dir"]) / "scene_disabled.txt"
         saved.parent.mkdir()
         saved.write_text("cached")
-    recipe.update({'file_source_1': {**(copy_step("disabled", "mul", suffix="_disabled", run=False)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("final", "disabled", suffix="_final")), "plugin": 'file_source'}})
+    recipe.update({'file_source_1': {**(copy_step("disabled", "mul", suffix="_disabled", run=False, require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("final", "disabled", suffix="_final", require_outputs=True)), "plugin": 'file_source'}})
     with pytest.raises(ValueError, match="Undefined variable field: disabled"):
-        Workflow(recipe)
+        Workflow(recipe).run()
 
 
 def test_cached_downstream_naming_stops_upstream_processing(recipe):
-    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("last", "first", suffix="_two", folder="output_dir")), "plugin": 'file_source'}})
+    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("last", "first", suffix="_two", folder="output_dir", require_outputs=True)), "plugin": 'file_source'}})
     root = Path(recipe["import_files"]["const:output_dir"])
     root.mkdir()
     (root / "scene_one_two.txt").write_text("saved")
+    recipe["file_source_1"]["core:require_outputs"] = False
     workflow = Workflow(recipe)
     workflow.run()
     assert workflow.counts()["file_source_1"]["processing"] == 0
@@ -113,11 +115,11 @@ def test_cached_downstream_naming_stops_upstream_processing(recipe):
 
 def test_independent_naming_branch_and_explicit_filename(recipe):
     recipe["import_files"]["var:pan_suffix"] = ""
-    branch = copy_step("branch", "mul", suffix="_pan")
+    branch = copy_step("branch", "mul", suffix="_pan", require_outputs=True)
     branch.pop("var:suffix")
     branch["var:pan_suffix"] = "expr:var.pan_suffix & '_pan'"
     branch["var:branch"] = "expr:const.temp_dir & '/override.txt'"
-    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one")), "plugin": 'file_source'}, 'file_source_2': {**(branch), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("last", "first", suffix="_last", folder="output_dir")), "plugin": 'file_source'}})
+    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(branch), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("last", "first", suffix="_last", folder="output_dir", require_outputs=True)), "plugin": 'file_source'}})
     workflow = Workflow(recipe)
     workflow.run()
     assert Path(workflow.records[0]["context"]["var"]["branch"]).name == "override.txt"
@@ -136,8 +138,8 @@ def test_plugin_selection_preserves_enabled_upstream_names(recipe, monkeypatch):
         input_paths={"input_path"},
         output_paths={"output_path"},
     )
-    recipe["file_source"] = copy_step("first", "mul", suffix="_one")
-    recipe["finish"] = copy_step("last", "first", suffix="_last", folder="output_dir")
+    recipe["file_source"] = copy_step("first", "mul", suffix="_one", require_outputs=True)
+    recipe["finish"] = copy_step("last", "first", suffix="_last", folder="output_dir", require_outputs=True)
     recipe["finish"]["plugin"] = "finish"
     with pytest.raises(ValueError, match="Unselected step"):
         load_workflow(recipe, plugin="finish").run()
@@ -147,7 +149,7 @@ def test_plugin_selection_preserves_enabled_upstream_names(recipe, monkeypatch):
     assert Path(workflow.records[0]["context"]["var"]["last"]).name == "scene_one_last.txt"
 
 
-def test_returned_objects_and_scalars_restore_from_checkpoint(recipe, monkeypatch):
+def test_returned_objects_and_scalars_load_explicit_context(recipe, monkeypatch):
     calls = []
 
     def produce(output_path):
@@ -157,12 +159,13 @@ def test_returned_objects_and_scalars_restore_from_checkpoint(recipe, monkeypatc
 
     install_function(monkeypatch, "produce", produce, output_paths={"output_path"})
     recipe["produce"] = {"plugin": 'produce', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:output_path": "expr:const.output_dir & '/data.txt'",
         "var:object": "returned:object",
         "var:scalar": "returned:scalar",
         "var:double": "expr:var.scalar * 2",
     }
+    recipe["produce"].update(context_controls(Path(recipe["import_files"]["const:output_dir"]) / "metadata.json"))
     workflow = Workflow(recipe)
     workflow.run()
     assert workflow.records[0]["context"]["var"]["double"] == 6
@@ -188,17 +191,17 @@ def test_aggregate_reads_returned_variables_at_its_position(recipe, monkeypatch)
 
     install_function(monkeypatch, "summary", summary, scope="aggregate")
     recipe["measure"] = {"plugin": 'measure', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:basename": "var:basename",
         "var:score": "returned:$",
     }
     recipe["summary"] = {"plugin": 'summary', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:values": "collect:score",
         "param:records": "collect:$",
         "const:total": "returned:$",
     }
-    recipe["file_source"] = copy_step("final", "mul", folder="output_dir")
+    recipe["file_source"] = copy_step("final", "mul", folder="output_dir", require_outputs=True)
     workflow = Workflow(recipe)
     workflow.run()
     assert [r["context"]["const"]["total"] for r in workflow.records] == [11, 11]
@@ -208,7 +211,7 @@ def test_aggregate_reads_returned_variables_at_its_position(recipe, monkeypatch)
 def test_compound_options_keep_nonfile_literals(recipe, monkeypatch):
     observed = []
     install_function(monkeypatch, "inspect", lambda mask: observed.append(mask))
-    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, "param:mask": ["include", "var:mul", "image"]}
+    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, "core:require_outputs": True, "param:mask": ["include", "var:mul", "image"]}
     Workflow(recipe).run()
     assert observed == [["include", recipe["import_files"]["param:search_glob"], "image"]]
 
@@ -216,9 +219,9 @@ def test_compound_options_keep_nonfile_literals(recipe, monkeypatch):
 @pytest.mark.parametrize("first_enabled", [False, True])
 def test_hpc_preserves_naming_and_scalar_values(recipe, tmp_path, first_enabled):
     recipe["import_files"]["var:tag"] = "ordinary string"
-    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", run=first_enabled)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step(
+    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", run=first_enabled, require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step(
             "final", "first" if first_enabled else "mul", suffix="_last", folder="output_dir"
-        )), "plugin": 'file_source'}})
+        , require_outputs=True)), "plugin": 'file_source'}})
     staged, uploads, _ = stage(recipe, tmp_path)
     transfer(uploads)
     workflow = Workflow(staged)
@@ -239,7 +242,7 @@ def test_old_nested_schema_is_rejected(recipe, heading):
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_hpc_transports_returned_values_and_checkpoints(recipe, tmp_path, monkeypatch, cached):
+def test_hpc_transports_explicit_returned_context(recipe, tmp_path, monkeypatch, cached):
     calls = []
 
     def produce(input_path, output_path):
@@ -255,14 +258,16 @@ def test_hpc_transports_returned_values_and_checkpoints(recipe, tmp_path, monkey
         output_paths={"output_path"},
     )
     recipe["produce"] = {"plugin": 'produce', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:input_path": "var:mul",
         "var:product": "expr:const.output_dir & '/product.txt'",
         "param:output_path": "var:product",
         "var:factor": "returned:factor",
     }
-    recipe["file_source"] = copy_step("final", "product", suffix="_final", folder="output_dir")
+    recipe["file_source"] = copy_step("final", "product", suffix="_final", folder="output_dir", require_outputs=True)
     recipe["file_source"]["var:seen"] = "expr:var.factor * 2"
+    recipe["import_files"]["param:scene_id"] = "literal:expr:$split(var.file_path, '/')[-1]"
+    recipe["produce"].update(context_controls(tmp_path / "factor.json", "var.factor"))
     if cached:
         load_workflow(recipe, plugin="produce").run()
         calls.clear()
@@ -282,7 +287,7 @@ def test_hpc_rewrites_declared_files_in_compound_options(recipe, tmp_path, monke
     observed = []
     install_function(monkeypatch, "inspect", lambda mask: observed.append(mask))
     recipe["inspect"] = {"plugin": 'inspect', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "core:requires": "var:mul",
         "param:mask": ["include", "var:mul", "image"],
     }
@@ -294,7 +299,8 @@ def test_hpc_rewrites_declared_files_in_compound_options(recipe, tmp_path, monke
 
 def test_cleanup_ignores_disabled_alias_declarations(recipe):
     recipe["shared"]["core:delete_temp_steps_proactively"] = True
-    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("alias", "first", "var:first", run=False)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("final", "first", suffix="_final", folder="output_dir")), "plugin": 'file_source'}})
+    recipe.update({'file_source_1': {**(copy_step("first", "mul", suffix="_one", require_outputs=True)), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("alias", "first", "var:first", run=False, require_outputs=True)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("final", "first", suffix="_final", folder="output_dir", require_outputs=True)), "plugin": 'file_source'}})
+    recipe["file_source_1"]["core:require_outputs"] = False
     workflow = Workflow(recipe)
     workflow.run()
     assert not Path(workflow.records[0]["context"]["var"]["first"]).exists()
@@ -366,7 +372,7 @@ def test_same_invocation_return_cannot_supply_its_inputs():
 
 def test_nested_updates_and_deferred_null_return(recipe, monkeypatch):
     install_function(monkeypatch, "produce", lambda: {"x": None})
-    recipe["produce"] = {"plugin": 'produce', "core:run": True, "var:stats.angle": 42, "var:stats.x": "returned:x"}
+    recipe["produce"] = {"plugin": 'produce', "core:run": True, "core:require_outputs": True, "var:stats.angle": 42, "var:stats.x": "returned:x"}
     workflow = Workflow(recipe)
     workflow.run()
     assert workflow.records[0]["context"]["var"]["stats"] == {"angle": 42, "x": None}
@@ -385,7 +391,7 @@ def test_unused_return_values_are_omitted_from_final_json(recipe, monkeypatch):
         output_paths={"output_path"},
     )
     recipe["produce"] = {"plugin": 'produce', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": False,
         "param:input_path": "var:mul",
         "var:intermediate": "expr:const.temp_dir & '/intermediate.txt'",
         "param:output_path": "var:intermediate",
@@ -393,7 +399,7 @@ def test_unused_return_values_are_omitted_from_final_json(recipe, monkeypatch):
         "var:stats.known": 4,
         "var:stats.missing": "returned:missing",
     }
-    recipe["file_source"] = copy_step("final", "intermediate", folder="output_dir")
+    recipe["file_source"] = copy_step("final", "intermediate", folder="output_dir", require_outputs=True)
     dest = Path(recipe["import_files"]["const:output_dir"]) / "scene.txt"
     dest.parent.mkdir()
     dest.write_text("saved")
@@ -404,9 +410,11 @@ def test_unused_return_values_are_omitted_from_final_json(recipe, monkeypatch):
     json.dumps(metadata, allow_nan=False)
 
 
-def test_hpc_returned_paths_rebase_when_checkpoints_move(recipe, tmp_path):
-    recipe["file_source"] = copy_step("product", "mul", folder="output_dir")
+def test_downloaded_context_keeps_resolved_returned_paths(recipe, tmp_path):
+    recipe["file_source"] = copy_step("product", "mul", folder="output_dir", require_outputs=True)
     recipe["file_source"]["var:saved"] = "returned:$"
+    recipe["import_files"]["param:scene_id"] = "literal:expr:$split(var.file_path, '/')[-1]"
+    recipe["file_source"].update(context_controls(tmp_path / "saved-path.json", "var.saved"))
     staged, uploads, downloads = stage(recipe, tmp_path)
     transfer(uploads)
     remote = Workflow(staged)
@@ -415,7 +423,7 @@ def test_hpc_returned_paths_rebase_when_checkpoints_move(recipe, tmp_path):
     local = Workflow(recipe)
     local.run()
     assert local.records[0]["context"]["var"]["saved"] == str(
-        Path(recipe["import_files"]["const:output_dir"]) / "scene.txt"
+        tmp_path / "remote/output/scene.txt"  # A copied snapshot keeps its resolved values.
     )
     assert local.counts()["file_source"]["loaded"] == 1
 
@@ -435,7 +443,7 @@ def test_shared_function_values_reference_initialized_scene_variables(recipe, mo
             "param:variables": "var:$",
         }
     )
-    recipe.update({'compute_1': {**({"core:run": True, "var:first": "returned:$"}), "plugin": 'compute'}, 'compute_2': {**({"core:run": True, "param:gain": 11, "var:second": "returned:$"}), "plugin": 'compute'}})
+    recipe.update({'compute_1': {**({"core:run": True, "core:require_outputs": True, "var:first": "returned:$"}), "plugin": 'compute'}, 'compute_2': {**({"core:run": True, "core:require_outputs": True, "param:gain": 11, "var:second": "returned:$"}), "plugin": 'compute'}})
     Workflow(recipe).run()
     assert calls == [(6, "sensor independent"), (11, "sensor independent")]
 
@@ -454,7 +462,7 @@ def test_path_arguments_explicitly_linked_to_variables_are_planned_and_staged(re
     recipe["import_files"]["var:input_path"] = "var:mul"
     recipe["import_files"]["var:output_path"] = "expr:const.output_dir & '/inherited.txt'"
     recipe["file_source"] = {"plugin": 'file_source', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:input_path": "var:input_path",
         "param:output_path": "var:output_path",
     }
@@ -468,7 +476,7 @@ def test_path_arguments_explicitly_linked_to_variables_are_planned_and_staged(re
 
 def test_shared_param_namespace_cannot_change_runner_controls(recipe):
     recipe["shared"]["param:run_from_existing"] = False
-    recipe["file_source"] = copy_step("copied", "mul", folder="output_dir")
+    recipe["file_source"] = copy_step("copied", "mul", folder="output_dir", require_outputs=True)
     root = Path(recipe["import_files"]["const:output_dir"])
     root.mkdir()
     (root / "scene.txt").write_text("cached")
@@ -489,7 +497,7 @@ def test_imported_relative_companions_in_compound_options_work_locally_and_on_hp
     calls = []
     install_function(monkeypatch, "inspect", lambda mask: calls.append(mask))
     recipe["inspect"] = {"plugin": 'inspect', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "core:requires": "var:mask",
         "param:mask": ["include", "var:mask", "image"],
     }

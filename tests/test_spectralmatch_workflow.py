@@ -10,6 +10,7 @@ from osgeo import gdal
 from vhrharmonize.parameters import function_parameters
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.registry import load_plugin, plugin_names
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
 
 FUNCTIONS = (
@@ -143,7 +144,7 @@ def test_worldview_selects_one_chain_and_inherits_function_settings():
     assert config["merge_rasters"]["param:output_image_path"].startswith("expr:")
 
 
-def test_batch_outputs_checkpoint_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
+def test_batch_outputs_explicit_context_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
     source = tmp_path / "input.txt"
     source.write_text("input")
     outputs = [str(tmp_path / "temp/a.txt"), str(tmp_path / "temp/b.txt")]
@@ -180,25 +181,27 @@ def test_batch_outputs_checkpoint_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
     config = {
         "defaults": {
             "plugin": "shared", "core:run": True, "core:log_to_console": False,
-            # Retain intermediates for the checkpoint/staging checks; enable cleanup below.
+            # Retain intermediates for the explicit-context staging checks; enable cleanup below.
             "core:delete_temp_steps_proactively": False,
         },
         "files": import_settings(source, tmp_path),
         "matching": {
             "plugin": "batch",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": False,
             "param:input_images": [str(source)],
             "param:output_images": outputs,
             "const:result": "returned:$",
         },
         "mosaic": {
             "plugin": "finish",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_images": outputs,
             "param:output_path": final,
             "param:gain": "const:result.gain",
         },
     }
+    config["files"].update(context_controls(tmp_path / "scenes.json", "defined"))
+    config["matching"].update(context_controls(tmp_path / "batch.json", "const.result"))
     Workflow(config).run()
     calls.clear()
     Workflow(config).run()
@@ -206,7 +209,7 @@ def test_batch_outputs_checkpoint_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
     Path(final).unlink()
     staged, uploads, downloads = stage(config, tmp_path)
     assert set(outputs) <= uploads.keys() and str(source) not in uploads
-    assert outputs[0] + ".context.json" in uploads
+    assert any(Path(p).name.endswith("batch.json") for p in uploads)
     transfer(uploads)
     remote = Workflow(staged)
     remote.run()
@@ -232,13 +235,13 @@ def test_partial_batch_is_rebuilt_and_output_collisions_are_detected(tmp_path, m
     install_function(monkeypatch, "batch", batch, scope="aggregate", output_paths={"output_images"})
     recipe = {
         "files": import_settings(source, tmp_path),
-        "batch": {"plugin": "batch", "core:run": True, "param:output_images": outputs},
+        "batch": {"plugin": "batch", "core:run": True, "core:require_outputs": True, "param:output_images": outputs},
     }
     Path(outputs[0]).parent.mkdir()
     Path(outputs[0]).write_text("partial")
     Workflow(recipe).run()
     assert calls == [1]
-    recipe["duplicate"] = {"plugin": "batch", "core:run": True, "param:output_images": [outputs[1]]}
+    recipe["duplicate"] = {"plugin": "batch", "core:run": True, "core:require_outputs": True, "param:output_images": [outputs[1]]}
     with pytest.raises(ValueError, match="collision"):
         Workflow(recipe)
 
@@ -382,7 +385,7 @@ def test_tiled_output_folder_never_counts_as_complete_cache(tmp_path, monkeypatc
     source.write_text("source")
     recipe = {
         "files": import_settings(source, tmp_path),
-        "tile_merge": {"plugin": "tiles", "core:run": True, "param:output_path": str(directory)},
+        "tile_merge": {"plugin": "tiles", "core:run": True, "core:require_outputs": True, "param:output_path": str(directory)},
     }
     Workflow(recipe).run()
     assert calls == [str(directory)]

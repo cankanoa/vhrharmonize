@@ -7,6 +7,7 @@ import pytest
 
 from vhrharmonize.plugins.base import FunctionPlugin
 from vhrharmonize.workflow.engine import Workflow
+from workflow_helpers import context_controls
 from workflow_helpers import install_function, stage, transfer
 
 
@@ -150,7 +151,7 @@ def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path,
         "initial": importing(tmp_path / "[ab].txt", tmp_path),
         "process": {
             "plugin": "process",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:file_path",
             "var:product": "expr:const.temp_dir & '/' & $split(var.file_path, '/')[-1]",
             "param:output_path": "var:product",
@@ -158,14 +159,14 @@ def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path,
         },
         "sum": {
             "plugin": "sum_scores",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:iterable": "collect:score",
             "const:total": "returned:$",
         },
         "later": importing(tmp_path / "c.txt", tmp_path, **{"var:score": 0}),
         "consume": {
             "plugin": "consume",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:name": "expr:$split(var.file_path, '/')[-1]",
             "param:score": "var:score",
             "param:total": "const:total",
@@ -174,6 +175,7 @@ def test_later_import_preserves_runtime_and_cached_results_and_replans(tmp_path,
     # Use a plain Python header rather than sum's positional-only argument.
     install_function(monkeypatch, "sum_scores", lambda iterable: sum(iterable), scope="aggregate")
     recipe["shared"]["core:processing_direction"] = direction
+    recipe["process"].update(context_controls(tmp_path / "scores.json", "var.score"))
     first = Workflow(recipe)
     assert first.counts()["consume"]["pending"] == 1
     assert not calls
@@ -204,13 +206,13 @@ def test_consecutive_imports_stage_all_scenes_and_context_for_hpc(tmp_path, monk
         "additional": importing(tmp_path / "*.txt", tmp_path, **{"var:label": "new"}),
         "consume": {
             "plugin": "consume",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:file_path",
             "param:label": "var:label",
         },
     }
     staged, uploads, _ = stage(recipe, tmp_path)
-    assert staged["initial"]["core:run"] is staged["additional"]["core:run"] is False
+    assert staged["initial"]["core:run"] is staged["additional"]["core:run"] is True
     assert {str(tmp_path / "a.txt"), str(tmp_path / "b.txt")} <= uploads.keys()
     transfer(uploads)
     Workflow(staged).run()
@@ -280,13 +282,13 @@ def test_later_import_discovers_files_created_by_previous_processing(tmp_path, m
         "initial": importing(source, tmp_path),
         "produce": {
             "plugin": "file_source",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:file_path",
             "param:output_path": str(generated),
             "var:processed_path": "returned:$",
         },
         "later": importing(tmp_path / "work/*.txt", tmp_path),
-        "consume": {"plugin": "consume", "core:run": True, "param:input_path": "var:file_path"},
+        "consume": {"plugin": "consume", "core:run": True, "core:require_outputs": True, "param:input_path": "var:file_path"},
     }
     workflow = Workflow(recipe)
     assert workflow.counts()["consume"]["pending"] == 1

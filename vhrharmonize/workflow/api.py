@@ -10,7 +10,8 @@ from vhrharmonize.progress import ProgressCallback, TimingCallback
 
 
 def load_workflow(
-    config: str | Path | Mapping, *, config_dir: str | None = None, plugin: str | None = None
+    config: str | Path | Mapping, *, config_dir: str | None = None, plugin: str | None = None,
+    run_to_step: str | None = None,
 ):
     """Build a workflow from a YAML filename or an in-memory mapping.
 
@@ -18,6 +19,7 @@ def load_workflow(
         config: YAML filename or workflow mapping.
         config_dir: Base for core-managed relative paths; defaults to the YAML directory or cwd.
         plugin: Select steps by plugin name; other processing steps expose existing files only.
+        run_to_step: Request one named step and disable later steps in a copy of the recipe.
     """
     from .engine import Workflow
 
@@ -29,7 +31,11 @@ def load_workflow(
         data = dict(config)
     else:
         raise TypeError("config must be a YAML filename or a mapping")
-    workflow = Workflow(data, config_dir=config_dir or ".", selected_plugin=plugin)
+    if run_to_step is not None:
+        from .yaml_document import preparation_config
+
+        data = preparation_config(data, run_to_step)
+    workflow = Workflow(data, config_dir=config_dir or ".", selected_plugin=plugin, selected_step=run_to_step)
     if isinstance(config, (str, Path)):
         workflow.config_path = str(filename)
         workflow.progress_path = str(filename) + ".progress.json"
@@ -38,6 +44,7 @@ def load_workflow(
 
 def run_workflow(
     config: str | Path | Mapping, *, config_dir: str | None = None, dry_run: bool = False,
+    run_to_step: str | None = None,
     progress_callback: ProgressCallback | None = None, progress_path: str | Path | None = None,
     event_callback: TimingCallback | None = None,
 ) -> dict[str, dict[str, int]]:
@@ -47,6 +54,7 @@ def run_workflow(
         config: YAML filename or workflow mapping.
         config_dir: Base for core-managed relative paths; defaults to the YAML directory or cwd.
         dry_run: Discover scenes and return counts without running ordinary processing steps.
+        run_to_step: Run through this named step; later steps are disabled in a copy.
         progress_callback: Receive detached progress snapshots in the parent process; Python only.
         progress_path: Optional snapshot JSON destination, also enables reporting without a display.
         event_callback: Receive every core timing event in the parent process; Python only.
@@ -57,7 +65,7 @@ def run_workflow(
     """
     if not isinstance(dry_run, bool):
         raise TypeError("dry_run must be a boolean")
-    workflow = load_workflow(config, config_dir=config_dir)
+    workflow = load_workflow(config, config_dir=config_dir, run_to_step=run_to_step)
     counts = workflow.counts()
     if not dry_run:
         workflow.run(progress_callback=progress_callback, progress_path=progress_path, event_callback=event_callback)

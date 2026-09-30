@@ -12,7 +12,7 @@ vhr statistics --input-path history.jsonl --output-path summary.json
 
 `workflow` runs the enabled steps in YAML order. A plugin command runs only that
 plugin's enabled named steps; other processing steps provide existing paths and
-context checkpoints. Missing required upstream outputs are errors. Set
+explicit context loads. Missing required upstream outputs are errors. Set
 `core:run: true` in the selected steps: choosing a command does not override their
 enable/disable settings. Enabled upstream steps retain their configured filename suffixes; YAML-disabled steps are ignored entirely. Multiple named steps selecting the same plugin run in order. Enabled pluginless setup steps also run; the top-level step name does not select a CLI command.
 
@@ -42,5 +42,9 @@ and execution errors come from those Python APIs. The old `vhr-*` executables an
 
 `statistics` summarizes recorded core timings using pandas Table Schema JSON.
 Use `--per-run` to separate executions or `--run-id ID` to select one. Enable raw
-recording with `shared.core:statistics_path` in the workflow YAML. See
+recording with `shared.core:save_statistics_path` in the workflow YAML. It defaults
+to `statistics.jsonl` beside the YAML; `shared.core:load_statistics_path` defaults to
+the same file and seeds runtime estimates. See
 [Statistics](../api/statistics.md) for append behavior and measurement boundaries.
+
+Run through a named step locally with `vhr workflow --config workflow.yml --run-to-step discover_inputs`. Later steps are disabled in a copy; the original YAML is unchanged.

@@ -154,7 +154,6 @@ class FetchDEM(FunctionPlugin):
     input_hpc_staging_paths = input_dependency_paths
     output_path_resolution_paths = frozenset({"output_tif_path"})
     output_dependency_paths = output_path_resolution_paths
-    output_target_paths = output_path_resolution_paths
     output_parent_creation_paths = output_path_resolution_paths
     output_collision_check_paths = output_path_resolution_paths
     output_reuse_paths = output_path_resolution_paths
@@ -164,7 +163,6 @@ class FetchDEM(FunctionPlugin):
     output_temporary_cleanup_paths = output_path_resolution_paths
     output_hpc_staging_paths = output_path_resolution_paths
     output_hpc_download_paths = output_path_resolution_paths
-    output_context_checkpoint_paths = frozenset({"output_tif_path"})
     target = "vhrharmonize.plugins.fetch_dem:download_opentopography_dem_for_bbox"
 
 

@@ -84,12 +84,12 @@ def test_enabled_steps_cannot_use_var_before_scene_setup(scope, settings, monkey
     install_function(monkeypatch, "example", lambda value=None: value, scope=scope)
     with pytest.raises(ValueError, match="var is unavailable"):
         Workflow(
-            {"example": {"plugin": "example", "core:run": True, **settings}}, config_dir=tmp_path
+            {"example": {"plugin": "example", "core:run": True, "core:require_outputs": True, **settings}}, config_dir=tmp_path
         )
     # Disabled steps do not resolve or assign variables.
     assert (
         Workflow(
-            {"example": {"plugin": "example", "core:run": False, **settings}}, config_dir=tmp_path
+            {"example": {"plugin": "example", "core:run": False, "core:require_outputs": True, **settings}}, config_dir=tmp_path
         ).run()
         == []
     )
@@ -115,17 +115,17 @@ def test_ordinary_steps_run_before_scenes_and_publish_constants(monkeypatch, tmp
             },
             "setup": {
                 "plugin": "setup",
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "const:scale": "returned:scale",
             },
             "source": {
                 "plugin": "source",
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "var:label": "expr:var.n + 10",
             },
-            "consume": {"plugin": "consume", "core:run": True, "param:n": "var:label"},
+            "consume": {"plugin": "consume", "core:run": True, "core:require_outputs": True, "param:n": "var:label"},
         },
         config_dir=tmp_path,
     )
@@ -144,7 +144,7 @@ def test_source_cannot_read_var_until_its_return_is_mapped(during_planning, monk
     )
     with pytest.raises(ValueError, match="var is unavailable"):
         Workflow(
-            {"source": {"plugin": "source", "core:run": True, "param:value": "var:$"}},
+            {"source": {"plugin": "source", "core:run": True, "core:require_outputs": True, "param:value": "var:$"}},
             config_dir=tmp_path,
         )
 
@@ -160,14 +160,14 @@ def test_empty_scene_list_and_empty_scene_dict_are_initialized(items, monkeypatc
     Workflow(
         {
             "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False},
-            "source": {"plugin": "source", "core:run": True},
+            "source": {"plugin": "source", "core:run": True, "core:require_outputs": True},
             "scene": {
                 "plugin": "scene",
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "var:name": "ready",
                 "param:name": "var:name",
             },
-            "aggregate": {"plugin": "aggregate", "core:run": True, "param:scenes": "collect:$"},
+            "aggregate": {"plugin": "aggregate", "core:run": True, "core:require_outputs": True, "param:scenes": "collect:$"},
         },
         config_dir=tmp_path,
     ).run()
@@ -186,12 +186,13 @@ def test_workflow_without_scenes_runs_normally_locally_and_on_hpc(monkeypatch, t
         },
         "example": {
             "plugin": "example",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:value": "const:value",
             "param:context": "expr:$",
         },
     }
     assert run_workflow(recipe, config_dir=tmp_path)["example"]["processing"] == 1
+    recipe.setdefault("shared", {"plugin": "shared", "core:run": True}).update({"core:save_statistics_path": None, "core:load_statistics_path": None})
     staged, uploads, downloads = stage(recipe, tmp_path)
     assert not uploads and not downloads
     assert "restore_scenes" not in staged
@@ -205,7 +206,7 @@ def test_cli_and_python_raise_the_same_var_initialization_error(monkeypatch, tmp
     from vhrharmonize.cli.main import main
 
     install_function(monkeypatch, "example", lambda value: value)
-    config = {"example": {"plugin": "example", "core:run": True, "param:value": "var:$"}}
+    config = {"example": {"plugin": "example", "core:run": True, "core:require_outputs": True, "param:value": "var:$"}}
     filename = tmp_path / "recipe.yml"
     filename.write_text(yaml.safe_dump(config, sort_keys=False))
     with pytest.raises(ValueError, match="var is unavailable") as python_error:

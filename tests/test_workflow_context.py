@@ -15,6 +15,7 @@ from vhrharmonize.workflow.values import (
     expression_names,
     resolve,
 )
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
 
 
@@ -73,17 +74,17 @@ def test_aggregate_constants_flow_to_scenes_and_other_aggregates(recipe, monkeyp
     recipe.update(
         {
             "setup": {"plugin": 'setup', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "const:scale": "returned:scale",
             },
             "next_setup": {"plugin": 'next_setup', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "const:scale": "returned:$",
             },
             "measure": {"plugin": 'measure', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:mul": "var:mul",
                 "param:scale": "const:scale",
                 "param:variables": "expr:$merge([const, var])",
@@ -92,7 +93,7 @@ def test_aggregate_constants_flow_to_scenes_and_other_aggregates(recipe, monkeyp
                 "var:value": "returned:value",
             },
             "summarize": {"plugin": 'summarize', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:values": "collect:value",
                 "const:total": "returned:$",
             },
@@ -127,8 +128,8 @@ def test_shared_arguments_precedence_and_context_snapshots(recipe, monkeypatch):
         context["const"]["options"]["gain"] = 99
 
     install_function(monkeypatch, "inspect", inspect)
-    recipe.update({'inspect_1': {**({"core:run": True, "param:variables": "var:$", "param:context": "expr:$"}), "plugin": 'inspect'}, 'inspect_2': {**({
-            "core:run": True,
+    recipe.update({'inspect_1': {**({"core:run": True, "core:require_outputs": True, "param:variables": "var:$", "param:context": "expr:$"}), "plugin": 'inspect'}, 'inspect_2': {**({
+            "core:run": True, "core:require_outputs": True,
             "param:choice": "explicit",
             "param:variables": "var:$",
             "param:context": "expr:$",
@@ -148,7 +149,7 @@ def test_shared_arguments_precedence_and_context_snapshots(recipe, monkeypatch):
 )
 def test_scope_write_validation_and_disabled_noop(recipe, monkeypatch, scope, assignment, error):
     install_function(monkeypatch, "example", lambda: None, scope=scope)
-    recipe["example"] = {"plugin": 'example', "core:run": True, assignment: "expr:invalid ! expression"}
+    recipe["example"] = {"plugin": 'example', "core:run": True, "core:require_outputs": True, assignment: "expr:invalid ! expression"}
     with pytest.raises(ValueError, match=error):
         Workflow(recipe)
     recipe["example"]["core:run"] = False
@@ -172,7 +173,7 @@ def test_scene_constants_accept_scene_values_returns_and_collections(
     recipe, monkeypatch, template
 ):
     install_function(monkeypatch, "example", lambda: {"value": "shared"})
-    recipe["example"] = {"plugin": 'example', "core:run": True, "const:label": template}
+    recipe["example"] = {"plugin": 'example', "core:run": True, "core:require_outputs": True, "const:label": template}
     workflow = Workflow(recipe)
     workflow.run()
     expected = resolve(template, workflow.records[0]["context"],
@@ -205,7 +206,7 @@ def test_scene_constants_are_shared_once_in_order_and_survive_staging(
     recipe.update(
         {
             "example": {"plugin": 'example', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:before": "const:scale",
                 "const:scale": "expr:const.scale + 1",
                 "param:after": "const:scale",
@@ -218,7 +219,7 @@ def test_scene_constants_are_shared_once_in_order_and_survive_staging(
                 "const:from_root": "expr:$lookup($, 'const').scale",
             },
             "summary": {"plugin": 'summary', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "param:token": "const:token",
             },
@@ -235,7 +236,7 @@ def test_scene_constants_are_shared_once_in_order_and_survive_staging(
     observed.clear()
     totals.clear()
     staged, uploads, _ = stage(recipe, tmp_path)
-    assert staged["example"]["const:options"]["label"] == "literal:constant text"
+    assert staged["example"]["const:options"]["label"] == "constant text"
     assert staged["example"]["const:options.label"] == "literal:var:literal_text"
     transfer(uploads)
     remote = Workflow(staged)
@@ -261,16 +262,16 @@ def test_scene_constants_can_derive_from_runtime_constants(recipe, monkeypatch, 
     )
     recipe.update(
         {
-            "setup": {"plugin": 'setup', "core:run": True, "const:scale": "returned:$"},
+            "setup": {"plugin": 'setup', "core:run": True, "core:require_outputs": True, "const:scale": "returned:$"},
             "example": {"plugin": 'example', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:before": "const:scale",
                 "const:scale": "expr:const.scale + 1",
                 "param:after": "const:scale",
                 "const:doubled": "expr:const.scale * 2",
             },
             "summary": {"plugin": 'summary', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:scale": "const:scale",
                 "param:doubled": "const:doubled",
             },
@@ -312,12 +313,12 @@ def test_scene_constants_and_returned_variables_resume_after_hpc_staging(
     recipe.update(
         {
             "setup": {"plugin": 'setup', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.temp_dir & '/setup.txt'",
                 "const:scale": "returned:$",
             },
             "process": {"plugin": 'process', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "const:scale": "expr:const.scale + 1",
                 "const:doubled": "expr:const.scale * 2",
                 "param:scale": "const:scale",
@@ -325,12 +326,15 @@ def test_scene_constants_and_returned_variables_resume_after_hpc_staging(
                 "var:value": "returned:$",
             },
             "summary": {"plugin": 'summary', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:values": "collect:value",
                 "param:doubled": "const:doubled",
             },
         }
     )
+    recipe["import_files"]["param:scene_id"] = r"literal:expr:$replace(var.file_path, /^.*\/([^\/]+\/[^\/]+)$/, '$1')"
+    recipe["setup"].update(context_controls(tmp_path / "scale.json", "const.scale"))
+    recipe["process"].update(context_controls(tmp_path / "values.json", "var.value"))
     staged, uploads, downloads = stage(recipe, tmp_path)
     transfer(uploads)
     Workflow(staged).run()
@@ -350,7 +354,7 @@ def test_static_scene_constants_do_not_require_running_cached_functions(recipe, 
 
     install_function(monkeypatch, "example", must_not_run, output_paths={"output_path"})
     recipe["example"] = {"plugin": 'example', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "const:scale": "expr:const.scale + 1",
         "param:output_path": "expr:var.mul & '.cached'",
     }
@@ -400,7 +404,7 @@ def test_import_also_receives_supported_shared_parameters(recipe, tmp_path):
 
 
 @pytest.mark.parametrize("empty", [False, True])
-def test_constants_checkpoint_and_hpc_roundtrip(recipe, tmp_path, monkeypatch, empty):
+def test_explicit_constants_and_hpc_roundtrip(recipe, tmp_path, monkeypatch, empty):
     if empty:
         recipe["import_files"]["param:search_glob"] = str(tmp_path / "missing/*.txt")
     calls = []
@@ -420,14 +424,15 @@ def test_constants_checkpoint_and_hpc_roundtrip(recipe, tmp_path, monkeypatch, e
     recipe.update(
         {
             "setup": {"plugin": 'setup', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.output_dir & '/setup.txt'",
                 "param:scale": "const:scale",
                 "const:settings": "returned:$",
             },
-            "consume": {"plugin": 'consume', "core:run": True, "param:settings": "const:settings"},
+            "consume": {"plugin": 'consume', "core:run": True, "core:require_outputs": True, "param:settings": "const:settings"},
         }
     )
+    recipe["setup"].update(context_controls(tmp_path / "settings.json", "const.settings"))
     staged, uploads, downloads = stage(recipe, tmp_path)
     transfer(uploads)
     remote = Workflow(staged)
@@ -439,10 +444,10 @@ def test_constants_checkpoint_and_hpc_roundtrip(recipe, tmp_path, monkeypatch, e
     assert local.counts()["setup"]["loaded"] == 1
     local.run()
     assert len(calls) == 1
-    assert observed[-1] == {"scale": 8, "path": str(tmp_path / "output/setup.txt")}
+    assert observed[-1] == {"scale": 8, "path": str(tmp_path / "remote/output/setup.txt")}  # Snapshots contain resolved values.
     assert local.context["const"]["settings"] == observed[-1]
-    checkpoint = json.loads((tmp_path / "output/setup.txt.context.json").read_text())
-    assert "const.settings" in checkpoint["values"]
+    checkpoint = json.loads((tmp_path / "settings.json").read_text())
+    assert "settings" in checkpoint["const"]
     # A subsequent upload must restore the same constants with remote paths again.
     staged, uploads, _ = stage(recipe, tmp_path)
     transfer(uploads)
@@ -463,7 +468,7 @@ def test_hpc_rebases_constant_input_files(recipe, tmp_path, monkeypatch):
 
     install_function(monkeypatch, "inspect", inspect, input_paths={"input_path"})
     recipe["inspect"] = {"plugin": 'inspect', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:input_path": "const:reference",
         "param:context": "expr:$",
     }
@@ -498,12 +503,12 @@ def test_cleanup_is_generic_and_preserves_undeclared_cache(recipe, tmp_path, mon
     recipe.update(
         {
             "produce": {"plugin": 'produce', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": False,
                 "param:input_path": "var:mul",
                 "var:intermediate": "expr:const.temp_dir & '/intermediate.txt'",
                 "param:output_path": "var:intermediate",
             },
-            "consume": {"plugin": 'consume', "core:run": True, "param:input_path": "var:intermediate"},
+            "consume": {"plugin": 'consume', "core:run": True, "core:require_outputs": True, "param:input_path": "var:intermediate"},
         }
     )
     Workflow(recipe).run()
@@ -538,16 +543,16 @@ def test_aliased_constant_still_requires_its_producer_when_another_consumer_is_c
     recipe.update(
         {
             "setup": {"plugin": 'setup', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.temp_dir & '/setup.txt'",
                 "const:custom_nodata_value": "returned:$",
             },
             "saved": {"plugin": 'saved', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.output_dir & '/saved.txt'",
                 "param:custom_nodata_value": "const:custom_nodata_value",
             },
-            "inspect": {"plugin": 'inspect', "core:run": True, "param:custom_nodata_value": "const:custom_nodata_value"},
+            "inspect": {"plugin": 'inspect', "core:run": True, "core:require_outputs": True, "param:custom_nodata_value": "const:custom_nodata_value"},
         }
     )
     (tmp_path / "output").mkdir()

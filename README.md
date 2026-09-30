@@ -66,7 +66,7 @@ SpectralMatch algorithms are imported from the installed package. The WorldView 
 
 Every command uses `vhr <command> --config <yaml>`. Plugin options live in the
 workflow YAML. Enable each desired step with `core:run: true`; omitted steps default
-to disabled. Set directories through `import_files.param:output_dir` and
+to disabled. Request deliverables with `core:require_outputs: param:output_image_path` (or another output parameter); its default is `false`, so intermediate steps run only when needed. Prefix paths with `path:` to resolve them relative to the YAML directory, expand `~`, or create a system directory with `path:sys`. Set directories through `import_files.param:output_dir` and
 `param:temp_dir`; the importer publishes output roots into `var` and the shared temporary root into `const` by default.
 Configure these independently with `param:output_dir_scope` and `param:temp_dir_scope` (`var` or `const`). The default temp value `sys` creates a system temporary directory.
 Plugins declare the context locations core uses for directory features.
@@ -109,7 +109,9 @@ gdal raster resize --size 1%,1% -r average --co TILED=YES --co COMPRESS=DEFLATE 
 rsync -avP user@ip:preview.tif .preview.tif
 ```
 
-In the HPC YAML, `override_download_conflict: validate` (the default) skips existing local files that pass the workflow's output validation and downloads missing or invalid files. Use `no` to skip all existing files, or `yes` to always overwrite. Raster validation uses the same GDAL readability checks as processing steps; non-raster files, including logs, are checked only for existence. The setting is copied into the staged HPC YAML used by `download`; edit that staged file to change the policy for an already prepared run.
+In the HPC YAML, `path_mappings` maps workflow references such as `var:current_image_paths` to remote directories; `remote_work_dir` supplies a fallback workspace.
+
+`override_download_conflict: validate` (the default) skips existing local files that pass the workflow's output validation and downloads missing or invalid files. Use `no` to skip all existing files, or `yes` to always overwrite. Raster validation uses the same GDAL readability checks as processing steps; non-raster files, including logs, are checked only for existence. The setting is copied into the staged HPC YAML used by `download`; edit that staged file to change the policy for an already prepared run.
 
 ## Contributing
 

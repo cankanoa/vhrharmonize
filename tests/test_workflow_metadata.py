@@ -49,11 +49,11 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     )
     filename.write_text(text.replace("END;", extra + "END;"))
     config = load_config("configs/example.worldview.yml")
-    config["import_files"].update(
+    config["discover_inputs"].update(
         {"param:output_dir": str(tmp_path / "output"), "const:temp_dir": str(tmp_path / "temp")}
     )
     config["shared"]["core:validity_check_grid_size"] = 0
-    config["import_files"]["param:search_glob"] = str(bundle["mul_tif"])
+    config["discover_inputs"]["param:search_glob"] = str(bundle["mul_tif"])
     for suffix in ["cloudmasked", "cloudmasked_mask"]:
         make_test_raster(
             tmp_path / "output" / f"{bundle['basename']}_py6s_ortho_pansharpen_{suffix}.tif"
@@ -61,7 +61,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     workflow = Workflow(config)
     metadata = workflow.records[0]["context"]["var"]
     constants = workflow.records[0]["context"]["const"]
-    assert constants["band_wavelengths_um"] == config["import_files"]["const:band_wavelengths_um"]
+    assert constants["band_wavelengths_um"] == config["discover_inputs"]["const:band_wavelengths_um"]
     assert constants["calibration"]["WV03"]["BAND_C"] == [0.905, -8.604]
     assert (
         not {"band_order", "band_wavelengths_um", "calibration", "temp_dir"}
@@ -100,7 +100,7 @@ def test_planet_recipe_uses_same_runner(make_test_raster, tmp_path):
         )
     )
     config = load_config("configs/example.planet.yml")
-    config["import_files"]["param:search_glob"] = str(source)
+    config["discover_inputs"]["param:search_glob"] = str(source)
     workflow = Workflow(config)
     assert workflow.records[0]["id"] == "planet-scene"
     assert workflow.records[0]["context"]["var"]["scene_id"] == "planet-scene"
@@ -130,7 +130,7 @@ def test_seamline_aggregate_receives_projected_metadata_and_resumes(tmp_path, ma
         },
         "seamline_metadata": {
             "plugin": "seamline_metadata",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:image_paths": "collect:image",
             "param:metadata_records": "collect:fields",
             "param:epsg": 4326,

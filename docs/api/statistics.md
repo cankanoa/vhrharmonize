@@ -11,11 +11,15 @@ the progress API; it does not scrape logs or sample dashboard refreshes.
 shared:
   plugin: shared
   core:run: true
-  core:statistics_path: ./statistics/history.jsonl
+  core:save_statistics_path: statistics.jsonl
+  core:load_statistics_path: statistics.jsonl
 ```
 
-The default is `null` (no statistics file). Relative paths use the workflow YAML's
-directory, or `config_dir` for in-memory recipes. Parent directories are created.
+Both defaults are `statistics.jsonl` beside the workflow YAML, or in `config_dir`
+(the working directory by default) for in-memory recipes. Set either to `null` to
+disable that operation independently. `statistics_path` has been renamed to
+`save_statistics_path`; update existing recipes. Relative paths use the workflow YAML's
+directory, or `config_dir` for in-memory recipes. Parent directories for saving are created.
 Every real run appends; existing history is never cleared. Recording works with
 both `core:show_progress: false` and `core:log_to_console: false`. It also enables
 the usual progress snapshot backend.
@@ -38,6 +42,34 @@ line against concurrent VHR writers using the same file. The adjacent `.lock`
 file is normal. On HPC, use storage that supports file locking. Records are
 flushed as spans finish. An unwritable path fails before execution; a later
 consumer/write error warns and disables that consumer without stopping processing.
+
+## Estimate runtime from history
+
+Before appending the current run, core reads `load_statistics_path`. A missing file
+is an empty history, allowing the first run to create it. An existing malformed file
+raises an error with its filename and line number before new statistics are appended.
+
+Successful measured task calls are pooled by configured step name, plugin and core
+backend. The estimate is total measured seconds divided by total scene units;
+aggregate calls retain their scene weight. Duplicate spans, failed/incomplete calls,
+cached outputs and count-only records do not contribute. Completed current-run calls
+join those samples as execution proceeds. Core uses the resulting means for remaining
+step/workflow time and for active operations lacking a callback rate. Measurable
+callback ETAs take precedence for the active operation. No history or current samples
+means `TBD`; pending scene discovery also remains `TBD`.
+
+The same estimates appear in console execution logs and the progress API consumed by
+the dashboard and HPC status. Step estimates account for configured/observed concurrent
+calls; total time is approximate because dependency barriers and shared resources can
+limit concurrency. These are task-runtime estimates, not estimates of startup or cleanup.
+Pick different filenames yourself for different input sizes/types; core does not classify
+inputs or choose history files automatically. Save and load paths may be different.
+
+`validate_statistics_record(record)` validates one raw SDK span and its VHR attributes,
+returning it unchanged or raising `ValueError`. Both history loading and summary generation
+use this validator. `load_statistics(path)` returns `(seconds, scene_units)` totals keyed
+by `(step, plugin, backend)`. See [saved file formats](../saved-file-formats.md) for
+record structures and which fields belong to OpenTelemetry versus VHR.
 
 ## Generate a statistics file
 
@@ -145,15 +177,20 @@ For an application-managed destination, use the public consumer directly:
 ```python
 from vhrharmonize import StatisticsRecorder, run_workflow
 
-# Leave core:statistics_path unset when supplying the recorder yourself.
+# Set core:save_statistics_path: null when supplying the recorder yourself.
 with StatisticsRecorder("history.jsonl") as recorder:
     run_workflow("workflow.yml", event_callback=recorder)
 ```
 
 ## HPC files
 
-HPC preparation rewrites `statistics_path` beneath the remote output directory and
-registers it for download. It never uploads local history over remote history.
+HPC preparation rewrites `save_statistics_path` beneath the remote workspace products directory and
+registers it for download. `load_statistics_path` is staged separately beneath the remote
+inputs directory and uploaded when the local file exists. Preparation does not write
+timings. It never uploads local history over the remote append destination, even when
+the local load and save paths are identical. Each prepared job uses that input snapshot
+for initial estimates; download updated history before preparing the next job to include
+new measurements. A missing history input remains optional.
 Executions using the same remote destination append there; a different HPC run
 directory has its own history. Normal download conflict policy applies: use
 `override_download_conflict: yes` to refresh a local mirror from the remote file.

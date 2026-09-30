@@ -8,6 +8,7 @@ from vhrharmonize.workflow.config import load_config, validate_config
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.staging import stage_workflow
 from vhrharmonize.workflow.values import expression, resolve
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, copy_step, install_function
 
 
@@ -17,7 +18,7 @@ def pipeline(tmp_path, make_test_raster):
     config = {
         "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
         "import_files": import_settings(raw, tmp_path),
-        'file_source_1': {**(copy_step("corrected", "mul", "expr:const.temp_dir & '/corrected.tif'")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("cloudmasked", "corrected", "expr:const.output_dir & '/cloudmasked.tif'")), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("aligned", "cloudmasked", "expr:const.output_dir & '/aligned.tif'")), "plugin": 'file_source'},
+        'file_source_1': {**(copy_step("corrected", "mul", "expr:const.temp_dir & '/corrected.tif'")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("cloudmasked", "corrected", "expr:const.output_dir & '/cloudmasked.tif'", require_outputs=True)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("aligned", "cloudmasked", "expr:const.output_dir & '/aligned.tif'", require_outputs=True)), "plugin": 'file_source'},
     }
     return (config, raw)
 
@@ -45,6 +46,7 @@ def test_resume_skips_missing_upstream_files_and_processes_only_alignment(
 def test_saved_intermediate_remains_a_required_output(pipeline, make_test_raster):
     config, raw = pipeline
     config["file_source_1"]["var:corrected"] = "expr:const.output_dir & '/corrected.tif'"
+    config["file_source_1"]["core:require_outputs"] = "param:output_path"
     make_test_raster(Path(config["import_files"]["const:output_dir"]) / "cloudmasked.tif")
     counts = Workflow(config).counts()
     assert counts["file_source_1"]["processing"] == 1
@@ -95,7 +97,7 @@ def test_yaml_order_is_authoritative_and_forward_references_fail(pipeline):
         config["file_source_1"],
     )
     with pytest.raises(ValueError, match="Undefined variable field: corrected"):
-        Workflow(config)
+        Workflow(config).run()
 
 
 def test_disabled_step_does_not_publish_an_input_alias(pipeline):
@@ -103,7 +105,7 @@ def test_disabled_step_does_not_publish_an_input_alias(pipeline):
     config["file_source_1"]["core:run"] = False
     config["file_source_1"]["var:corrected"] = "var:mul"
     with pytest.raises(ValueError, match="Undefined variable field: corrected"):
-        Workflow(config)
+        Workflow(config).run()
 
 
 def test_explicit_input_link_skips_a_disabled_step(pipeline):
@@ -195,6 +197,8 @@ def test_function_plugins_use_shared_and_explicit_arguments(monkeypatch):
 def test_staging_resumes_from_cloudmasked_output(pipeline, make_test_raster, tmp_path):
     config, raw = pipeline
     masked = make_test_raster(Path(config["import_files"]["const:output_dir"]) / "cloudmasked.tif")
+    config["import_files"].update(context_controls(tmp_path / "scenes.json", "defined"))
+    Workflow(config)  # Save explicitly selected discovery fields.
     remote_root = tmp_path / "remote"
     staged, uploads, downloads = stage_workflow(
         config,
@@ -280,14 +284,14 @@ def test_actual_alignment_adapter_receives_cached_cloudmasked_image(
     config.pop("file_source_2")
     config.pop("file_source_3")
     config["cloud_mask"] = {"plugin": 'cloud_mask', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:input_image_path": "var:corrected",
         "var:cloudmasked": str(masked),
         "param:output_raster_path": "var:cloudmasked",
         "param:output_mask_path": str(mask),
     }
     config["alignment"] = {"plugin": 'alignment', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:moving_image_path": "var:cloudmasked",
         "param:fixed_image_path": str(reference),
         "param:output_image_path": str(root / "aligned.tif"),
@@ -325,6 +329,7 @@ def test_dask_executes_required_records_in_yaml_order(pipeline, make_test_raster
         {
             "core:concurrent_processing_backend": "dask",
             "core:show_progress": False,  # This scheduling stub has no progress event transport.
+            "core:save_statistics_path": None, "core:load_statistics_path": None,
             "core:processing_direction": "horizontal",
             "core:dask_scheduler_address": "tcp://scheduler:8786",
         }
@@ -390,15 +395,15 @@ def test_aggregate_metadata_reaches_following_scene_steps(pipeline, monkeypatch)
     install_function(monkeypatch, "summary", lambda: {"total": 42}, scope="aggregate")
     for i in (1, 2, 3):
         config.pop(f"file_source_{i}")
-    config["summary"] = {"plugin": 'summary', "core:run": True, "const:total": "returned:total"}
-    config["file_source"] = copy_step("copied", "mul", "expr:const.output_dir & '/copied.tif'")
+    config["summary"] = {"plugin": 'summary', "core:run": True, "core:require_outputs": True, "const:total": "returned:total"}
+    config["file_source"] = copy_step("copied", "mul", "expr:const.output_dir & '/copied.tif'", require_outputs=True)
     config["file_source"]["var:seen"] = "const:total"
     workflow = Workflow(config)
     workflow.run()
     assert workflow.records[0]["context"]["var"]["seen"] == 42
 
 
-def test_cached_atmosphere_restores_metadata_when_checkpoint_is_corrupt(pipeline, monkeypatch):
+def test_explicit_atmosphere_context_ignores_old_corrupt_sidecar(pipeline, monkeypatch):
     from vhrharmonize.plugins.fetch_atmosphere import FetchAtmosphere
 
     config, raw = pipeline
@@ -408,13 +413,16 @@ def test_cached_atmosphere_restores_metadata_when_checkpoint_is_corrupt(pipeline
     for i in (1, 2, 3):
         config.pop(f"file_source_{i}")
     config["fetch_atmosphere"] = {"plugin": 'fetch_atmosphere', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": True,
         "param:output_path": str(atmosphere),
         "var:atmosphere": "returned:$",
     }
-    config["file_source"] = copy_step("copied", "mul", "expr:const.output_dir & '/copied.tif'")
+    config["file_source"] = copy_step("copied", "mul", "expr:const.output_dir & '/copied.tif'", require_outputs=True)
     config["file_source"]["var:water_vapor"] = "var:atmosphere.water_vapor"
-    monkeypatch.setattr(FetchAtmosphere, "run", lambda *a, **k: pytest.fail("Must reuse JSON"))
+    snapshot = raw.parent / "explicit-atmosphere.json"
+    snapshot.write_text(json.dumps({"scenes": {str(raw): {"atmosphere": {"water_vapor": 2.5}}}}))
+    config["fetch_atmosphere"]["core:load_context"] = {str(snapshot): "var.atmosphere"}
+    monkeypatch.setattr(FetchAtmosphere, "run", lambda *a, **k: pytest.fail("Must use explicitly loaded metadata"))
     workflow = Workflow(config)
     workflow.run()
     assert workflow.records[0]["context"]["var"]["water_vapor"] == 2.5
@@ -429,7 +437,7 @@ def test_cached_raster_does_not_require_unused_temporary_mask(
     config.pop("file_source_2")
     config.pop("file_source_3")
     config["cloud_mask"] = {"plugin": 'cloud_mask', 
-        "core:run": True,
+        "core:run": True, "core:require_outputs": "param:output_raster_path",
         "param:input_image_path": "var:corrected",
         "var:cloudmasked": str(masked),
         "param:output_raster_path": "var:cloudmasked",
@@ -442,7 +450,7 @@ def test_cached_raster_does_not_require_unused_temporary_mask(
         input_paths={"input_path"},
         output_paths={"output_path"},
     )
-    config["finish"] = copy_step("aligned", "cloudmasked", "expr:const.output_dir & '/aligned.tif'")
+    config["finish"] = copy_step("aligned", "cloudmasked", "expr:const.output_dir & '/aligned.tif'", require_outputs=True)
     config["finish"]["plugin"] = "finish"
     workflow = Workflow(config)
     workflow.plan()

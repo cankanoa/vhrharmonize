@@ -18,8 +18,8 @@ def test_names_select_instances_and_plugin_selects_implementation(monkeypatch):
             "core:log_to_console": False,
             "param:value": 4,
         },
-        "first run": {"plugin": "record", "core:run": True},
-        "second run": {"plugin": "record", "core:run": True, "param:value": 8},
+        "first run": {"plugin": "record", "core:run": True, "core:require_outputs": True},
+        "second run": {"plugin": "record", "core:run": True, "core:require_outputs": True, "param:value": 8},
     }
     counts = run_plugin("record", config)
     assert calls == [4, 8]
@@ -34,10 +34,10 @@ def test_context_steps_work_before_and_after_scene_discovery(monkeypatch):
     install_function(monkeypatch, "record", lambda value: calls.append(value))
     recipe = {
         "initial": {"core:run": True, "const:prefix": "start_"},
-        "files": {"plugin": "discover", "core:run": True},
+        "files": {"plugin": "discover", "core:run": True, "core:require_outputs": True},
         "names": {"core:run": True, "var:label": "expr:const.prefix & var.name"},
         "setup": {"core:run": True, "core:scope": "aggregate", "const:labels": "collect:label"},
-        "record": {"plugin": "record", "core:run": True, "param:value": "const:labels"},
+        "record": {"plugin": "record", "core:run": True, "core:require_outputs": True, "param:value": "const:labels"},
     }
     workflow = Workflow(recipe).plan()
     assert len(workflow.records) == 2 and not calls
@@ -62,7 +62,7 @@ def test_invalid_step_contracts_fail(settings):
 def test_no_implicit_plugin_selection_and_no_list_steps():
     assert Workflow({"file_source": {"core:run": True, "const:x": 1}}).run() == []
     with pytest.raises(ValueError, match="without a plugin"):
-        Workflow({"file_source": {"core:run": True, "param:input_path": "input"}})
+        Workflow({"file_source": {"core:run": True, "core:require_outputs": True, "param:input_path": "input"}})
     with pytest.raises(ValueError, match="one mapping"):
         validate_config({"one": [{"plugin": "file_source"}]})
 
@@ -87,7 +87,7 @@ def test_shared_is_identified_by_plugin_not_step_name(monkeypatch):
     Workflow(
         {
             "defaults": {"plugin": "shared", "core:run": True, "param:value": 9},
-            "shared": {"plugin": "record", "core:run": True},
+            "shared": {"plugin": "record", "core:run": True, "core:require_outputs": True},
         }
     ).run()
     assert calls == [9]
@@ -100,7 +100,7 @@ def test_disabled_context_and_shared_steps_do_nothing(monkeypatch):
         {
             "defaults": {"plugin": "shared", "param:value": 9},
             "setup": {"const:value": "var:missing"},
-            "go": {"plugin": "record", "core:run": True},
+            "go": {"plugin": "record", "core:run": True, "core:require_outputs": True},
         }
     )
     workflow.run()
@@ -113,13 +113,13 @@ def test_named_steps_and_context_setup_survive_hpc(monkeypatch, tmp_path):
     install_function(monkeypatch, "record", lambda n: calls.append(n))
     recipe = {
         "settings": {"plugin": "shared", "core:run": True, "core:log_to_console": False},
-        "import anything": {"plugin": "discover", "core:run": True},
+        "import anything": {"plugin": "discover", "core:run": True, "core:require_outputs": True},
         "setup": {"core:run": True, "const:gain": 3},
-        "shared": {"plugin": "record", "core:run": True, "param:n": "expr:var.n * const.gain"},
+        "shared": {"plugin": "record", "core:run": True, "core:require_outputs": True, "param:n": "expr:var.n * const.gain"},
     }
     staged, _, _ = stage(recipe, tmp_path)
     assert staged["shared"]["plugin"] == "record" and staged["settings"]["plugin"] == "shared"
-    assert staged["import anything"]["core:run"] is False
+    assert staged["import anything"]["core:run"] is True
     Workflow(staged).run()
     assert calls == [12]
 
@@ -135,7 +135,7 @@ def test_core_controls_do_not_supply_function_parameters(monkeypatch):
     )
     recipe = {
         "defaults": {"plugin": "shared", "core:run": True, "core:log_to_console": True},
-        "call": {"plugin": "native", "core:run": True},
+        "call": {"plugin": "native", "core:run": True, "core:require_outputs": True},
     }
     Workflow(recipe).run()
     assert calls == [(None, False)]
@@ -155,7 +155,7 @@ def test_multiple_shared_blocks_preserve_assignment_order_on_hpc(monkeypatch, tm
             "const:amount": "expr:const.amount + 3",
             "param:amount": "const:amount",
         },
-        "call": {"plugin": "native", "core:run": True},
+        "call": {"plugin": "native", "core:run": True, "core:require_outputs": True},
     }
     Workflow(recipe).run()
     staged, _, _ = stage(recipe, tmp_path)

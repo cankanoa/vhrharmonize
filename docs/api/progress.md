@@ -7,7 +7,11 @@ terminal output.
 
 For durable task timings, use the related [statistics and timing API](statistics.md).
 Its `event_callback` delivers every ended measurement without UI throttling;
-`core:statistics_path` enables its append-only OpenTelemetry file consumer.
+`core:save_statistics_path` enables its append-only OpenTelemetry file consumer.
+`core:load_statistics_path` seeds ETAs from successful historical task timings; both
+paths default to `statistics.jsonl` beside the YAML. Current-run measurements refine
+those estimates, and measurable callback rates take precedence for active operations.
+Saved record shapes are outlined in [saved file formats](../saved-file-formats.md).
 
 ## Receive updates in Python
 
@@ -160,7 +164,8 @@ This display change preserves the version 2 snapshot fields.
 
 Row statuses are `running`, `waiting`, `completed`, `reused`, `skipped`, or
 `failed`. `eta_seconds` is a nonnegative number or `null` when not yet estimable.
-Step ETAs use completed task durations and observed concurrency; the combined ETA
+Step ETAs use loaded historical timings, completed current-run task durations and
+configured/observed concurrency; the combined ETA
 uses estimated remaining work and worker capacity. These are estimates, especially
 across dependency barriers. `worker_progress: false` means detailed worker
 callbacks are unavailable; lifecycle and completion accounting remain available.
@@ -174,5 +179,33 @@ Done advances only after core accepts the completed output.
 The dashboard renders one row per active operation with Step, ID, Status, Elapsed,
 ETA and Progress columns. It shows elapsed seconds and `TBD` for unknown ETAs. Detailed
 phase descriptions and unit counts remain available in `stats` for API consumers.
+
+## Upload progress
+
+`upload_slurm_files(config, progress_callback=callback)` emits plain dictionaries
+independently of the HPC YAML's `show_progress` setting. The callback runs on the
+calling thread, receives detached snapshots, and is throttled to at most five
+updates per second between batch boundaries. Raising from the callback cancels
+the transfer. The terminal dashboard consumes this same data.
+
+These upload snapshots have `kind: "upload"`, `version: 1`, `status`, `total`,
+`rows`, and empty `active` / `messages` lists. This is a separate schema from
+workflow snapshots, so do not pass it to `validate_progress_snapshot()`.
+Each row (including `total`) contains:
+
+| Field | Meaning |
+| --- | --- |
+| `step`, `variable` | Originating step and mapped path reference; total uses `total` and an empty variable. |
+| `files`, `done`, `current` | Total files, completed files, and the completed subset already current remotely. |
+| `total_bytes`, `transferred_bytes`, `current_bytes` | Total logical bytes, bytes processed during transfer, and bytes already current. |
+| `elapsed_seconds` | Time since this group started, frozen on completion. |
+| `rate`, `eta_seconds` | Average bytes/second and remaining seconds, or `null` when unknown. |
+| `status` | `queued`, `checking`, `uploading`, `done`, `failed`, or `cancelled`. |
+
+Rows partition destinations, so summing their counts/bytes yields the total.
+File names are excluded. Progress is
+`(transferred_bytes + current_bytes) / total_bytes`; zero-byte-only groups use
+`done / files`. Speed measures logical file processing rather than SSH wire
+bandwidth. See [the upload dashboard](../cli/hpc.md#upload-progress).
 
 ::: vhrharmonize.progress

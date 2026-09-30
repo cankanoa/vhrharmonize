@@ -60,6 +60,8 @@ class StepProgress:
     peak_active: int = 0
     unused: int = 0
     worker_progress: bool = True
+    history: tuple[float, int] = (0.0, 0)
+    workers: int = 1
 
 
 @dataclass
@@ -151,15 +153,20 @@ class ProgressState:
                     task.duration = monotonic() - (task.started or task.dispatched)
                 self.rows[task.step].done += task.weight
 
+    def mean_seconds(self, row):
+        samples = [t for t in self.tasks.values() if t.step == row.name and t.done and not t.failed]
+        seconds, units = row.history
+        units += sum(t.weight for t in samples)
+        return (seconds + sum(t.duration for t in samples)) / units if units else None
+
     def remaining_work(self, row):
         if row.pending:
             return None
         if row.done >= row.run:
             return 0.0
-        samples = [t for t in self.tasks.values() if t.step == row.name and t.done]
-        if not samples:
+        mean = self.mean_seconds(row)
+        if mean is None:
             return None
-        mean = sum(t.duration for t in samples) / sum(t.weight for t in samples)
         elapsed = sum(
             min(monotonic() - t.started, mean * t.weight)
             for t in self.tasks.values() if t.step == row.name and t.active
@@ -215,13 +222,16 @@ class WorkflowProgress:
                 nodes = [n for n in workflow.nodes if n.step_index == index]
                 pending = workflow.barrier_index is not None and index > workflow.barrier_index
                 weights = [self.weight(node) for node in nodes]
+                history = getattr(workflow, "_historical_timings", {})
+                key = (name, step["plugin"] or "", workflow.controls["concurrent_processing_backend"])
+                workers = max(1, min(self.state.workers, sum(n.status == "processing" for n in nodes)))
                 self.state.rows[name] = StepProgress(
                     name, all=sum(weights),
                     run=sum(w for n, w in zip(nodes, weights) if n.status == "processing"),
                     reused=sum(w for n, w in zip(nodes, weights) if n.loaded and n.status != "processing"),
                     unused=sum(w for n, w in zip(nodes, weights) if not n.needed),
                     worker_progress=self.supports_worker_progress(step),
-                    pending=pending,
+                    pending=pending, history=history.get(key, (0.0, 0)), workers=workers,
                 )
                 if step.get("calculate_overviews") and nodes:
                     counts = [len(self.overview_paths(n)) for n in nodes]
@@ -233,6 +243,7 @@ class WorkflowProgress:
                             reused=sum(c for n, c in zip(nodes, counts) if n.loaded and n.status != "processing"),
                             unused=sum(c for n, c in zip(nodes, counts) if not n.needed),
                             worker_progress=False,
+                            history=history.get((label, *key[1:]), (0.0, 0)), workers=1,
                         )
             # Runtime scene discovery can add overview rows after later steps.
             order = [name for step in workflow.steps
@@ -349,6 +360,10 @@ class WorkflowProgress:
             if event is None:
                 return
             self.state.handle(event)
+            if event["kind"] == "message" and not self.workflow.controls["show_progress"]:
+                # Headless reporting must still preserve ordinary console logs.
+                with progress_context():
+                    print(_plain_text(event["text"]), flush=True)
             if "task" in event:
                 self._record_task_timing(event["task"])
             self.publish()
@@ -387,10 +402,12 @@ class WorkflowProgress:
             status = "running"
             if total:
                 estimates = [self.state.remaining_work(r) for r in self.state.rows.values()]
-                eta = None if any(e is None for e in estimates) else sum(estimates) / self.state.workers
+                eta = None if any(e is None for e in estimates) else max(
+                    [sum(estimates) / self.state.workers,
+                     *(e / max(r.workers, r.peak_active) for r, e in zip(self.state.rows.values(), estimates))])
             else:
                 work = self.state.remaining_work(row)
-                eta = None if work is None else work / max(1, row.peak_active)
+                eta = None if work is None else work / max(row.workers, row.peak_active)
         counts = {key: getattr(row, key) for key in ("unused", "done", "run", "all", "reused")}
         return {
             "name": row.name, **counts,
@@ -415,6 +432,10 @@ class WorkflowProgress:
                                     if task.stats_updated is not None else now - task.started)
                 n, total, rate = stats["n"], stats["total"], stats["rate"]
                 eta = max(0.0, (total - n) / rate) if total is not None and rate and rate > 0 else None
+                if eta is None:
+                    mean = self.state.mean_seconds(self.state.rows[task.step])
+                    if mean is not None:
+                        eta = max(0.0, mean * task.weight - (now - task.started))
                 active.append({"task_id": identity, "step": task.step, "scene": str(task.scene),
                                "stats": stats, "eta_seconds": eta})
             return {

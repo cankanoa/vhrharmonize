@@ -71,7 +71,7 @@ def test_removed_naming_option_is_rejected_in_python_and_yaml(tmp_path):
         copy_file(source, destination, append_to_name="_old")
     recipe = {
         "import": import_settings(source, tmp_path),
-        "copy": {**copy_step("copied", "mul", str(destination)), "param:append_to_name": "_old"},
+        "copy": {**copy_step("copied", "mul", str(destination), require_outputs=True), "param:append_to_name": "_old"},
     }
     with pytest.raises(ValueError, match="Unsupported FileSource options: append_to_name"):
         Workflow(recipe).run()

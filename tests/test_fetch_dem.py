@@ -114,7 +114,7 @@ def test_workflow_collects_once_or_fetches_per_scene(aggregate, dem_request, mak
                    "var:current_image_paths": "returned:file_path"},
         "dem": step,
         "consume": {
-            "plugin": "file_source", "core:run": True,
+            "plugin": "file_source", "core:run": True, "core:require_outputs": True,
             "param:input_path": "const:dem_path" if aggregate else "var:dem",
             "param:output_path": "expr:const.output_dir & '/' & var.basename & '.tif'",
         },

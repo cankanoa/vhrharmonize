@@ -8,6 +8,7 @@ import pytest
 
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.values import evaluate_settings
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
 
 
@@ -113,11 +114,12 @@ def test_scene_batch_scene_roundtrip_and_hpc(tmp_path, monkeypatch, returned, ma
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
                    "core:delete_temp_steps_proactively": False},
         "files": {**import_settings(tmp_path / "source/*.txt", tmp_path), "var:image": "returned:file_path"},
-        "batch": {"plugin": "batch", "core:run": True, "param:input_images": "collect:image", **assignment},
-        "finish": {"plugin": "file_source", "core:run": True, "param:input_path": "var:image",
+        "batch": {"plugin": "batch", "core:run": True, "core:require_outputs": True, "param:input_images": "collect:image", **assignment},
+        "finish": {"plugin": "file_source", "core:run": True, "core:require_outputs": True, "param:input_path": "var:image",
                    "var:image": "expr:const.output_dir & '/' & var.basename & '.txt'",
                    "param:output_path": "var:image"},
     }
+    recipe["batch"].update(context_controls(tmp_path / "batch.json", "var.image"))
     workflow = Workflow(recipe)
     workflow.run()
     assert calls == [sources]
@@ -147,7 +149,7 @@ def test_final_metadata_uses_aggregate_updated_scene_values(tmp_path):
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
                    "core:output_metadata_path": str(destination)},
         "files": import_settings(source, tmp_path),
-        "update": {"core:run": True, "core:scope": "aggregate", "var:score": 9},
+        "update": {"core:run": True, "core:scope": "aggregate", "core:require_outputs": True, "var:score": 9},
     }
     Workflow(recipe).run()
     assert json.loads(destination.read_text())[0]["var"]["score"] == 9
@@ -183,14 +185,14 @@ def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch)
     recipe = {
         "files": {**import_settings(tmp_path / "source/*.txt", tmp_path),
                   "var:image": {"path": "returned:file_path", "label": "original"}},
-        "batch": {"plugin": "batch", "core:run": True,
+        "batch": {"plugin": "batch", "core:run": True, "core:require_outputs": True,
                   "param:input_images": "collect:image.path",
                   "var:image.path": "expr:var.basename & '.txt'", "param:output_images": "collect:image.path"},
-        "inspect": {"plugin": "inspect", "core:run": True, "param:image": "var:image.path"},
+        "inspect": {"plugin": "inspect", "core:run": True, "core:require_outputs": True, "param:image": "var:image.path"},
     }
-    workflow = Workflow(recipe)
+    workflow = Workflow(recipe, config_dir=tmp_path)
     workflow.run()
-    assert seen == [str(tmp_path / "output" / f"{name}.txt") for name in ("a", "b")]
+    assert seen == [str(tmp_path / f"{name}.txt") for name in ("a", "b")]
     assert [Path(path).read_text() for path in seen] == ["a", "b"]
     assert all(record["context"]["var"]["image"]["label"] == "original"
                for record in workflow.records)
@@ -200,8 +202,8 @@ def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch)
 def test_returned_mapping_is_validated_after_invocation(monkeypatch, tmp_path, invalid):
     install_function(monkeypatch, "scenes", lambda: [{}, {}], scene_records_return="$")
     install_function(monkeypatch, "result", lambda: invalid, scope="aggregate")
-    recipe = {"source": {"plugin": "scenes", "core:run": True},
-              "result": {"plugin": "result", "core:run": True, "var:data": "returned:$"}}
+    recipe = {"source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},
+              "result": {"plugin": "result", "core:run": True, "core:require_outputs": True, "var:data": "returned:$"}}
     workflow = Workflow(recipe)
     with pytest.raises(ValueError, match="must map exactly 2 scenes"):
         workflow.run()
@@ -212,8 +214,8 @@ def test_scene_collect_can_write_same_named_shared_constant(monkeypatch):
     seen = []
     install_function(monkeypatch, "inspect", lambda gain, all_gains: seen.append((gain, all_gains)))
     recipe = {
-        "source": {"plugin": "scenes", "core:run": True},
-        "inspect": {"plugin": "inspect", "core:run": True, "const:gain": "collect:gain",
+        "source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},
+        "inspect": {"plugin": "inspect", "core:run": True, "core:require_outputs": True, "const:gain": "collect:gain",
                     "param:gain": "var:gain", "param:all_gains": "collect:gain"},
     }
     workflow = Workflow(recipe)
@@ -228,8 +230,8 @@ def test_scene_constants_reject_conflicting_scalar_values(monkeypatch, assignmen
     install_function(monkeypatch, "scenes", lambda: [{"gain": 2}, {"gain": 3}], scene_records_return="$")
     install_function(monkeypatch, "inspect", lambda gain: gain)
     recipe = {
-        "source": {"plugin": "scenes", "core:run": True},
-        "inspect": {"plugin": "inspect", "core:run": True, "param:gain": "var:gain",
+        "source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},
+        "inspect": {"plugin": "inspect", "core:run": True, "core:require_outputs": True, "param:gain": "var:gain",
                     "const:shared_gain": assignment},
     }
     with pytest.raises(ValueError, match="conflicting scene values"):

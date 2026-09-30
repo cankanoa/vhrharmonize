@@ -158,7 +158,7 @@ def test_both_rule_types_protect_sources_from_output_overwrite(tmp_path, kind):
             **import_settings(source, tmp_path),
             "param:create_metadata_json": {"metadata": {kind: str(companion)}},
         },
-        "copy": copy_step("product", "mul", str(companion)),
+        "copy": copy_step("product", "mul", str(companion), require_outputs=True),
     }
     with pytest.raises(ValueError, match="protected input"):
         Workflow(recipe).run()

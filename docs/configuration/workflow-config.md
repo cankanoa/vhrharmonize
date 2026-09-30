@@ -17,7 +17,7 @@ shared:
   const:band_wavelengths_um: [0.4273, 0.4779, 0.5462]
   # core:run_from_existing: true
 
-import_files:
+discover_inputs:
   plugin: import_files
   core:run: true
   param:search_glob: /data/images/*.tif
@@ -36,6 +36,7 @@ import_files:
 alignment:
   plugin: alignment
   core:run: true
+  core:require_outputs: param:output_image_path
   param:moving_image_path: var:mul
   param:fixed_image_path: const:reference_path
   var:suffix: expr:var.suffix & '_aligned'
@@ -154,7 +155,7 @@ param:context: expr:$    # Both scopes, retaining their const/var namespaces.
 
 Choose parameter names that match the function. `"var:"` and `"const:"` also select whole scopes but must be quoted in YAML. A merged object can be requested with `param:variables: expr:$merge([const, var])`. All these explicit references track runtime dependencies automatically; no adapter dependency declaration is needed. Passed objects are snapshots. Mutating them does not publish changes: return data and assign it explicitly in YAML.
 
-Checkpoint files named `<output>.context.json` preserve returned values and dependent assignments with scope-qualified names. Cached steps restore both scopes, rebasing saved paths to the current output/temp roots. Value-only plugins run when needed. Unavailable values from unused branches are omitted from final context. Python callers can inspect `workflow.records[i]["context"]` and `workflow.context["const"]` after execution.
+Use explicit [context operations](#explicit-context-files) to persist and load selected returned values. Existing output files alone do not restore metadata. Value-only plugins run when needed. Unavailable values from unused branches are omitted from final context. Python callers can inspect `workflow.records[i]["context"]` and `workflow.context["const"]` after execution.
 
 ## Importing files and scene identity
 
@@ -246,9 +247,9 @@ All subsequent scene steps process the combined collection. New scenes do not ru
 
 Directory defaults belong to `import_files`: `param:temp_dir` defaults to `sys`, `param:output_dir` to `./output`, `param:temp_dir_scope` to `const`, and `param:output_dir_scope` to `var`. Each scope accepts `const` or `var` independently. `sys` creates a unique system temporary directory; other values are resolved as paths. Constant roots resolve relative to the first discovered file's parent (the working directory if no files match). A directory with scope `var` resolves separately for each file and is returned in that scene's variable object. The defaults therefore provide one shared `const.temp_dir` and per-scene `var.output_dir` values. Use absolute roots for a shared project location. An explicit temp path allows reuse across runs. For one aggregate product, explicitly collect roots using `const:output_dirs: collect:output_dir`, then select `const.output_dirs[0]` in the output expression, as the WorldView mosaic does.
 
-Core does not reserve `temp_dir` or `output_dir` as variable names. The import adapter declares `temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")` and `output_directory_context_paths = ("var.output_dir", "const.output_dir")`. Other plugins can register arbitrary nested locations and populate them using returned dictionaries or YAML assignments. Declared fields may contain a path or list of roots. Missing fields are not invented. A plugin selecting `output_temporary_cleanup_paths` requires an established temporary-root location and value; otherwise planning/execution raises `ValueError`. This requirement applies even when automatic deletion is disabled. Relative declared roots normalize from the YAML directory; the importer has already made its own returned paths absolute.
+Core does not reserve `temp_dir` or `output_dir` as variable names. The import adapter declares `temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")` and `output_directory_context_paths = ("var.output_dir", "const.output_dir")`. Other plugins can register arbitrary nested locations and populate them using returned dictionaries or YAML assignments. Declared fields may contain a path or list of roots. Missing fields are not invented. Temporary cleanup applies only when a temporary root has been declared and populated. No temporary root is required for processing, and directory membership never requests a product. Relative declared roots normalize from the YAML directory; the importer has already made its own returned paths absolute.
 
-Scene-setting functions may run during planning, dry-run and HPC preparation without an opt-in. Ordinary processing functions are not run by dry-run. The planner stops at scene discovery whose preceding required work has not finished, reporting later enabled steps as `pending`; execution resumes planning after the scene update. HPC requires scenes and file paths to be known during preparation. Generated HPC recipes use the ordinary `restore_scenes` plugin to restore a materialized snapshot and directory declarations, disabling discovery steps already evaluated locally.
+Scene-setting functions may run during planning, dry-run and HPC preparation without an opt-in. Ordinary processing functions are not run by dry-run. The planner stops at scene discovery whose preceding required work has not finished, reporting later enabled steps as `pending`; execution resumes planning after the scene update. HPC requires scenes and file paths to be known during preparation. HPC recipes preserve ordinary imports and explicit context loads; no scene snapshot is embedded in the generated YAML.
 
 ### Final metadata JSON
 
@@ -268,7 +269,7 @@ Each completion of the last needed step appends its combined `{const, var}` cont
 
 `delete_final_json_first: true` replaces old contents on the first successful write to each destination during that workflow run. Core remembers canonical absolute paths, so subsequent writes to that path append without clearing earlier completions. With `false`, previous entries are retained; an existing JSON object becomes the array's first entry. Replacement is atomic. Dry-run does not clear or write this final JSON.
 
-Imported metadata stays in memory until included in this final export. `<output>.context.json` files are separate internal checkpoints for cached returned values.
+Imported metadata stays in memory unless selected by an explicit context save or included in this final export. Implicit output checkpoints are not used.
 
 ## File paths and names
 
@@ -285,7 +286,7 @@ These are Python adapter attributes, not YAML parameters. Each contains a set or
 | `output_path_resolution_paths` | Normalize selected destinations and expand `~`. | Always for selected paths. |
 | `input_dependency_paths` | Link selected inputs to preceding file producers. | Always; `core:requires` adds extra dependencies. |
 | `output_dependency_paths` | Register selected destinations as file producers. | Always. |
-| `output_target_paths` | Request selected persistent products even when otherwise unused. | `core:required` can additionally require a step. |
+| `output_target_paths` | Internal target selection populated by core from YAML; adapters leave it empty. | `core:require_outputs: false` by default; select `param:name` or a list of selectors. |
 | `input_existence_check_paths` | Require selected inputs to exist before invocation. | Always. |
 | `input_protection_paths` | Protect selected inputs/references from overwrite and cleanup, including aliases. | Always for selected inputs; imported source protection is separately controlled by `shared.core:protect_source_files: true`. |
 | `output_parent_creation_paths` | Create parents of selected destinations before invocation. | Always. |
@@ -294,11 +295,10 @@ These are Python adapter attributes, not YAML parameters. Each contains a set or
 | `output_validation_paths` | Validate selected products during reuse and after invocation. Reuse always checks existence; format checks apply only to this selection. | Plugin/shared `core:check_validity: true`; `shared.core:validity_check_grid_size: 2048`. |
 | `output_invalid_removal_paths` | Inspect and remove corrupt selected products before regeneration. No missing-file error or post-call check is implied. | Runs before processing, independently of reuse/validation selections. |
 | `output_overview_calculation_paths` | Build overviews on selected TIFF outputs after processing. | Plugin `core:calculate_overviews: false`; requires `shared.param:window_scales` when enabled. |
-| `output_temporary_cleanup_paths` | Remove selected regular files inside declared temporary roots, with associated sidecars, after required consumers succeed. Requires a populated temporary-root location. | Shared `core:delete_temp_steps_proactively: true` / `core:delete_temp_dir: false`. |
-| `output_context_checkpoint_paths` | Save returned assignments beside the first supplied selected output as `<output>.context.json`; restore them on reuse. Normally select one argument; aliases can supply alternatives. | Automatic when returned assignments exist; empty disables file checkpoints. |
+| `output_temporary_cleanup_paths` | Remove selected regular files inside declared temporary roots, with associated sidecars, after required consumers succeed. Only applies under populated temporary roots; explicitly required products are retained. | Shared `core:delete_temp_steps_proactively: true` / `core:delete_temp_dir: false`. |
 | `input_hpc_staging_paths` | Rewrite and upload selected inputs needed by processing steps. | HPC remote reference directory and upload settings. |
 | `output_hpc_staging_paths` | Rewrite selected destinations and upload selected reusable products needed by the remote run. | HPC remote output/temp directories and upload settings. |
-| `output_hpc_download_paths` | Rewrite selected destinations and include persistent products in the download map. Does not enable upload. | HPC remote output directory and download-conflict setting. |
+| `output_hpc_download_paths` | Rewrite selected destinations and include requested products in the download map. Does not enable upload. | `core:require_outputs`, HPC `path_mappings`, and download-conflict setting. |
 
 For example, a plugin can validate an image and a JSON report while building overviews only for the image:
 
@@ -309,9 +309,9 @@ output_overview_calculation_paths = {"output_image"}
 
 These selections do not imply path normalization, directory creation, reuse or cleanup; declare those separately when needed. Built-ins sometimes assign the same immutable `frozenset` to several features as an explicit convenience. Reassigning one feature leaves the others unchanged. The old generic declarations and `manages_reuse`/`manages_overviews` flags are rejected. A nested pipeline leaves the relevant core selections empty and performs those operations itself.
 
-Selected paths remain subject to structural constraints: output destinations must be single paths known during planning, and the engine cannot overwrite protected sources. Paths not selected for normalization are passed unchanged; use absolute paths for other core file operations unless working-directory-relative paths are intentional. Context checkpoints follow their selected anchor’s staging/download policies. Cleanup also removes associated raster sidecars. Input protection keeps intermediate files alive until their required readers finish, even when those readers omit file-dependency tracking. `core:requires` remains an explicit YAML shorthand for extra file dependencies, including resolution, existence checks, protection and HPC staging.
+Selected paths remain subject to structural constraints: output destinations must be single paths known during planning, and the engine cannot overwrite protected sources. Paths not selected for normalization are passed unchanged; use absolute paths for other core file operations unless working-directory-relative paths are intentional. Cleanup also removes associated raster sidecars. Input protection keeps intermediate files alive until their required readers finish, even when those readers omit file-dependency tracking. `core:requires` remains an explicit YAML shorthand for extra file dependencies, including resolution, existence checks, protection and HPC staging.
 
-Relative discovery globs resolve from the Python working directory. The importer resolves metadata files and companion globs from each discovered file's directory. Core passes input parameters unchanged. Selected relative output parameters resolve from the first registered output root, or from the YAML directory if no output root exists. `const:` alone does not give a string path semantics: its use by a selected path-resolution parameter does. Use absolute common file paths when scene directories differ. `~` expands on the execution host. Output destinations must resolve during planning; HPC also requires inputs selected for staging to resolve then. Returned scalar/object values can remain deferred until execution.
+Relative discovery globs resolve from the Python working directory. The importer resolves metadata files and companion globs from each discovered file's directory. Core passes input parameters unchanged. Selected relative output parameters resolve from the YAML directory. Registered output roots do not affect resolution. `const:` alone does not give a string path semantics: its use by a selected path-resolution parameter does. Use absolute common file paths when scene directories differ. `~` expands on the execution host. Output destinations must resolve during planning; HPC also requires inputs selected for staging to resolve then. Returned scalar/object values can remain deferred until execution.
 
 Files embedded in compound options need an explicit dependency. For example, in an aggregate step:
 
@@ -327,7 +327,39 @@ Filename accumulation is explicit scene state: `var:suffix: expr:var.suffix & '_
 
 All steps default to disabled. `core:run: false` does nothing: no adapter loading, value resolution, assignments, cache restoration, processing, transfers or cleanup. Downstream inputs must explicitly reference an enabled step or an imported file. A plugin-only CLI command keeps enabled upstream names and reuses their files, but does not compute upstream processing steps.
 
-Per-step controls are `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:required`, `core:requires` and `core:processing_direction`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
+Use `core:require_outputs` to choose deliverables independently of file locations:
+
+```yaml
+alignment:
+  plugin: alignment
+  core:run: true
+  core:require_outputs: param:output_image_path
+  param:moving_image_path: var:current_image_paths
+  param:fixed_image_path: const:reference_path
+  var:current_image_paths: path:expr:var.destination & '/aligned.tif'
+  param:output_image_path: var:current_image_paths
+```
+
+The default `false` leaves the step available as a dependency. A `param:name` selector or list such as `[param:output_images, param:save_adjustments]` requests those output parameters. Each selected parameter must be a declared output and resolve during planning to a nonempty path or nonempty flat list of paths. Unknown parameters, inputs, nulls, objects and nested lists are errors. `true` requests the step and all supplied output parameters, including functions with no file outputs. Reuse still applies: requesting a result does not force recomputation. `core:requires` remains separate and declares extra **input dependencies**.
+
+### Explicit path values
+
+Prefix a value with `path:` to normalize it before it reaches a function:
+
+| Value | Resolution |
+|---|---|
+| `path:/data/image.tif` | Absolute path. Native Windows drive and UNC paths follow the host's normal path rules. |
+| `path:~/data/image.tif` | Expand the current user's home directory. |
+| `path:./results`, `path:../results`, `path:results` | Relative to the workflow YAML directory (the API's `config_dir` for in-memory configurations). |
+| `path:var:images`, `path:const:reference`, `path:collect:images` | Resolve the reference, then normalize the resulting path or flat list. |
+| `path:expr:const.folder & '/result.tif'` | Evaluate the expression, then normalize. |
+| `path:sys` | Create a unique system temporary directory, stable for that assignment during planning, execution and staging. |
+
+Declare a shared temporary path once, for example `const:scratch: path:sys`, then reference it with `const:scratch`. Scene assignments can create separate paths per scene. `path:` does not mark a path as an input, deliverable, upload or cleanup candidate. `var:` and `const:` alone simply read values. There are no `output:` or `temp:` resolution prefixes. Plugin-selected legacy output normalization remains available, using the YAML directory; other unprefixed values keep their existing function-specific semantics. The importer still supports its native input-relative directory and companion rules; `path:` values arrive already absolute. Write `path:sys` without a space after the colon, or quote the entire scalar.
+
+Migrating older recipes: rename `core:process_for_paths` to `core:require_outputs`, keeping its value unchanged. Explicitly request desired products, including the final processing step. Moving a file outside temporary storage no longer requests it. Use `path:` or explicit expressions for destinations that previously depended on a registered output root.
+
+Per-step controls are `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:require_outputs`, `core:requires` and `core:processing_direction`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
 
 Shared runner controls are:
 
@@ -344,7 +376,8 @@ Shared runner controls are:
 | `log_to_console` | `true` |
 | `show_progress` | `true` |
 | `report_progress` | `false` |
-| `statistics_path` | `null` |
+| `save_statistics_path` | `statistics.jsonl` |
+| `load_statistics_path` | `statistics.jsonl` |
 | `processing_direction` | `vertical` |
 | `concurrent_processing` | `1` |
 | `concurrent_processing_backend` | `process_pool` |
@@ -352,17 +385,21 @@ Shared runner controls are:
 
 The engine implements these controls; plugin functions do **not** need to accept them all. There is no mandatory set of raster parameters such as `custom_nodata_value`, `output_dtype`, `epsg` or `window_scales`. Functions accept the settings they support. Raster options use SpectralMatch names such as `custom_nodata_value`, `output_dtype` and `window_scales`. Native utilities that use `custom_output_dtype` retain that name; set it directly when overriding their dtype. The engine additionally uses shared `param:window_scales` when `core:calculate_overviews` requests raster overviews. Per-step `core:reuse` and `core:check_validity` override shared reuse/validation. Raster validation checks readability/TIFF bounds; JSON validation checks syntax.
 
-The planner follows file and runtime-variable dependencies backward from deliverables. A cached cloudmasked image can feed alignment even when correction, orthorectification and pansharpen temporary files are absent. Static suffixes/constants do not force upstream recomputation. Non-temporary outputs selected by `output_target_paths` remain requested deliverables; `core:required: true` additionally requests temporary products. `loaded` counts reusable outputs, `processing` counts required work and `unused` counts bypassed nodes; a loaded node can also be unused. `pending: 1` marks a step awaiting scenes from a runtime scene-setting function, so its invocation count is not yet known.
+The planner follows file and runtime-variable dependencies backward from deliverables. A cached cloudmasked image can feed alignment even when correction, orthorectification and pansharpen temporary files are absent. Static suffixes/constants do not force upstream recomputation. Only explicit `core:require_outputs` targets request processing products, regardless of directory. Terminal processing steps are not requested automatically. `core:require_outputs: true` requests the step and all supplied declared outputs; use this for steps with side effects but no output files. Scene discovery still runs to establish the plan, and explicitly selecting a plugin through `run_plugin` requests its enabled steps. `loaded` counts reusable outputs, `processing` counts required work and `unused` counts bypassed nodes; a loaded node can also be unused. `pending: 1` marks a step awaiting scenes from a runtime scene-setting function, so its invocation count is not yet known.
 
 With `core:log_to_console: true`, core announces workflow startup, discovery, graph construction, planning, execution and enabled final cleanup using `[core:<stage>] Start`. The first line, `[core:workflow] Start`, appears as soon as core settings are resolved, before input discovery or processing. Cached calls to `plan()` do not repeat the announcement; a new graph and plan after scene discovery do. Early stages print before the dashboard starts, while execution-time messages enter the progress API's recent messages and terminal display. Setting `core:log_to_console: false` suppresses these core messages.
 
 With the dashboard disabled, the scheduler also logs `[scene_id core:step_name] Start current/processing/total` immediately before each function call or worker submission. `current` is the dispatch number for this step, `processing` is the number of calls needed in this run, and `total` includes cached and unused calls. Aggregate steps count function calls, so a single call handling many images has a total of one. These are start counters; concurrent calls can finish in a different order. Single-image operation logs end with `Completed` without a separate counter.
 
-Set shared `core:statistics_path: ./statistics/history.jsonl` to append raw core
-timings across executions. The path is relative to the workflow YAML; `null`
-disables recording. Run `vhr statistics --input-path history.jsonl --output-path
-summary.json` to generate a separate report. Recording enables the reporting
-backend independently of the display and console logging. See
+Shared `core:save_statistics_path` appends raw core timings across executions, and
+`core:load_statistics_path` uses successful past timings to seed console and dashboard
+ETAs. Both default to `statistics.jsonl` beside this YAML. Set either to `null` to
+disable it independently. A missing load file is allowed; malformed existing history
+raises a file/line error. Choose filenames yourself for different input sizes/types.
+The old `statistics_path` setting is renamed to `save_statistics_path`.
+Run `vhr statistics --input-path statistics.jsonl --output-path summary.json` to
+generate a separate report. Recording enables the reporting backend independently
+of the display and console logging. See
 [Statistics](../api/statistics.md) for the format and event API.
 
 ### Live progress dashboard
@@ -391,7 +428,7 @@ The active-operation panel uses one row per operation, with **Step, ID, Status, 
 
 When running a YAML file with reporting enabled, core writes `<workflow.yml>.progress.json` beside that file. The snapshot is replaced atomically at most once per second, with initial and final updates on success or failure. `vhr hpc-status --config <staged.hpc.yml>` fetches the snapshot through `get_slurm_progress()` and gives it to the same `prompt_toolkit` frontend for a static display. This works while Slurm output is redirected. Snapshots from a different Slurm job ID are ignored, and the displayed timestamp identifies the last update. The staged HPC YAML retains the fetched data under `workflow_progress`. Apps can receive the same versioned data through a Python callback, `Workflow.get_progress()`, the JSON file, or the HPC accessor; see the [progress API](../api/progress.md).
 
-Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under `const.temp_dir`**. It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
+Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under `const.temp_dir`**. It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Explicitly required products and terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
 
 ### Horizontal and vertical execution
 
@@ -412,11 +449,11 @@ check_images:
 
 Core synchronizes automatically at `collect:` reads, aggregate calls, scene-setting plugins, and steps returning or deriving shared constants that are unavailable until execution. Scene invocations must agree on shared values before later steps consume them. Explicit horizontal steps also synchronize. Disabled steps do not interrupt a vertical section. Within a vertical section, declared file and value dependencies are still enforced, including dependencies on another scene. Static filename/constant assignments do not force an extra synchronization point.
 
-`core:scope` remains independent: it selects one function call per scene or one aggregate call. `processing_direction` only changes scheduling. The process-pool worker limit applies across the whole vertical section; Dask uses cluster capacity and gives downstream tasks higher priority. Cached outputs still skip unnecessary work, and temporary files are removed only after their required consumers finish and cached contexts have been restored. HPC staging preserves the selected direction.
+`core:scope` remains independent: it selects one function call per scene or one aggregate call. `processing_direction` only changes scheduling. The process-pool worker limit applies across the whole vertical section; Dask uses cluster capacity and gives downstream tasks higher priority. Cached outputs still skip unnecessary work, and temporary files are removed only after their required consumers finish and explicitly loaded values have been published. HPC staging preserves the selected direction.
 
 ## Aggregates and concurrency
 
-An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, checkpoints and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
+An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, explicit context operations and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
 
 Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file when work must run. Horizontal processing completes each step before the next begins; vertical processing advances scenes independently between synchronization points. Aggregate functions manage their internal parallelism. SpectralMatch inherits supported shared `param:` settings; no adapter translates core worker counts or scheduler settings into native parameters.
 
@@ -455,3 +492,86 @@ For workflow file management, use explicit input/output file lists, as in the ex
 `resume_from_outputs` controls native reuse inside a function. Core handles reuse for explicit files separately. For tiled `merge_rasters`, set `output_tiles: true` and choose a directory destination; core invokes the function even if that directory exists, and transfers the directory recursively. `image_threads`, `concurrent_processing_backend` and `dask_scheduler` apply only to tiled merge; keep them `null` for a single mosaic. `compute_overviews` always invokes its function when requested because an existing raster alone does not prove it contains the requested overview levels.
 
 The WorldView example uses VHR `core:calculate_overviews: true` on selected raster-producing steps, with levels from `shared.param:window_scales`. Native `build_overviews` remains unset (its default is false), and the separate `compute_overviews` alternative stays commented out. Footprints are calculated after radiometric matching so their image identifiers exactly match the seamline inputs.
+
+## Explicit context files
+
+Context persistence is opt-in on individual enabled steps, including steps without
+a plugin. Each of the four controls maps filenames to one selector or a list:
+
+```yaml
+core:save_context:
+  "path:./context/import_metadata.json":
+    - dependencies
+    - defined
+    - var.metadata
+    - const.band_order
+```
+
+Use dotted selectors for fields, including nested fields such as
+`var.metadata.IMAGE_1`. `defined` selects that step's `var:`/`const:` assignments.
+`dependencies` selects the context fields referenced recursively by that step's
+parameters, including applicable shared parameters. The only spelling is
+`dependencies`. Combined selections are deduplicated; selecting a parent includes
+its children. The file contains selected resolved context values, not parameter
+history or expressions. Save separate files before and after an assignment if
+both states are needed.
+
+Use `all` to save every current `const` and per-scene `var`, or load every field
+present in the saved JSON:
+
+```yaml
+core:save_context:
+  "path:./context/complete.json": all
+core:load_context:
+  "path:./context/complete.json": all
+```
+
+`all` also works with both upsert controls and in a list with other selectors.
+Each scene keeps its own fields, including fields supplied by imports. Loading
+matches scenes by ID and retains current fields absent from the file; fields
+present in the file follow the replacement or merge rules below. Saving includes
+all context available to that invocation, so selecting `all` can require earlier
+steps to compute metadata that would otherwise be unused.
+
+| Control | Action |
+| --- | --- |
+| `core:save_context` | Replace the destination with selected current context. |
+| `core:save_upsert_context` | Insert/update selected data in the destination, retaining other entries. |
+| `core:load_context` | Replace selected context values from the file. |
+| `core:load_upsert_context` | Merge selected file data into the current context. |
+
+Upserts merge objects recursively; incoming values win, lists and scalars replace.
+Load operations are applied in workflow order during planning, before deciding
+which processing is needed. They can establish scenes from the saved IDs. A missing
+file logs a warning only when `core:log_to_console` is true, then continues without
+loading or scheduling a producer. A present file with invalid structure or a missing
+selected field is an error. Saves happen when their enabled step runs successfully;
+they never force an otherwise unused function to run. A disabled step performs no
+context I/O. Parent-owned writes combine individual scenes safely, including when
+processing workers run concurrently.
+
+An explicitly loaded import can supply its saved scene assignments without
+rediscovering raw files. Include every needed field and the same scene-ID scheme.
+Context values still needed by downstream functions must be supplied explicitly or
+computed by the producing function. There is no implicit `<output>.context.json`
+lookup and no automatic call to a plugin's `restore()` method.
+
+See [saved file formats](../saved-file-formats.md#explicit-context-json) and
+[HPC staging](../cli/hpc.md).
+
+## Importing existing outputs
+
+A scene-discovery step whose plugin declares `scene_records_return` and
+`scene_path_return` may declare:
+
+```yaml
+core:satisfies: {cloud_mask: output_raster_path}
+```
+
+Keys identify named workflow steps, and values identify declared output parameters.
+Each scene's discovered file supplies that output. Multiple imports merge by scene
+ID. The binding updates the corresponding direct `var:`/`const:` output reference
+so downstream steps receive the imported path. Duplicate conflicting bindings,
+unknown step names and input/non-file parameter targets are rejected. Imported
+products must pass the configured reuse checks. Without `core:satisfies`, imports
+provide ordinary variables consumed through explicit parameter references.

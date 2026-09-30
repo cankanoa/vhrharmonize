@@ -2,7 +2,8 @@
 run_id: "1" # Unique ID for this run or set to previous ID to use previous files stored on remote host. Can be any string. If unset, a timestamp will be generated at runtime
 
 # Editable files
-workflow_config: configs/example.worldview.yml # Local workflow YAML to rewrite for Slurm
+workflow_config: configs/example.worldview.yml # Original workflow YAML; staged copies preserve comments/expressions.
+run_to_step_before_prepare: discover_inputs # Workflow step name, independent of its plugin; null skips local preparation.
 slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 
 # Generated files
@@ -10,6 +11,7 @@ staged_workflow_file: configs/{run_id}.staged.worldview.yml # Generated rewritte
 staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch with {run_id} replaced
 staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
 debug_logs: true # Print debug logs
+show_progress: true # Grouped live upload dashboard; one final summary in redirected logs
 
 # Download settings
 # Declared output folders are downloaded recursively as one rsync group. Conflict policies apply per file within folders; missing tiles are downloaded on every run.
@@ -20,9 +22,25 @@ ssh_host: koa.its.hawaii.edu
 ssh_user: username
 # ssh_private_key: ~/.ssh/id_ed25519 # Optional identity file
 
-# Remote directories. Optional, {run_id} will be replaced with the run ID
-enable_rsync_checksum: false # Compare file checksums during uploads instead of only size and modification time
-remote_output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/output # Non-temp workflow outputs
-remote_log_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/logs # Slurm/stdout logs
-remote_temp_dir: ~/koa_scratch/vhrharmonize/tmp # const:temp_dir products
-remote_reference_dir: ~/koa_scratch/vhrharmonize/references # Shared reference files
+# Remote workspace and logs. {run_id} is replaced during preparation.
+enable_rsync_checksum: false # Compare checksums instead of only size and modification time
+remote_work_dir: ~/koa_scratch/vhrharmonize/run_{run_id}
+remote_log_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/logs
+
+# Paths -> remote folders. Directories preserve their contents' relative layout; files keep just their filenames.
+# File lists (including empty companion lists) are supported. Several mappings may share a folder.
+# Different files must not resolve to the same complete remote filename.
+# Core derives transfers from required outputs and explicit context loads. Every needed data path must be covered.
+# Identity mappings are allowed for paths present under the same name on both hosts; transfer policy is separate.
+# Expressions use the selected value's original scene context; var.scene_id is JSONata syntax.
+# Optional context snapshots outside mapped folders need their own directory mapping.
+path_mappings:
+  var:current_image_paths: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:pan: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:metadata_path: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:mul_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:pan_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:output_dir: ~/koa_scratch/vhrharmonize/output
+  const:temp_dir: ~/koa_scratch/vhrharmonize/temp
+  const:dem_path: ~/koa_scratch/vhrharmonize/references
+  const:reference_path: ~/koa_scratch/vhrharmonize/references

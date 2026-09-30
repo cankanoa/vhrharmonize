@@ -13,7 +13,7 @@ start_slurm_job(plan["staged_hpc_file"])
 
 Python and CLI callers use the same defaults and validation. Configuration, transfer and job-control failures propagate as Python exceptions; a CLI failure exits unsuccessfully with that same underlying error.
 
-Use `configs/example.hpc.yml` and `configs/example.slurm.sbatch`. Set `workflow_config` to your ordered recipe and `staged_workflow_file` to the generated remote recipe location. There is no provider selector or upload-key list.
+Use `configs/example.hpc.yml` and `configs/example.slurm.sbatch`. Set `workflow_config` to your ordered recipe and `staged_workflow_file` to the generated remote recipe location. Use `path_mappings` to associate workflow variables with remote directories.
 
 ```bash
 vhr hpc-prepare --config configs/example.hpc.yml
@@ -30,20 +30,145 @@ and `shared.core:show_progress: false` to publish snapshots without a console da
 fetches the same data and renders it with `prompt_toolkit` alongside scheduler status and
 logs. See the [progress API](../api/progress.md) for Python callbacks and polling.
 
-Preparation uses the same dependency plan as local execution. It stages required input files/directories and reusable outputs, including context checkpoints, and maps declared persistent outputs and their checkpoints for download. A cloud-masked image can therefore be uploaded without uploading or rebuilding its raw processing chain.
+Preparation uses the same requested-output dependency plan as local execution. It uploads required inputs, valid reusable products, and explicitly loaded context files. Generated outputs are downloaded when requested through `core:require_outputs` and enabled by the plugin's download declaration.
 
-The generated `restore_scenes.param:records` contains per-image paths and their const/var contexts. `restore_scenes` is an ordinary registered scene-setting plugin. Original discovery steps are disabled, and arbitrary step names, explicit plugin selections, pluginless setup steps and processing order are preserved. This also supports custom scene-setting plugins; it does not depend on `import_files`. Scene updates, including later imports, whose required preceding processing has not finished are rejected before transfers. Staging materializes known variable assignments and file parameters so the remote job uses the same names without reparsing sensor documents. Adapters opt into `input_hpc_staging_paths`, `output_hpc_staging_paths` and `output_hpc_download_paths` independently; these select function argument names, while YAML still uses ordinary `param:` arguments. Input staging uploads required inputs; output staging rewrites destinations and uploads required cached products; download selection maps persistent products for retrieval without enabling upload. Path resolution is a separate adapter feature. Paths omitted from transfer selections remain the plugin or shared filesystem’s responsibility. Extra files, including paths embedded in compound options, use `core:requires`. Returned scalar/object values and their dependent assignments still resolve at runtime. File arguments selected for staging must be known during planning. Disabled steps contribute no transfers or assignments.
+The source YAML is preserved. Preparation and remote copies change only selected values or entries, retaining comments, quotes, ordering, and expressions. There is no `restore_scenes` section, embedded scene collection, frozen `staged_*` variable table, or automatically discovered `.context.json` sidecar.
 
-HPC staging rewrites the const/var directory locations registered by plugins, preserving initial workflow-wide constants in `shared` even when no scenes are imported. Distinct per-scene roots receive separate remote directories. The generated restore plugin carries these directory declarations forward. Constants declared by scene steps remain on those steps, with known values frozen once and references to aggregate returns deferred until execution. Both constant and scene return values survive checkpoint download/upload and path rebasing. Remote roots come from `remote_output_dir`, `remote_temp_dir`, and `remote_reference_dir`. The Slurm template runs `vhr workflow --config "$1"`. `prepare` creates local files only; `upload` and `start` remain separate operations.
+## Upload progress
 
-An explicit `shared.core:output_metadata_path` is also rewritten and added to downloads, including destinations outside the registered output root. Shared destinations remain shared and scene-specific destinations remain separate. With `core:delete_final_json_first: false`, an existing local JSON is included in uploads so the remote run can append its completions; with the default `true`, each remote destination is cleared only on its first write. Metadata destinations must resolve during preparation.
+`hpc-upload` uses the same terminal display as workflow progress, with a total row
+and one row per step and mapped variable (for example, `alignment` / `var:output_dir`).
+Each row shows completed/total files, processed/total bytes, speed, status, ETA, and
+a byte-based bar at the right. Green means transferred, purple means already
+current on HPC, and gray means remaining. File names are not printed. Directories
+are counted by their contained files; duplicate destinations count once.
 
-`override_download_conflict` accepts `no`, `yes`, or `validate`. Directory outputs use recursive rsync and preserve per-file conflict handling. `stop` cancels the recorded job; `close` closes its SSH multiplex connection.
+Set `show_progress: true` in the **HPC YAML** (the default). Redirected output gets
+one final table; interactive terminals update the same box using native scrollback.
+Disable it for a short completion message:
 
-SpectralMatch stages require SpectralMatch 1.6+ on the cluster. Explicit raster output lists are staged and downloaded one file at a time; tiled merge directories are transferred recursively. Configure native Dask settings under `shared`: `param:concurrent_processing_backend: dask`, `param:image_threads: null`, and `param:dask_scheduler: [file, /remote/scheduler.json]`. Functions accepting these names inherit them automatically. The final single-file merge explicitly overrides its tile-scheduling settings with null. VHR’s `seamline_metadata` function also needs its `param:dask_scheduler_file` or `param:dask_scheduler_address` set when using the shared Dask backend. Core scene scheduling uses its own `core:` settings and does not configure SpectralMatch automatically.
+```bash
+vhr hpc-upload --config configs/1.staged.hpc.yml --overrides '{"show_progress": false}'
+```
 
-Multiple `import_files` steps accumulate scenes and metadata. HPC snapshots preserve the combined collection and disable the imports already evaluated locally. New files are not sent through earlier processing stages.
+Transfers still use batched rsync. Speed is the average logical file bytes processed
+per second, including rsync's reconstruction of changed files, rather than measured
+SSH network traffic. ETA uses that rate and remaining bytes; it shows `TBD` until
+there is a rate. Unchanged files are credited when their batch succeeds. See
+[rsync's progress semantics](https://download.samba.org/pub/rsync/rsync.1#opt--progress).
+Ctrl-C cancels the transfer and restores the terminal; SSH can still read terminal
+input for authentication.
 
-Custom scene IDs remain unchanged during staging and restoration. An ID is rebased only when its value is itself an explicitly staged file path; IDs containing slashes or `~` are otherwise treated as ordinary identifiers.
+New preparation records `upload_groups` in the staged HPC YAML for the step/root
+labels. Older staged files still upload with `inputs` / `controls` groups; run
+`hpc-prepare` again to get step attribution. Python callers can consume the same
+data independently of the display using
+`upload_slurm_files(config, progress_callback=callback)`; see the
+[upload callback API](../api/progress.md#upload-progress).
 
-`core:processing_direction` is preserved in the staged workflow, including per-step overrides. Vertical scene processing uses the same file dependencies and collection barriers on the cluster as locally.
+## Local preparation through a named step
+
+```yaml
+run_to_step_before_prepare: discover_inputs # null disables this optional local run
+```
+
+Core writes a `.prepare.yml` copy beside the staged workflow. Later processing steps have `core:run: false`; earlier enable/disable choices remain intact. The named target and its dependencies run normally, including explicit context saves. The full original workflow is then used to generate the remote copy. You can instead prepare manually with `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
+
+The cutoff names a workflow step, independently of its `plugin:` selection.
+Both sensor examples use `discover_inputs` for that step; changing its plugin
+does not require changing the HPC cutoff. Discovery-specific path rewrites use
+the optional [plugin staging interface](../getting-started/adding-plugins.md#custom-discovery-staging).
+
+## Directory, file, and file-list mappings
+
+Map path-valued workflow references to remote folders:
+
+```yaml
+remote_work_dir: ~/koa_scratch/vhrharmonize/run_{run_id}
+path_mappings:
+  var:current_image_paths: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:pan: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:metadata_path: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:mul_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:pan_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
+  var:output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/products
+  const:dem_path: /shared/reference
+  const:reference_path: /shared/reference
+```
+
+| Selected value | Remote placement |
+| --- | --- |
+| Directory | Replace the root and preserve the relative layout of its contents. |
+| File | Place the file directly in the destination folder, retaining its filename. |
+| Flat list of paths | Apply the corresponding rule to each element; empty companion lists are valid. |
+
+For example, a directory mapping preserves `scenes/P004/image.tif`, while an
+individual file mapping to the scene's folder puts that image at `inputs/P004/image.tif`. There are
+no generated hashes or extra root basenames. Several file mappings can share a
+folder, so the DEM and alignment reference can both use `/shared/reference`.
+Two different files resolving to the same complete remote filename are an error;
+repeated references to the same file transfer it only once. Explicit file mappings
+take precedence over enclosing directory mappings; nested directories use the
+most specific root.
+
+Mappings use the first resolved values across scenes. `var:current_image_paths`
+therefore selects the initial imported images, and later processing assignments
+keep their normal expressions. The initial assignment retains its string/list
+shape. For flattened imports, staging selectively replaces the source glob with
+the selected remote image paths and adjusts companion/metadata rules when needed.
+Portable expressions remain unchanged; irregular per-scene file associations use
+small path lookups, without embedding metadata or restoring scene snapshots.
+
+Destination expressions use the existing JSONata syntax: quote literal path text,
+join it with `&`, and reference fields as `var.scene_id` or `const.name` inside
+the expression. `expr:~/inputs/var:scene_id/` is not valid expression syntax.
+An expression is evaluated in the original context of each selected path value,
+before paths are relocated. All entries in a scene's file list use that scene's
+destination. It must resolve to a nonempty directory string. `~` remains unexpanded
+until use on HPC, and `{run_id}` is substituted before expression evaluation.
+
+The WorldView example maps MUL images, PAN images, both RPC companion lists, and
+the source IMD metadata paths into `inputs/<scene_id>/`. Set the local discovery
+pattern directly in `param:search_glob`; no `const:input_root` is needed. The two reference
+files have separate constants and share a remote reference folder rather than
+being copied for each scene. Uploads under the common input directory remain batched.
+
+The WorldView example saves and loads the complete import context with `all`.
+`run_to_step_before_prepare: discover_inputs` creates or loads it before staging,
+and the existing `const:temp_dir` mapping places `import_metadata.json` in the
+remote temp directory. Locally, the example uses a stable `./temp` directory beside
+the workflow YAML so subsequent runs can load the same file before discovery.
+The examples do not need `project_root`. Additional context files outside mapped
+directories need their own mapping; statistics and generated workflow/sbatch
+control files are staged separately.
+
+Required scene/context paths must be covered; missing coverage is an error.
+Mapping a directory to itself, or a file to its existing parent folder, keeps its
+path but does not imply shared storage or automatically disable transfers.
+
+Mappings choose placement, not which files to transfer. A mapped directory is uploaded recursively only when the directory itself is a required input. Declared plugin inputs/outputs and `core:requires` supply file dependencies; files read by imports supply discovery dependencies. Unused processing steps contribute no transfers. The older three-directory Python/HPC interface remains available for existing callers; new configurations should use explicit root mappings.
+
+## Explicit metadata and discovered products
+
+Use [context operations](../configuration/workflow-config.md#explicit-context-files) to save selected fields and load them before planning. A missing load file warns only when console logs are enabled and otherwise continues; it never triggers a producer or metadata preprocessing automatically. Required missing values can still prevent a later function from running.
+
+An import with an explicit context load covering its declared scene assignments can reuse those records without scanning the original files. Otherwise discovery runs normally and its source images and metadata are included in transfers. Loaded snapshots are copied for remote path rebasing; the local JSON is untouched. Constants are stored once and scene values are keyed by scene ID. Downloads preserve the resolved values in JSON; they do not implicitly translate returned paths back to local paths. Use stable scene IDs and select portable metadata fields for snapshots that will be loaded on both hosts.
+
+```yaml
+import_cloudmasked:
+  plugin: import_files
+  core:run: true
+  core:satisfies: {cloud_mask: output_raster_path}
+  param:search_glob: /data/project/products/*_cloudmasked.tif
+  # Supply a scene-ID rule matching the other imports.
+  var:cloudmasked_file: returned:file_path
+```
+
+`core:satisfies` associates each imported image with the named step's declared output parameter. It does not supply unrelated metadata or mark all of that step's outputs complete. Existing output validation/reuse rules still apply.
+
+The Slurm template runs `vhr workflow --config "$1"`. Preparation creates local artifacts and may execute the explicitly requested preparation cutoff; uploading and submitting remain separate commands.
+
+`core:save_statistics_path` is a separate remote append destination
+registered for download, so staging cannot replace remote history with an older local
+copy. See [statistics on HPC](../api/statistics.md#hpc-files) and
+[saved file formats](../saved-file-formats.md).

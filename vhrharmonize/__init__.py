@@ -30,6 +30,8 @@ _EXPORTS = {
     "TimingEvent": (".progress", "TimingEvent"),
     "TimingCallback": (".progress", "TimingCallback"),
     "StatisticsRecorder": (".statistics", "StatisticsRecorder"),
+    "validate_statistics_record": (".statistics", "validate_statistics_record"),
+    "load_statistics": (".statistics", "load_statistics"),
     "summarize_statistics": (".statistics", "summarize_statistics"),
     "read_progress_snapshot": (".progress", "read_progress_snapshot"),
     "render_progress": (".progress", "render_progress"),

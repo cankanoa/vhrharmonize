@@ -167,7 +167,7 @@ def test_workflow_api_and_generated_cli_share_planning_and_execution(
         },
         "file_source": {
             "plugin": "file_source",
-            "core:run": True,
+            "core:run": True, "core:require_outputs": True,
             "param:input_path": "var:raw",
             "var:copied": "expr:const.output_dir & '/copied.tif'",
             "param:output_path": "var:copied",

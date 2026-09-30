@@ -732,7 +732,6 @@ class FetchAtmosphere(FunctionPlugin):
     input_hpc_staging_paths = input_dependency_paths
     output_path_resolution_paths = frozenset({"output_path"})
     output_dependency_paths = output_path_resolution_paths
-    output_target_paths = output_path_resolution_paths
     output_parent_creation_paths = output_path_resolution_paths
     output_collision_check_paths = output_path_resolution_paths
     output_reuse_paths = output_path_resolution_paths
@@ -741,7 +740,6 @@ class FetchAtmosphere(FunctionPlugin):
     output_temporary_cleanup_paths = output_path_resolution_paths
     output_hpc_staging_paths = output_path_resolution_paths
     output_hpc_download_paths = output_path_resolution_paths
-    output_context_checkpoint_paths = frozenset({"output_path"})
 
     def run(self, *, params, shared):
         from vhrharmonize.io.metadata import write_json
@@ -765,11 +763,3 @@ class FetchAtmosphere(FunctionPlugin):
         result = super().run(params=params, shared=shared)
         write_json(output_path, result)
         return result
-
-    def restore(self, params):
-        filename = params.get("output_path")
-        try:
-            result = json.loads(Path(filename).read_text()) if filename else None
-            return result if isinstance(result, dict) else None
-        except (OSError, ValueError):
-            return None

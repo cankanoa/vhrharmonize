@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from vhrharmonize.workflow.engine import Workflow
+from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
 
 
@@ -40,7 +41,7 @@ def test_context_names_cannot_fill_or_override_function_arguments(
             owner = "import_files" if scope == "var" else "shared"
             recipe[owner][f"{scope}:{key}"] = value
     recipe["shared"].update({"param:" + k: v for k, v in shared.items()})
-    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, **{"param:" + k: v for k, v in params.items()}}
+    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, "core:require_outputs": True, **{"param:" + k: v for k, v in params.items()}}
     Workflow(recipe).run()
     assert observed == [expected]
 
@@ -49,7 +50,7 @@ def test_required_function_argument_is_not_filled_from_context(recipe, monkeypat
     install_function(monkeypatch, "inspect", lambda gain: gain)
     recipe["shared"]["const:gain"] = 2
     recipe["import_files"]["var:gain"] = 3
-    recipe["inspect"] = {"plugin": 'inspect', "core:run": True}
+    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, "core:require_outputs": True}
     with pytest.raises(TypeError, match="missing a required argument: 'gain'"):
         Workflow(recipe).run()
 
@@ -71,11 +72,13 @@ def test_context_paths_are_not_planned_staged_or_passed(recipe, tmp_path):
             "const:output_path": str(tmp_path / "unexpected.txt"),
         }
     )
-    recipe["file_source"] = {"plugin": 'file_source', "core:run": True}
+    recipe["file_source"] = {"plugin": 'file_source', "core:run": True, "core:require_outputs": True}
     workflow = Workflow(recipe)
     assert workflow.nodes[0].params == {}
+    recipe["shared"].update({"core:save_statistics_path": None, "core:load_statistics_path": None})
     _, uploads, downloads = stage(recipe, tmp_path)
-    assert uploads == downloads == {}
+    assert set(uploads) == {recipe["import_files"]["param:search_glob"]}  # Ordinary discovery runs remotely.
+    assert downloads == {}
     with pytest.raises(TypeError, match="missing a required argument: 'input_path'"):
         workflow.run()
     assert not (tmp_path / "unexpected.txt").exists()
@@ -88,7 +91,7 @@ def test_shared_path_references_still_work_locally_and_on_hpc(recipe, tmp_path):
             "param:output_path": "expr:const.output_dir & '/copy.txt'",
         }
     )
-    recipe["file_source"] = {"plugin": 'file_source', "core:run": True}
+    recipe["file_source"] = {"plugin": 'file_source', "core:run": True, "core:require_outputs": True}
     staged, uploads, _ = stage(recipe, tmp_path)
     transfer(uploads)
     Workflow(staged).run()
@@ -114,16 +117,16 @@ def test_unreferenced_matching_constant_does_not_require_its_producer(
     recipe.update(
         {
             "producer": {"plugin": 'producer', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": False,
                 "param:output_path": "expr:const.temp_dir & '/data.txt'",
                 "const:gain": "returned:$",
             },
             "cached": {"plugin": 'cached', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.output_dir & '/saved.txt'",
                 "param:gain": "const:gain",
             },
-            "inspect": {"plugin": 'inspect', "core:run": True},
+            "inspect": {"plugin": 'inspect', "core:run": True, "core:require_outputs": True},
         }
     )
     saved = tmp_path / "output/saved.txt"
@@ -144,7 +147,7 @@ def test_context_argument_is_never_injected(recipe, monkeypatch, defaulted):
         else (lambda context: observed.append(context))
     )
     install_function(monkeypatch, "inspect", function)
-    recipe["inspect"] = {"plugin": 'inspect', "core:run": True}
+    recipe["inspect"] = {"plugin": 'inspect', "core:run": True, "core:require_outputs": True}
     if defaulted:
         Workflow(recipe).run()
         assert observed == [None]
@@ -167,7 +170,7 @@ def test_context_argument_is_never_injected(recipe, monkeypatch, defaulted):
 def test_explicit_scope_arguments_track_runtime_dependencies_locally_and_on_hpc(
     recipe, tmp_path, monkeypatch, binding, scope
 ):
-    # This test exercises reuse/staging of retained intermediate checkpoints.
+    # This test exercises reuse/staging of retained intermediate context files.
     recipe["shared"]["core:delete_temp_steps_proactively"] = False
 
     def produce(output_path):
@@ -181,13 +184,14 @@ def test_explicit_scope_arguments_track_runtime_dependencies_locally_and_on_hpc(
     recipe.update(
         {
             "producer": {"plugin": 'producer', 
-                "core:run": True,
+                "core:run": True, "core:require_outputs": True,
                 "param:output_path": "expr:const.temp_dir & '/produced.txt'",
                 namespace + ":gain": "returned:$",
             },
-            "consumer": {"plugin": 'consumer', "core:run": True, "param:context": binding},
+            "consumer": {"plugin": 'consumer', "core:run": True, "core:require_outputs": True, "param:context": binding},
         }
     )
+    recipe["producer"].update(context_controls(tmp_path / "gain.json", namespace + ".gain"))
     workflow = Workflow(recipe)
     assert workflow.nodes[1].dependencies == {0}
     workflow.run()

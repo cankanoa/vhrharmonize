@@ -26,7 +26,6 @@ OUTPUT_PATH_FEATURES = (
     "output_temporary_cleanup_paths",
     "output_hpc_staging_paths",
     "output_hpc_download_paths",
-    "output_context_checkpoint_paths",
 )
 
 
@@ -53,7 +52,10 @@ class FunctionPlugin:
     temporary_directory_context_paths = ()
     output_directory_context_paths = ()
     scene_id_return = None
+    scene_path_return = None  # Primary path within each returned scene; used by core:satisfies and HPC mappings.
     source_file_protection_paths_return = None
+    directory_parameters = {}  # Declared directory context location -> function parameter accepting that directory.
+    discovery_input_parameter = None  # Optional parameter name for discovery upload labels.
     # Each set contains function argument names, not filenames. Opt in separately.
     input_dependency_paths = frozenset()
     input_existence_check_paths = frozenset()
@@ -62,7 +64,7 @@ class FunctionPlugin:
 
     output_path_resolution_paths = frozenset()
     output_dependency_paths = frozenset()
-    output_target_paths = frozenset()
+    output_target_paths = frozenset()  # Core fills this from core:require_outputs; adapters do not choose targets.
     output_parent_creation_paths = frozenset()
     output_collision_check_paths = frozenset()
     output_reuse_paths = frozenset()
@@ -72,14 +74,13 @@ class FunctionPlugin:
     output_temporary_cleanup_paths = frozenset()
     output_hpc_staging_paths = frozenset()
     output_hpc_download_paths = frozenset()
-    # First supplied selected output anchors .context.json.
-    output_context_checkpoint_paths = frozenset()
 
     def file_features(self):
         """Validate independent file-feature declarations without loading the function."""
         for name in (
             "scene_records_return",
             "scene_id_return",
+            "scene_path_return",
             "constant_values_return",
             "source_file_protection_paths_return",
         ):
@@ -100,6 +101,16 @@ class FunctionPlugin:
                 for selector in selectors
             ):
                 raise ValueError(f"{name} must contain const.field or var.field JSON locations")
+        locations = {*self.temporary_directory_context_paths, *self.output_directory_context_paths}
+        if not isinstance(self.directory_parameters, dict) or any(
+            location not in locations or not isinstance(parameter, str) or not parameter.isidentifier()
+            for location, parameter in self.directory_parameters.items()
+        ):
+            raise ValueError("directory_parameters must map declared directory context locations to parameter names")
+        if self.discovery_input_parameter is not None and (
+            not isinstance(self.discovery_input_parameter, str) or not self.discovery_input_parameter.isidentifier()
+        ):
+            raise ValueError("discovery_input_parameter must be a parameter name or None")
         obsolete = {
             "path_parameters",
             "output_parameters",
@@ -110,6 +121,7 @@ class FunctionPlugin:
             "scene_base_dir_return",
             "scene_input_paths_return",
             "scene_metadata_output_return",
+            "output_context_checkpoint_paths",
         }
         removed = sorted(name for name in obsolete if hasattr(self, name))
         if removed:
@@ -133,13 +145,22 @@ class FunctionPlugin:
             )
         return features
 
-    def restore(self, params):
-        return None
-
     target = ""
     aliases = {}
     options = set()  # Additional supported kwargs for functions with **kwargs.
     passthrough = False
+
+    def stage_settings(self, *, settings, params, returned, path_mappings, file_paths,
+                       discovery_paths, config_dir):
+        """Return param: overrides for discovery reruns after HPC path relocation.
+
+        Called only for discovery invocations that actually ran during planning.
+        Inputs are detached copies: rewritten YAML settings, resolved local params,
+        the function result, local-to-remote path mappings, individually mapped file
+        paths, all discovered source paths, and the local YAML directory. The default
+        needs no overrides; context-loaded steps do not rerun discovery or this hook.
+        """
+        return {}
 
     def function(self):
         module, name = self.target.split(":")

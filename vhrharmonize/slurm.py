@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from collections import deque
+from contextlib import nullcontext
 import datetime as dt
 import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Tuple
 
 import yaml
 
@@ -24,16 +27,20 @@ PATH_TEMPLATE_RUN_ID = "{run_id}"
 SLURM_PREPARE_CONFIG_KEYS = (
     "run_id",
     "workflow_config",
+    "run_to_step_before_prepare",
     "staged_workflow_file",
     "slurm_start_file",
     "staged_slurm_start_file",
     "staged_hpc_file",
     "debug_logs",
+    "show_progress",
     "enable_rsync_checksum",
     "override_download_conflict",
     "ssh_host",
     "ssh_user",
     "ssh_private_key",
+    "remote_work_dir",
+    "path_mappings",
     "remote_output_dir",
     "remote_log_dir",
     "remote_temp_dir",
@@ -63,6 +70,7 @@ LOG_HEADER_BY_KEY = {
     "staged_workflow_file": "# Generated files",
     "ssh_host": "# SSH login",
     "remote_output_dir": "# Remote directories.",
+    "remote_work_dir": "# Remote workspace and workflow path mappings.",
     "remote_workflow_config": "# Uploaded remote control files.",
     "remote_slurm_log_templates": "# Slurm log files.",
     "submitted_job_id": "# Job status.",
@@ -94,7 +102,7 @@ def _write_sectioned_yaml_file(
         handle.write("\n".join(lines).rstrip() + "\n")
 
 
-def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
+def _write_staged_hpc_file(path: str, data: Mapping[str, Any], *, source_path=None) -> None:
     """Write the staged HPC YAML with readable section comments."""
     ordered = dict(data)
     upload_results = ordered.pop("upload_results", None)
@@ -109,7 +117,14 @@ def _write_staged_hpc_file(path: str, data: Mapping[str, Any]) -> None:
         ordered["raw_slurm_log_text"] = raw_slurm_log_text
     if raw_status_text is not None:
         ordered["raw_status_text"] = raw_status_text
-    _write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
+    source = source_path or (path if os.path.isfile(path) else None)
+    if source:
+        from vhrharmonize.workflow.yaml_document import write_yaml_copy
+
+        original = _load_yaml_file(source)
+        write_yaml_copy(source, path, original, {**original, **ordered})
+    else:
+        _write_sectioned_yaml_file(path, ordered, header_by_key=LOG_HEADER_BY_KEY)
 
 
 def _make_run_id(now: dt.datetime | None = None) -> str:
@@ -174,13 +189,21 @@ def _validate_slurm_config(config: Mapping[str, Any]) -> None:
         "workflow_config",
         "ssh_host",
         "ssh_user",
-        "remote_output_dir",
         "remote_log_dir",
-        "remote_temp_dir",
-        "remote_reference_dir",
     )
     for key in required_keys:
         _require_config_value(config, key)
+    if "remote_work_dir" in config:
+        _require_config_value(config, "remote_work_dir")
+    else:
+        for key in ("remote_output_dir", "remote_temp_dir", "remote_reference_dir"):
+            _require_config_value(config, key)
+    from vhrharmonize.workflow.paths import validate_path_mappings
+
+    validate_path_mappings(config.get("path_mappings", {}))
+    cutoff = config.get("run_to_step_before_prepare")
+    if cutoff is not None and (not isinstance(cutoff, str) or not cutoff.strip()):
+        raise ValueError("run_to_step_before_prepare must be a named step or null")
     _require_config_value(config, "slurm_start_file")
     slurm_start_file = _require_config_value(config, "slurm_start_file")
     if not os.path.isfile(slurm_start_file):
@@ -207,6 +230,8 @@ def _validate_slurm_config(config: Mapping[str, Any]) -> None:
         raise ValueError("run_id must be a non-empty string when set.")
     if "debug_logs" in config:
         _parse_bool(config["debug_logs"], key="debug_logs")
+    if "show_progress" in config:
+        _parse_bool(config["show_progress"], key="show_progress")
     if "enable_rsync_checksum" in config:
         _parse_bool(config["enable_rsync_checksum"], key="enable_rsync_checksum")
     _download_conflict_mode(config.get("override_download_conflict", "validate"))
@@ -289,6 +314,9 @@ def _resolve_staged_slurm_start_file(
 
 def _resolve_slurm_paths(config: Mapping[str, Any], run_id: str) -> Dict[str, str]:
     """Resolve remote output, log, temp, and reference directories."""
+    if "remote_work_dir" in config:
+        return {key: _resolve_run_template(_require_config_value(config, key), run_id)
+                for key in ("remote_work_dir", "remote_log_dir")}
     return {
         "remote_output_dir": _resolve_run_template(_require_config_value(config, "remote_output_dir"), run_id),
         "remote_log_dir": _resolve_run_template(_require_config_value(config, "remote_log_dir"), run_id),
@@ -421,21 +449,38 @@ def prepare_slurm_plan(
     staged_hpc_file = _resolve_staged_hpc_file(slurm_config, config_path=config, run_id=resolved_run_id)
     workflow_config = _require_config_value(slurm_config, "workflow_config")
     workflow_config_data = load_config(workflow_config)
-    staged_config_data, input_uploads, output_downloads = stage_workflow(
-        workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
-        remote_output_dir=paths["remote_output_dir"], remote_temp_dir=paths["remote_temp_dir"],
-        remote_reference_dir=paths["remote_reference_dir"],
-    )
-    reference_uploads = {}
+    from vhrharmonize.workflow.yaml_document import preparation_config, write_yaml_copy
+
     staged_config = _resolve_staged_workflow_file(
         slurm_config, config_path=config, workflow_config=workflow_config, run_id=resolved_run_id,
     )
-    _write_yaml_file(staged_config, staged_config_data)
+    cutoff = slurm_config.get("run_to_step_before_prepare")
+    if cutoff is not None:
+        from vhrharmonize.workflow.api import run_workflow
+
+        prepared = preparation_config(workflow_config_data, cutoff)
+        preparation_file = str(Path(staged_config).with_suffix(".prepare.yml"))
+        if os.path.abspath(preparation_file) == os.path.abspath(workflow_config):
+            raise ValueError("Preparation copy must not overwrite workflow_config")
+        write_yaml_copy(workflow_config, preparation_file, workflow_config_data, prepared)
+        run_workflow(preparation_file, config_dir=os.path.dirname(os.path.abspath(workflow_config)), run_to_step=cutoff)
+    mappings = {key: _resolve_run_template(value, resolved_run_id)
+                for key, value in slurm_config.get("path_mappings", {}).items()}
+    staging_paths = {key: value for key, value in paths.items() if key != "remote_log_dir"}
+    upload_groups = []
+    staged_config_data, input_uploads, output_downloads = stage_workflow(
+        workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
+        **staging_paths, path_mappings=mappings,
+        context_staging_dir=staged_config + ".contexts",
+        upload_groups=upload_groups,
+    )
+    reference_uploads = {}
+    write_yaml_copy(workflow_config, staged_config, workflow_config_data, staged_config_data)
     staged_config_abs = os.path.abspath(staged_config)
     remote_workflow_config = _add_reference_upload(
         reference_uploads,
         staged_config_abs,
-        remote_reference_dir=paths["remote_reference_dir"],
+        remote_reference_dir=paths.get("remote_reference_dir") or os.path.join(paths["remote_work_dir"], "controls"),
     )
 
     slurm_start_file = _require_config_value(slurm_config, "slurm_start_file")
@@ -452,21 +497,25 @@ def prepare_slurm_plan(
     remote_slurm_start_file = _add_reference_upload(
         reference_uploads,
         staged_slurm_start_file,
-        remote_reference_dir=paths["remote_reference_dir"],
+        remote_reference_dir=paths.get("remote_reference_dir") or os.path.join(paths["remote_work_dir"], "controls"),
     )
     remote_slurm_log_templates = _resolve_remote_sbatch_log_templates(
         _parse_sbatch_log_templates(staged_slurm_start_file),
         remote_slurm_start_file=remote_slurm_start_file,
     )
+    upload_groups.append({"step": "controls", "variable": "workflow / sbatch",
+                          "files": sorted(reference_uploads)})
 
     slurm_data: Dict[str, Any] = {
         "run_id": resolved_run_id,
         "workflow_config": workflow_config,
+        "run_to_step_before_prepare": cutoff,
         "slurm_start_file": slurm_start_file,
         "staged_workflow_file": staged_config_abs,
         "staged_slurm_start_file": staged_slurm_start_file,
         "staged_hpc_file": staged_hpc_file,
         "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
+        "show_progress": _parse_bool(slurm_config.get("show_progress", True), key="show_progress"),
         "enable_rsync_checksum": _parse_bool(
             slurm_config.get("enable_rsync_checksum", False), key="enable_rsync_checksum"
         ),
@@ -477,6 +526,7 @@ def prepare_slurm_plan(
         "ssh_user": _require_config_value(slurm_config, "ssh_user"),
         **({"ssh_private_key": str(slurm_config["ssh_private_key"])} if slurm_config.get("ssh_private_key") else {}),
         **paths,
+        "path_mappings": mappings,
         "remote_workflow_config": remote_workflow_config,
         "remote_slurm_start_file": remote_slurm_start_file,
         "remote_slurm_log_templates": remote_slurm_log_templates,
@@ -485,11 +535,12 @@ def prepare_slurm_plan(
         "status": "prepared",
         "uploaded_input_paths": input_uploads,
         "uploaded_reference_paths": dict(sorted(reference_uploads.items())),
+        "upload_groups": upload_groups,
         "download_output_paths": output_downloads,
         "download_log_paths": {},
         "raw_status_text": "",
     }
-    _write_staged_hpc_file(staged_hpc_file, slurm_data)
+    _write_staged_hpc_file(staged_hpc_file, slurm_data, source_path=config)
     return slurm_data
 
 
@@ -540,24 +591,40 @@ def _run_local_command(
     check: bool = True,
     capture_output: bool = True,
     stream_output: bool = False,
+    output_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    if stream_output:
+    if stream_output or output_callback is not None:
         process = subprocess.Popen(  # nosec B603
             command,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        output_parts: List[str] = []
+        # Progress streams can be large. Keep only an error tail when a caller
+        # consumes records; universal newlines also split rsync's CR updates.
+        output_parts = deque(maxlen=50) if output_callback is not None else []
         if process.stdout is None:
             raise RuntimeError("Subprocess stdout pipe was not created")
-        while True:
-            chunk = process.stdout.read(1)
-            if not chunk:
-                break
-            print(chunk, end="", flush=True)
-            output_parts.append(chunk)
-        return_code = process.wait()
+        try:
+            if output_callback is not None:
+                for line in process.stdout:
+                    output_parts.append(line)
+                    output_callback(line.rstrip("\r\n"))
+            else:
+                while chunk := process.stdout.read(1):
+                    print(chunk, end="", flush=True)
+                    output_parts.append(chunk)
+            return_code = process.wait()
+        except BaseException:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            raise
+        finally:
+            process.stdout.close()
         output = "".join(output_parts)
         if check and return_code:
             raise subprocess.CalledProcessError(return_code, command, output=output)
@@ -668,6 +735,8 @@ def _iter_upload_maps(slurm_data: Mapping[str, Any]) -> Iterable[Tuple[str, str,
 
 
 def _upload_root_for_section(slurm_data: Mapping[str, Any], section: str) -> str:
+    if "remote_work_dir" in slurm_data and section in {"uploaded_input_paths", "uploaded_reference_paths"}:
+        return _require_config_value(slurm_data, "remote_work_dir")
     if section == "uploaded_input_paths":
         return _require_config_value(slurm_data, "remote_output_dir")
     if section == "uploaded_reference_paths":
@@ -727,17 +796,25 @@ def _rsync_upload_tree(
     *,
     stage_root: str,
     remote_root: str,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     debug = _debug_enabled(slurm_data)
     command = ["rsync", "-aL", "--itemize-changes"]
     if _parse_bool(slurm_data.get("enable_rsync_checksum", False), key="enable_rsync_checksum"):
         command.append("--checksum")
-    if debug:
+    if progress_callback is not None:
+        from .workflow.upload_progress import RSYNC_FORMAT
+
+        # Works with macOS openrsync as well as rsync 3.x.
+        command.extend(["--progress", f"--out-format={RSYNC_FORMAT}"])
+    elif debug:
         command.append("--info=progress2")
     command.extend(["--rsync-path", f"mkdir -p {_remote_quote(remote_root)} && rsync"])
     if _ssh_option_args(slurm_data):
         command.extend(["-e", _ssh_command_string(slurm_data)])
     command.extend([f"{stage_root.rstrip('/')}/", f"{_ssh_target(slurm_data)}:{remote_root.rstrip('/')}/"])
+    if progress_callback is not None:
+        return _run_local_command(command, output_callback=progress_callback)
     _debug(slurm_data, f"starting batched rsync to {remote_root}")
     return _run_local_command(command, capture_output=not debug, stream_output=debug)
 
@@ -746,51 +823,94 @@ def _group_upload_items_by_remote_root(
     slurm_data: Mapping[str, Any],
     upload_items: Iterable[Tuple[str, str, str]],
 ) -> Dict[str, List[Tuple[str, str, str, str]]]:
+    upload_items = list(upload_items)
+    labels = {os.path.abspath(filename): (group["step"], group["variable"])
+              for group in slurm_data.get("upload_groups", ()) for filename in group["files"]}
+    parents = {}
+    for section, local_path, remote_path in upload_items:
+        label = labels.get(os.path.abspath(local_path))
+        if label is not None and _remote_relative_to_root(remote_path, _upload_root_for_section(slurm_data, section)) is None:
+            parents.setdefault((section, label), []).append(_remote_parent(remote_path))
+    common_roots = {}
+    for label, paths in parents.items():
+        try:
+            root = posixpath.commonpath(paths)
+        except ValueError:
+            continue  # Absolute and home-relative destinations cannot share a batch root.
+        if root not in {"", ".", "/", "~"}:
+            common_roots[label] = root
     grouped: Dict[str, List[Tuple[str, str, str, str]]] = {}
     for section, local_path, remote_path in upload_items:
         remote_root = _upload_root_for_section(slurm_data, section)
         remote_relative_path = _remote_relative_to_root(remote_path, remote_root)
-        if remote_relative_path is None:
+        if remote_relative_path is None or remote_path.rstrip("/") == remote_root.rstrip("/"):
+            # A mapped directory may itself be the workspace root. Stage it
+            # beneath its parent rather than repeating the basename in it.
             remote_root = _remote_parent(remote_path)
             remote_relative_path = os.path.basename(remote_path)
+            root = common_roots.get((section, labels.get(os.path.abspath(local_path))))
+            if root is not None:
+                remote_root = root
+                remote_relative_path = _remote_relative_to_root(remote_path, root)
         grouped.setdefault(remote_root, []).append((section, local_path, remote_path, remote_relative_path))
-    return grouped
+    # Scene folders outside the run workspace still share a batched transfer.
+    # Fold smaller companion groups into an existing enclosing input batch.
+    batches = {}
+    for root in sorted(grouped, key=len):
+        parent = next((p for p in batches if _remote_relative_to_root(root, p) is not None), root)
+        batches.setdefault(parent, []).extend(
+            (section, local, remote, _remote_relative_to_root(remote, parent))
+            for section, local, remote, _ in grouped[root])
+    return batches
 
 
-def _upload_required_files(slurm_data: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
+def _upload_required_files(slurm_data: Mapping[str, Any], *, progress_callback=None) -> Dict[str, Dict[str, str]]:
     """Upload missing or stale files listed in the staged HPC YAML."""
+    from .workflow.upload_progress import TerminalUploadDisplay, UploadProgress
+
     results: Dict[str, Dict[str, str]] = {}
     upload_items = list(_iter_upload_maps(slurm_data))
-    _debug(slurm_data, f"checking {len(upload_items)} upload files")
     grouped_uploads = _group_upload_items_by_remote_root(slurm_data, upload_items)
-    for remote_root, grouped_items in grouped_uploads.items():
-        print(f"syncing {len(grouped_items)} files -> {remote_root}", flush=True)
+    display = TerminalUploadDisplay(stream=sys.stdout) if _parse_bool(
+        slurm_data.get("show_progress", True), key="show_progress") else None
+    callbacks = [callback for callback in (display.update if display else None, progress_callback) if callback is not None]
+    progress = UploadProgress(upload_items, groups=slurm_data.get("upload_groups", ()),
+                              path_mappings=slurm_data.get("path_mappings"), callbacks=callbacks)
+    with display if display is not None else nullcontext():
+        progress.publish(force=True)
         try:
-            with tempfile.TemporaryDirectory(prefix="vhr-hpc-upload-") as stage_root:
-                _stage_upload_tree(grouped_items, stage_root)
-                result = _rsync_upload_tree(slurm_data, stage_root=stage_root, remote_root=remote_root)
-            rsync_output = ((result.stdout or "") + (result.stderr or "")).strip()
-            status = "rsync_complete" if _debug_enabled(slurm_data) else ("synced" if rsync_output else "current")
-            print(f"{status} {len(grouped_items)} files -> {remote_root}", flush=True)
-            if rsync_output:
-                _debug(slurm_data, f"rsync output for {remote_root}: {rsync_output}")
-            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
-                results[local_path] = {"remote_path": remote_path, "status": status}
-        except Exception as exc:
-            print(f"sync error {len(grouped_items)} files -> {remote_root}", flush=True)
-            print(exc)
-            for _section, local_path, remote_path, _remote_relative_path in grouped_items:
-                results[local_path] = {"remote_path": remote_path, "status": "error", "error": str(exc)}
+            for remote_root, grouped_items in grouped_uploads.items():
+                progress.begin(remote_root, grouped_items)
+                with tempfile.TemporaryDirectory(prefix="vhr-hpc-upload-") as stage_root:
+                    _stage_upload_tree(grouped_items, stage_root)
+                    _rsync_upload_tree(slurm_data, stage_root=stage_root, remote_root=remote_root,
+                                       progress_callback=progress.consume)
+                progress.finish()
+                for _section, local_path, remote_path, _relative in grouped_items:
+                    entry = progress.files.get(remote_path)
+                    changed = entry["changed"] if entry is not None else any(
+                        entry["changed"] for name, entry in progress.files.items()
+                        if name.startswith(remote_path.rstrip("/") + "/"))
+                    results[local_path] = {"remote_path": remote_path, "status": "synced" if changed else "current"}
+            if not grouped_uploads:
+                progress.finish()
+        except BaseException as exc:
+            progress.finish(error=exc)
             raise
+    if display is None:
+        total = progress.snapshot()["total"]
+        print(f"Upload complete: {total['done']}/{total['files']} files ({total['current']} already current).", flush=True)
     return results
 
 
-def upload_slurm_files(config: str, *, overrides: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+def upload_slurm_files(config: str, *, overrides: Mapping[str, Any] | None = None,
+                       progress_callback: Callable[[dict], None] | None = None) -> Dict[str, Any]:
     """Prepare when needed, upload mapped files, and write upload results.
 
     Args:
         config: Local HPC recipe or prepared HPC YAML file.
         overrides: Optional mapping of HPC settings overriding values in the YAML.
+        progress_callback: Optional consumer of grouped upload progress snapshots.
     """
     slurm_data = _load_yaml_file(config)
     if "uploaded_input_paths" not in slurm_data and "uploaded_reference_paths" not in slurm_data:
@@ -804,12 +924,17 @@ def upload_slurm_files(config: str, *, overrides: Mapping[str, Any] | None = Non
     _debug(slurm_data, f"loaded upload config: {config}")
     _debug(slurm_data, f"ssh target: {_ssh_target(slurm_data)}")
     _debug(slurm_data, "step: upload files")
-    upload_results = _upload_required_files(slurm_data)
+    upload_results = _upload_required_files(slurm_data, **(
+        {"progress_callback": progress_callback} if progress_callback is not None else {}))
     slurm_data["upload_results"] = upload_results
     slurm_data["status"] = "uploaded"
     _debug(slurm_data, "step complete: upload files")
     _write_staged_hpc_file(output_path, slurm_data)
     return slurm_data
+
+
+# The dashboard is the CLI report; keep the full transfer map for Python callers.
+upload_slurm_files.__cli_output__ = False
 
 
 def _status_command(job_id: str) -> str:

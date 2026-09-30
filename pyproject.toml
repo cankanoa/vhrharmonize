@@ -143,7 +143,6 @@ vhr = "vhrharmonize.cli.main:main"
 
 [project.entry-points."vhrharmonize.plugins"]
 import_files = "vhrharmonize.plugins.import_files:ImportFiles"
-restore_scenes = "vhrharmonize.plugins.restore_scenes:RestoreScenes"
 file_source = "vhrharmonize.plugins.file_source:FileSource"
 fetch_atmosphere = "vhrharmonize.plugins.fetch_atmosphere:FetchAtmosphere"
 fetch_dem = "vhrharmonize.plugins.fetch_dem:FetchDEM"
