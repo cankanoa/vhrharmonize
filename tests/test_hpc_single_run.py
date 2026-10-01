@@ -270,3 +270,36 @@ def test_removed_scene_scope_is_rejected():
     plugin.scope = 'scene'
     with pytest.raises(ValueError, match='Plugin scope must be var or aggregate'):
         plugin.file_features()
+
+
+def test_discovery_cutoff_keeps_existing_graph_and_validation(monkeypatch, tmp_path):
+    source = tmp_path / 'raw.txt'
+    source.write_text('raw')
+    config = {'settings': shared(**{'const:root': str(tmp_path), 'core:report_progress': True}),
+              'import': importer(source),
+              'copy': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
+                       'param:input_path': 'var:raw', 'param:output_path': str(tmp_path / 'result.txt')}}
+    workflow = Workflow(hpc_preparation_config(config, 'import'), config_dir=tmp_path, preparing=True)
+    workflow.plan()
+    nodes = list(workflow.nodes)
+    monkeypatch.setattr(workflow, '_build', lambda *args: pytest.fail('Duplicate build'))
+    monkeypatch.setattr(workflow, '_valid', lambda *args: pytest.fail('Repeated file validation'))
+    workflow.run()
+    assert all(before is after for before, after in zip(nodes, workflow.nodes))
+    row = next(row for row in workflow.get_progress()['rows'] if row['name'] == 'copy')
+    assert row['disabled'] is True
+    assert row['active'] == 0
+
+
+def test_remote_suffix_is_not_built_before_local_return(monkeypatch, tmp_path):
+    install_function(monkeypatch, 'choose', lambda: {'name': 'chosen'})
+    install_function(monkeypatch, 'create', lambda output_path: None, output_paths=('output_path',))
+    config = {'settings': shared(**{'const:root': str(tmp_path)}),
+              'choose': {'plugin': 'choose', 'core:run': True, 'const:name': 'returned:name'},
+              'create': {'plugin': 'create', 'core:run': True, 'core:require_outputs': True,
+                         'param:output_path': "expr:const.root & '/' & const.name & '.txt'"}}
+    workflow = Workflow(hpc_preparation_config(config, 'choose'), config_dir=tmp_path, preparing=True)
+    assert [node.step['name'] for node in workflow.nodes] == ['choose']
+    workflow.run()
+    assert [node.step['name'] for node in workflow.nodes] == ['create']
+    assert workflow.nodes[0].params['output_path'] == str(tmp_path / 'chosen.txt')

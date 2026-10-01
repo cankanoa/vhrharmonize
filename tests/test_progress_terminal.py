@@ -239,3 +239,12 @@ def test_reject_invalid_history_cursor(history):
     data["message_history"] = history
     with pytest.raises(ValueError, match="Malformed"):
         validate_progress_snapshot(data)
+
+
+def test_disabled_plugin_call_is_shown_in_active_column():
+    data = snapshot()
+    data['rows'][0]['disabled'] = True
+    display = terminal.TerminalProgressDisplay(stream=StringIO())
+    text = "\n".join(to_plain_text(line) for line in display.table(data, width=180))
+    assert 'disabled' in text
+    assert data['rows'][0]['active'] == 1  # Rendering leaves numeric snapshot counts intact.

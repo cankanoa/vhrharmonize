@@ -57,6 +57,7 @@ class StepProgress:
     reused: int = 0
     done: int = 0
     pending: bool = False
+    disabled: bool = False
     peak_active: int = 0
     unused: int = 0
     worker_progress: bool = True
@@ -220,7 +221,10 @@ class WorkflowProgress:
                 if existing is not None and not existing.pending:
                     continue
                 nodes = [n for n in workflow.nodes if n.step_index == index]
-                pending = workflow.barrier_index is not None and index > workflow.barrier_index
+                pending = (workflow.barrier_index is not None and index > workflow.barrier_index) or (
+                    getattr(workflow, "preparation_build_index", None) is not None
+                    and index >= workflow.preparation_build_index
+                )
                 weights = [self.weight(node) for node in nodes]
                 history = getattr(workflow, "_historical_timings", {})
                 key = (name, step["plugin"] or "", workflow.controls["concurrent_processing_backend"])
@@ -231,6 +235,7 @@ class WorkflowProgress:
                     reused=sum(w for n, w in zip(nodes, weights) if n.loaded and n.status != "processing"),
                     unused=sum(w for n, w in zip(nodes, weights) if not n.needed),
                     worker_progress=self.supports_worker_progress(step),
+                    disabled=step.get("skip_plugin_call", False),
                     pending=pending, history=history.get(key, (0.0, 0)), workers=workers,
                 )
                 if step.get("calculate_overviews") and nodes:
@@ -243,6 +248,7 @@ class WorkflowProgress:
                             reused=sum(c for n, c in zip(nodes, counts) if n.loaded and n.status != "processing"),
                             unused=sum(c for n, c in zip(nodes, counts) if not n.needed),
                             worker_progress=False,
+                            disabled=step.get("skip_plugin_call", False),
                             history=history.get((label, *key[1:]), (0.0, 0)), workers=1,
                         )
             # Runtime scene discovery can add overview rows after later steps.
@@ -415,6 +421,7 @@ class WorkflowProgress:
             "fraction_done": row.done / row.run if row.run else None,
             "active": self.state.active(None if total else row.name),
             "pending": row.pending, "worker_progress": row.worker_progress,
+            "disabled": row.disabled,
             "status": status, "eta_seconds": eta,
         }
 

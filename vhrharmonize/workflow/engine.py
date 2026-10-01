@@ -666,6 +666,7 @@ class Workflow:
     def _build(self, start_index=0):
         self._log_core_start("build")
         self.barrier_index = None
+        self.preparation_build_index = None
         self.contexts = [deepcopy(r["context"]) for r in self.records]
         self.runtime_values = [{} for _ in self.records]
         self.constant_values = {}
@@ -678,6 +679,12 @@ class Workflow:
         self.step_names = [step["name"] for step in self.steps]
         for step_index in range(start_index, len(self.steps)):
             step = self.steps[step_index]
+            if self.preparing and step.get("skip_plugin_call", False) and any(
+                not node.step.get("skip_plugin_call", False) for node in self.nodes
+            ):
+                # Build the remote suffix only after actual local results exist.
+                self.preparation_build_index = step_index
+                break
             if not step["run"]:
                 continue
             if any(step.get(control) for control in LOAD_CONTROLS):
@@ -1884,10 +1891,11 @@ class Workflow:
         for record, values in zip(self.records, records):
             record["context"] = {"const": deepcopy(context["const"]), "var": deepcopy(values["var"])}
         self.initial_records = deepcopy(self.records)
-        self.nodes = []
-        self._planned = False
-        self._build(step_index)
-        self.plan()
+        if self.preparation_build_index is not None:
+            self.nodes = []
+            self._planned = False
+            self._build(step_index)
+            self.plan()
         if self._progress:
             self._progress.sync()
 

@@ -12,7 +12,11 @@ from typing import TypedDict
 PROGRESS_VERSION = 2
 
 
-class ProgressRow(TypedDict):
+class _RowExtras(TypedDict, total=False):
+    disabled: bool
+
+
+class ProgressRow(_RowExtras):
     name: str
     unused: int
     done: int
@@ -114,6 +118,8 @@ def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
                 number(row[key])
                 if not isinstance(row[key], int):
                     raise ValueError("Progress counts must be integers")
+            if "disabled" in row and not isinstance(row["disabled"], bool):
+                raise ValueError("Expected progress disabled boolean")
             for key in ("pending", "worker_progress"):
                 if not isinstance(row[key], bool):
                     raise ValueError("Expected progress boolean")

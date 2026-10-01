@@ -53,7 +53,7 @@ shared:
   plugin: shared
   core:run: true # true | false; default: false. Apply workflow-wide defaults.
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
-  core:output_metadata_path: expr:var.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
+  core:output_metadata_path: expr:var.output_dir & '/' & var.scene_id & '_processing_metadata.json' # One metadata file per scene, locally and on HPC.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
   # Shared parameters are offered to every function that accepts them; no shared defaults exist.
   # Set shared values directly; per-step param: settings override them.
