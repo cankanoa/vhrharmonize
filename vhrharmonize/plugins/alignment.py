@@ -54,6 +54,7 @@ def align_image_pair(
     fixed_nodata: float | None = None,
     custom_nodata_value: float | None = None,
     min_valid_fraction: float = 0.01,
+    warn_and_skip_non_overlap_images: bool = False,
     temp_dir: str | None = None,
     delete_temp_dir: bool = True,
     split_factor: int = 0,
@@ -82,6 +83,8 @@ def align_image_pair(
         fixed_nodata: Optional fixed-image nodata override.
         custom_nodata_value: Optional output nodata override.
         min_valid_fraction: Minimum valid overlap fraction required for registration.
+        warn_and_skip_non_overlap_images: Warn and copy the unchanged moving raster
+            to the output path when registration has insufficient valid overlap.
         temp_dir: Optional temp directory for coregix intermediates.
         delete_temp_dir: Whether to delete the coregix temp directory after alignment.
         split_factor: Chunking factor used by coregix; defaults to 0 (no chunking).
@@ -137,6 +140,7 @@ def align_image_pair(
         fixed_nodata=fixed_nodata,
         output_nodata=custom_nodata_value,
         min_valid_fraction=min_valid_fraction,
+        warn_and_skip_non_overlap_images=warn_and_skip_non_overlap_images,
         temp_dir=temp_dir,
         keep_temp_dir=not delete_temp_dir,
         clip_fixed_to_moving=clip_fixed_to_moving,

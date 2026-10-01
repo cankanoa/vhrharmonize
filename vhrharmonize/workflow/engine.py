@@ -1801,9 +1801,14 @@ class Workflow:
         from contextlib import ExitStack
         from .progress import WorkflowProgress
 
+        # Discovery/preflight steps have already finished and have no progress rows.
+        show_progress = self.controls["show_progress"] and any(
+            step["run"] and index not in self.preflight_steps
+            for index, step in enumerate(self.steps)
+        )
         with ExitStack() as stack:
             callbacks = []
-            if self.controls["show_progress"]:
+            if show_progress:
                 from .progress_terminal import TerminalProgressDisplay
 
                 display = stack.enter_context(TerminalProgressDisplay())
@@ -1811,7 +1816,7 @@ class Workflow:
             if progress_callback is not None:
                 callbacks.append(progress_callback)
             reporter = WorkflowProgress(
-                self, callbacks=callbacks,
+                self, callbacks=callbacks, echo_messages=not show_progress,
                 snapshot_path=progress_path if progress_path is not None else getattr(self, "progress_path", None),
             )
             self._progress = reporter
@@ -1831,7 +1836,7 @@ class Workflow:
             print(f"[workflow] Discovered {len(self.records)} input records")
             snapshot = self._progress.snapshot() if self._progress else None
             estimates = {row["name"]: row["eta_seconds"] for row in snapshot["rows"]} if snapshot else {}
-            if snapshot and snapshot["total"]["eta_seconds"] is not None:
+            if snapshot and snapshot["rows"] and snapshot["total"]["eta_seconds"] is not None:
                 print(f"[workflow] Estimated remaining runtime: ~{snapshot['total']['eta_seconds']:.0f}s")
             disabled_steps = {step["name"] for step in self.steps if not step["run"]}
             for step, counts in self.counts().items():

@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Tuple
 
 import yaml
 
+from vhrharmonize.io.logging import _log
 from vhrharmonize.workflow.config import load_config
 from vhrharmonize.progress import ProgressSnapshot
 
@@ -443,6 +444,8 @@ def prepare_slurm_plan(
     """
     slurm_config = _slurm_config_with_overrides(config, overrides)
     _validate_slurm_config(slurm_config)
+    log_enabled = _debug_enabled(slurm_config)
+    _log("Start", enabled=log_enabled, step="hpc:prepare")
     from vhrharmonize.workflow.staging import stage_workflow
     resolved_run_id = _resolve_run_id(slurm_config)
     paths = _resolve_slurm_paths(slurm_config, resolved_run_id)
@@ -463,11 +466,13 @@ def prepare_slurm_plan(
         if os.path.abspath(preparation_file) == os.path.abspath(workflow_config):
             raise ValueError("Preparation copy must not overwrite workflow_config")
         write_yaml_copy(workflow_config, preparation_file, workflow_config_data, prepared)
+        _log(f"Running local steps | through={cutoff}", enabled=log_enabled, step="hpc:prepare")
         run_workflow(preparation_file, config_dir=os.path.dirname(os.path.abspath(workflow_config)), run_to_step=cutoff)
     mappings = {key: _resolve_run_template(value, resolved_run_id)
                 for key, value in slurm_config.get("path_mappings", {}).items()}
     staging_paths = {key: value for key, value in paths.items() if key != "remote_log_dir"}
     upload_groups = []
+    _log("Staging workflow and planning transfers", enabled=log_enabled, step="hpc:prepare")
     staged_config_data, input_uploads, output_downloads = stage_workflow(
         workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
         **staging_paths, path_mappings=mappings,

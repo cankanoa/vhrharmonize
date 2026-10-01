@@ -107,6 +107,33 @@ def test_disable_does_not_start_dashboard(tmp_path, dashboards):
     assert dashboards == []
 
 
+def test_discovery_only_keeps_logs_and_snapshots_without_empty_dashboard(tmp_path, dashboards, capsys):
+    from vhrharmonize.workflow.api import load_workflow
+
+    config = recipe(tmp_path)
+    config["shared"].pop("core:show_progress")
+    context = tmp_path / "context.json"
+    config["files"].update({"core:save_context": {str(context): "all"},
+                            "core:load_context": {str(context): "all"}})
+    snapshot_path = tmp_path / "progress.json"
+    for _ in range(2):  # Fresh discovery and subsequent context loading.
+        snapshots = []
+        workflow = load_workflow(config, config_dir=tmp_path, run_to_step="files")
+        workflow.run(progress_callback=snapshots.append, progress_path=snapshot_path)
+        assert len(workflow.records) == 3
+        assert context.exists()
+        assert dashboards[-1].test_display is None
+        assert snapshots[-1]["rows"] == []
+        assert snapshots[-1]["status"] == "completed"
+        assert workflow.get_progress()["status"] == "completed"
+        assert snapshots[-1] == read_progress_snapshot(snapshot_path)
+        output = capsys.readouterr().out
+        assert "[workflow] Discovered 3 input records" in output
+        assert "[core:cleanup] Start" in output
+        assert "VHRHarmonize Workflow Progress" not in output
+        assert "Estimated remaining runtime" not in output
+
+
 def test_forced_reprocessing_is_not_counted_as_reused(tmp_path, dashboards):
     config = recipe(tmp_path)
     config["shared"]["core:run_from_existing"] = False

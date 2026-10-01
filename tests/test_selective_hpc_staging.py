@@ -82,8 +82,10 @@ def test_explicit_import_context_moves_without_raw_discovery_snapshot(tmp_path):
     assert (remote / "products/scene.txt").read_text() == "data"
 
 
-def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later(tmp_path):
+@pytest.mark.parametrize("debug_logs", [False, True])
+def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later(tmp_path, capsys, debug_logs):
     config, source = recipe(tmp_path)
+    config["settings"].update({"core:log_to_console": True, "core:show_progress": True})
     context = tmp_path / "context/import.json"
     config["import"]["core:save_context"] = {str(context): "defined"}
     config["import"]["core:load_context"] = {str(context): "defined"}
@@ -97,9 +99,21 @@ def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later
     hpc.write_text("# user HPC comments\n" + yaml.safe_dump({
         "workflow_config": str(workflow), "slurm_start_file": str(job), "ssh_host": "example.invalid", "ssh_user": "user",
         "run_id": "test", "remote_work_dir": str(tmp_path / "remote"), "remote_log_dir": str(tmp_path / "remote/logs"),
+        "debug_logs": debug_logs,
         "run_to_step_before_prepare": "import", "path_mappings": {"const:root": str(tmp_path / "remote")},
     }, sort_keys=False))
     plan = prepare_slurm_plan(str(hpc))
+    output = capsys.readouterr().out
+    if debug_logs:
+        assert output.startswith("[hpc:prepare] Start\n")
+        local = output.index("[hpc:prepare] Running local steps | through=import")
+        staging = output.index("[hpc:prepare] Staging workflow and planning transfers")
+        assert local < output.index("[core:workflow] Start") < staging
+        assert staging < output.rindex("[core:workflow] Start")
+    else:
+        assert "[hpc:prepare]" not in output
+    assert "VHRHarmonize Workflow Progress" not in output
+    assert "[core:cleanup] Start" in output
     assert context.exists()
     assert not (tmp_path / "products/scene.txt").exists()
     assert workflow.read_text() == text

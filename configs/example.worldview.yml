@@ -516,6 +516,7 @@ alignment:
   # param:fixed_nodata: null # number | null; default: null -> raster metadata.
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
   # param:min_valid_fraction: 0.01 # (0,1]; default: 0.01. Required valid overlap fraction in registration ROI.
+  param:warn_and_skip_non_overlap_images: true # true | false; default: false. Warn and copy the unchanged moving raster to the requested output when valid overlap is insufficient.
   # param:use_edge_proxies: true # true | false; default: true. Use edge imagery for registration.
   # param:split_factor: 0 # integer >= 0; default: 0. 0 disables chunking; k > 0 splits solve/apply domains into 2^k chunks.
   param:clip_fixed_to_moving: true # true | false; default: false. Clip the fixed domain to the moving footprint.

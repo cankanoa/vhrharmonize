@@ -56,7 +56,8 @@ def _metadata():
 
 
 @pytest.mark.parametrize("delete_temp", [None, False, True])
-def test_align_image_pair(monkeypatch, tmp_path: Path, delete_temp) -> None:
+@pytest.mark.parametrize("skip_non_overlap", [None, False, True])
+def test_align_image_pair(monkeypatch, tmp_path: Path, delete_temp, skip_non_overlap) -> None:
     calls = []
     alignment = importlib.import_module("vhrharmonize.plugins.alignment")
     monkeypatch.setattr(
@@ -66,11 +67,14 @@ def test_align_image_pair(monkeypatch, tmp_path: Path, delete_temp) -> None:
         or SimpleNamespace(output_image_path=kwargs["output_image_path"]),
     )
     options = {} if delete_temp is None else {"delete_temp_dir": delete_temp}
+    if skip_non_overlap is not None:
+        options["warn_and_skip_non_overlap_images"] = skip_non_overlap
     output = align_image_pair("moving.tif", "fixed.tif", str(tmp_path / "out.tif"), **options)
     assert output.output_image_path.endswith("out.tif")
     assert calls[0]["keep_temp_dir"] is (delete_temp is False)
     assert calls[0]["split_factor"] == 0
     assert calls[0]["output_on_moving_grid"] is False
+    assert calls[0]["warn_and_skip_non_overlap_images"] is (skip_non_overlap is True)
 
 
 def test_align_image_pair_rejects_removed_keep_temp_dir() -> None:

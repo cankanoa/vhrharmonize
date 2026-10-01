@@ -74,6 +74,10 @@ run_to_step_before_prepare: discover_inputs # null disables this optional local 
 
 Core writes a `.prepare.yml` copy beside the staged workflow. Later processing steps have `core:run: false`; earlier enable/disable choices remain intact. The named target and its dependencies run normally, including explicit context saves. The full original workflow is then used to generate the remote copy. You can instead prepare manually with `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
 
+With `debug_logs: true` in the HPC YAML, preparation logs its start, the local
+execution cutoff, and the start of staging. Discovery-only local runs keep their
+logs and progress snapshots but omit the empty workflow dashboard.
+
 The cutoff names a workflow step, independently of its `plugin:` selection.
 Both sensor examples use `discover_inputs` for that step; changing its plugin
 does not require changing the HPC cutoff. Discovery-specific path rewrites use
