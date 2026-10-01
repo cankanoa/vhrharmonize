@@ -76,7 +76,7 @@ def test_json_sequences_use_native_tuples_without_implicit_parameter_mapping(mon
             "image_threads": 1,
             "dask_scheduler": None,
         },
-        shared={"concurrent_processing": 8, "dask_scheduler_file": "not-implicitly-forwarded.json"},
+        shared={"concurrent_processing": 8, "dask_scheduler": ["file", "overridden.json"]},
     )
     args = call.call_args.kwargs
     assert args["window_scales"] == (2, 4) and args["vector_mask"] == (

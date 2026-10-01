@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping
 
 import geopandas as gpd
@@ -15,6 +14,7 @@ from shapely.wkt import loads as wkt_loads
 
 from vhrharmonize.workflow.concurrency import (
     _make_dask_client,
+    _validate_dask_scheduler,
     _resolve_concurrent_processing,
     _resolve_concurrent_processing_backend,
 )
@@ -140,19 +140,13 @@ def _iter_seamline_metadata_results(
     *,
     worker_count: int,
     backend: str,
-    dask_scheduler_file: str | None,
-    dask_scheduler_address: str | None,
+    dask_scheduler: tuple[str, str] | list[str] | None,
 ):
     """Yield footprints as workers finish, using the shared workflow backends."""
     if backend == "dask":
         from dask.distributed import as_completed as dask_as_completed
 
-        client = _make_dask_client(
-            SimpleNamespace(
-                dask_scheduler_file=dask_scheduler_file,
-                dask_scheduler_address=dask_scheduler_address,
-            )
-        )
+        client = _make_dask_client(dask_scheduler)
         futures = []
         try:
             with dask_worker_progress(current_callback(), client) as reporter:
@@ -268,8 +262,7 @@ def write_seamline_metadata_gpkg(
     log_to_console: bool = False,
     concurrent_processing: int | str = 1,
     concurrent_processing_backend: str = "process_pool",
-    dask_scheduler_file: str | None = None,
-    dask_scheduler_address: str | None = None,
+    dask_scheduler: tuple[str, str] | list[str] | None = None,
 ) -> str:
     """Calculate missing footprints in workers and commit each result in the parent.
 
@@ -286,6 +279,9 @@ def write_seamline_metadata_gpkg(
         raise ValueError(
             "concurrent_processing must be 1 when concurrent_processing_backend is 'dask'."
         )
+    _validate_dask_scheduler(dask_scheduler)
+    if backend == "dask" and dask_scheduler is None:
+        raise ValueError("Dask requires dask_scheduler: ['file', path] or ['address', URL].")
     if footprint_source not in {"calculate_bounds", "metadata"}:
         raise ValueError(f"Unsupported seamline metadata footprint source: {footprint_source}")
 
@@ -352,8 +348,7 @@ def write_seamline_metadata_gpkg(
         tasks,
         worker_count=worker_count,
         backend=backend,
-        dask_scheduler_file=dask_scheduler_file,
-        dask_scheduler_address=dask_scheduler_address,
+        dask_scheduler=dask_scheduler,
     )
     datasource = output_layer = None
     try:

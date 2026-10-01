@@ -54,7 +54,7 @@ DEFAULT_SHARED = {
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
 }
-SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler_address", "dask_scheduler_file"}
+SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler"}
 BOOLEANS = {
     "protect_source_files",
     "delete_final_json_first",

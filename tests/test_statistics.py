@@ -271,7 +271,7 @@ def test_dask_short_tasks_are_not_lost_between_refreshes(tmp_path, direction):
     with distributed.LocalCluster(n_workers=2, threads_per_worker=1, processes=False,
                                   dashboard_address=None) as cluster:
         config["shared"].update({"core:concurrent_processing_backend": "dask",
-                                  "core:dask_scheduler_address": cluster.scheduler_address})
+                                  "core:dask_scheduler": ["address", cluster.scheduler_address]})
         run_workflow(config, config_dir=str(tmp_path), event_callback=events.append)
     tasks = [e for e in events if e["kind"] == "task" and e["name"] != "files"]
     assert sorted(e["name"] for e in tasks) == ["deliver", "deliver", "prepare"]

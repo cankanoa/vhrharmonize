@@ -41,20 +41,31 @@ def _resolve_concurrent_processing_backend(value: object) -> str:
     return normalized
 
 
-def _make_dask_client(args):
-    """Create a Dask client from generic scheduler connection settings."""
-    scheduler_file = getattr(args, "dask_scheduler_file", None)
-    scheduler_address = getattr(args, "dask_scheduler_address", None)
-    if bool(scheduler_file) == bool(scheduler_address):
-        raise ValueError(
-            "Dask concurrency requires exactly one of dask_scheduler_file or dask_scheduler_address."
-        )
+def _validate_dask_scheduler(value):
+    """Accept the same file/address connection format as processing plugins."""
+    if value is not None and (
+        not isinstance(value, (list, tuple))
+        or len(value) != 2
+        or value[0] not in ("file", "address")
+        or not isinstance(value[1], str)
+        or not value[1].strip()
+    ):
+        raise ValueError("dask_scheduler must be ['file', path], ['address', URL], or None.")
+    return value
+
+
+def _make_dask_client(dask_scheduler):
+    """Connect to an existing scheduler using the common connection format."""
+    _validate_dask_scheduler(dask_scheduler)
+    if dask_scheduler is None:
+        raise ValueError("Dask requires dask_scheduler: ['file', path] or ['address', URL].")
     try:
         from dask.distributed import Client
     except ImportError as exc:
         raise ImportError(
             "Dask concurrency requires dask.distributed. Install dask[distributed] in the runtime environment."
         ) from exc
-    if scheduler_file:
-        return Client(scheduler_file=scheduler_file)
-    return Client(scheduler_address)
+    kind, target = dask_scheduler
+    if kind == "file":
+        return Client(scheduler_file=os.path.abspath(os.path.expanduser(target)))
+    return Client(target.strip())

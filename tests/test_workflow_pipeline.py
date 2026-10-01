@@ -331,7 +331,7 @@ def test_dask_executes_required_records_in_yaml_order(pipeline, make_test_raster
             "core:show_progress": False,  # This scheduling stub has no progress event transport.
             "core:save_statistics_path": None, "core:load_statistics_path": None,
             "core:processing_direction": "horizontal",
-            "core:dask_scheduler_address": "tcp://scheduler:8786",
+            "core:dask_scheduler": ["address", "tcp://scheduler:8786"],
         }
     )
     submitted = []

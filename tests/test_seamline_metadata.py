@@ -210,7 +210,32 @@ class SeamlineMetadataTests(unittest.TestCase):
             self.write(states)
         workers.assert_not_called()
 
+    def test_scheduler_inherits_shared_and_allows_step_override(self):
+        plugin = seamline_metadata.SeamlineMetadata()
+        params = dict(image_paths=[], output_path=self.output_path, metadata_records=[])
+        shared = dict(dask_scheduler=["file", "/tmp/scheduler.json"])
+        arguments = plugin.arguments(plugin.function(), params, shared)
+        self.assertEqual(arguments["dask_scheduler"], shared["dask_scheduler"])
+        params["dask_scheduler"] = ["address", "tcp://scheduler:8786"]
+        arguments = plugin.arguments(plugin.function(), params, shared)
+        self.assertEqual(arguments["dask_scheduler"], params["dask_scheduler"])
+
+    def test_invalid_or_missing_dask_scheduler_fails_before_writing(self):
+        self.kwargs["concurrent_processing_backend"] = "dask"
+        for value in (None, "scheduler.json", [], ["file"], ["other", "x"], ["file", ""], ["address", 12]):
+            with self.subTest(value=value):
+                self.kwargs["dask_scheduler"] = value
+                with self.assertRaisesRegex(ValueError, "dask_scheduler"):
+                    self.write([self.state("a.tif")])
+                self.assertFalse(Path(self.output_path).exists())
+
     def test_dask_submits_only_missing_images_and_writes_in_completion_order(self):
+        self.check_dask_scheduler(["address", "tcp://scheduler:8786"])
+
+    def test_dask_scheduler_file(self):
+        self.check_dask_scheduler(("file", "/tmp/scheduler.json"))
+
+    def check_dask_scheduler(self, scheduler):
         from concurrent.futures import Future
 
         with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
@@ -234,14 +259,14 @@ class SeamlineMetadataTests(unittest.TestCase):
         distributed = ModuleType("dask.distributed")
         distributed.as_completed = lambda futures: reversed(futures)
         dask.distributed = distributed
-        self.kwargs.update(concurrent_processing_backend="dask", dask_scheduler_address="tcp://scheduler:8786")
+        self.kwargs.update(concurrent_processing_backend="dask", dask_scheduler=scheduler)
         with patch.dict(sys.modules, {"dask": dask, "dask.distributed": distributed}), patch.object(
             seamline_metadata, "_make_dask_client", return_value=client,
         ) as make_client, patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(1, 1, 2, 2)):
             self.write([self.state(name) for name in ("a.tif", "b.tif", "c.tif")])
         self.assertEqual(submitted, ["b.tif", "c.tif"])
         self.assertEqual(list(self.read().image_basename), ["a.tif", "c.tif", "b.tif"])
-        self.assertEqual(make_client.call_args.args[0].dask_scheduler_address, "tcp://scheduler:8786")
+        self.assertEqual(make_client.call_args.args[0], scheduler)
         self.assertTrue(client.closed)
 
 

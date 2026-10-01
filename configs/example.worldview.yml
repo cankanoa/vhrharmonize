@@ -69,7 +69,6 @@ shared:
   param:tile_threads: 1 # cpu | positive integer | null; default: NA. Window workers.
   # param:cache: null # positive GB | null; default: NA. null keeps the existing GDAL cache.
   # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: NA. With Dask, set image_threads: null.
-  # Also set seamline_metadata.param:dask_scheduler_file/address for its VHR Dask workers.
   # param:calculation_dtype: float32 # raster dtype; default: NA.
   # param:save_as_cog: false # true | false; default: NA.
   # param:debug_logs: false # true | false; default: NA.
@@ -81,8 +80,7 @@ shared:
   # core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent workflow tasks; must be 1 for Dask.
   # param:concurrent_processing: 1 # positive integer | num_cpu; default: NA. Workers inside accepting functions (seamline_metadata); independent of core task scheduling.
   # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.
-  # core:dask_scheduler_file: ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json # path | null; default: null.
-  # core:dask_scheduler_address: tcp://scheduler-host:8786 # address | null; default: null. Alternative to scheduler_file.
+  # core:dask_scheduler: [file, ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json] # [file, path] | [address, URL] | null; default: null.
 
   # core:delete_temp_dir: false # true | false; default: false. Clean owned temporary outputs after success.
   # core:delete_temp_steps_proactively: true # true | false; default: true. Clean completed intermediates during processing.
@@ -639,8 +637,7 @@ seamline_metadata:
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Function workers; core scene scheduling is separate.
   # param:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
-  # param:dask_scheduler_file: null # path | null; default: null.
-  # param:dask_scheduler_address: null # address | null; default: null.
+  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Inherits shared.param:dask_scheduler.
 
 # Global radiometric regression between overlapping images.
 global_regression:

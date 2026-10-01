@@ -1,6 +1,8 @@
 """Plan file dependencies backward and execute ordered, prefixed plugin settings."""
 
 from __future__ import annotations
+
+from .concurrency import _make_dask_client
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
@@ -1565,17 +1567,11 @@ class Workflow:
                 yield node, self._progress.payload(node, payload, remote=remote) if self._progress else payload
 
         if backend == "dask" and pending[0].record is not None:
-            from dask.distributed import Client, as_completed as dask_completed
+            from dask.distributed import as_completed as dask_completed
 
             if workers != 1:
                 raise ValueError("Use concurrent_processing: 1 with Dask")
-            address = self.controls.get("dask_scheduler_address")
-            scheduler_file = self.controls.get("dask_scheduler_file")
-            if not address and not scheduler_file:
-                raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
-            with (
-                Client(address) if address else Client(scheduler_file=scheduler_file)
-            ) as client, self._progress.dask_client(client) if self._progress else nullcontext():
+            with _make_dask_client(self.controls.get("dask_scheduler")) as client, self._progress.dask_client(client) if self._progress else nullcontext():
                 futures = {
                     client.submit(_execute, payload, pure=False): node
                     for node, payload in dispatches(remote=True)
@@ -1697,17 +1693,11 @@ class Workflow:
         if not any(totals.values()):
             schedule()
         elif backend == "dask":
-            from dask.distributed import Client, as_completed as dask_completed
+            from dask.distributed import as_completed as dask_completed
 
             if workers != 1:
                 raise ValueError("Use concurrent_processing: 1 with Dask")
-            address = self.controls.get("dask_scheduler_address")
-            scheduler_file = self.controls.get("dask_scheduler_file")
-            if not address and not scheduler_file:
-                raise ValueError("Dask requires dask_scheduler_address or dask_scheduler_file")
-            with (
-                Client(address) if address else Client(scheduler_file=scheduler_file)
-            ) as client, self._progress.dask_client(client) if self._progress else nullcontext():
+            with _make_dask_client(self.controls.get("dask_scheduler")) as client, self._progress.dask_client(client) if self._progress else nullcontext():
                 try:
                     schedule(
                         lambda node, payload: client.submit(

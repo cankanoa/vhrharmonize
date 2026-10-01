@@ -381,7 +381,7 @@ Shared runner controls are:
 | `processing_direction` | `vertical` |
 | `concurrent_processing` | `1` |
 | `concurrent_processing_backend` | `process_pool` |
-| `dask_scheduler_address`, `dask_scheduler_file` | unset |
+| `dask_scheduler` | `null`; `[file, path]` or `[address, URL]` |
 
 The engine implements these controls; plugin functions do **not** need to accept them all. There is no mandatory set of raster parameters such as `custom_nodata_value`, `output_dtype`, `epsg` or `window_scales`. Functions accept the settings they support. Raster options use SpectralMatch names such as `custom_nodata_value`, `output_dtype` and `window_scales`. Native utilities that use `custom_output_dtype` retain that name; set it directly when overriding their dtype. The engine additionally uses shared `param:window_scales` when `core:calculate_overviews` requests raster overviews. Per-step `core:reuse` and `core:check_validity` override shared reuse/validation. Raster validation checks readability/TIFF bounds; JSON validation checks syntax.
 

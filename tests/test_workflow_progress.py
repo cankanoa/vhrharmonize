@@ -250,7 +250,7 @@ def test_dask_reports_events_and_removes_subscription(tmp_path, monkeypatch, das
     monkeypatch.setitem(sys.modules, "distributed", distributed)
     config = recipe(tmp_path, direction=direction)
     config["shared"].update({"core:concurrent_processing_backend": "dask",
-                              "core:dask_scheduler_address": "tcp://scheduler:8786"})
+                              "core:dask_scheduler": ["address", "tcp://scheduler:8786"]})
     Workflow(config).run()
     state = dashboards[-1].state
     assert state.total().done == state.total().run == 3
@@ -361,7 +361,7 @@ def test_real_dask_cluster(tmp_path, monkeypatch, dashboards):
     with distributed.LocalCluster(n_workers=2, threads_per_worker=1, processes=False,
                                   dashboard_address=None) as cluster:
         config["shared"].update({"core:concurrent_processing_backend": "dask",
-                                 "core:dask_scheduler_address": cluster.scheduler_address})
+                                 "core:dask_scheduler": ["address", cluster.scheduler_address]})
         Workflow(config).run()
     state = dashboards[-1].state
     assert state.total().done == state.total().run == 6
@@ -507,7 +507,7 @@ def test_public_callback_receives_live_dask_operations_without_a_display(tmp_pat
     with distributed.LocalCluster(n_workers=2, threads_per_worker=1, processes=False,
                                   dashboard_address=None) as cluster:
         config["shared"].update({"core:concurrent_processing_backend": "dask",
-                                 "core:dask_scheduler_address": cluster.scheduler_address})
+                                 "core:dask_scheduler": ["address", cluster.scheduler_address]})
         Workflow(config).run(progress_callback=receive)
     assert delivered.is_set()
     assert snapshots[-1]["total"]["done"] == snapshots[-1]["total"]["run"] == 6
