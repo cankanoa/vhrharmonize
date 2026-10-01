@@ -110,12 +110,12 @@ discover_inputs:
   plugin: import_files
   # Explicit persistence only. Missing load files warn (when logs are on), then discovery continues.
   # To refresh from the original metadata, leave load_context commented during that run.
+  # core:load_context:
+  #   "path:expr:const.temp_dir & '/context/import_metadata.json'": all
   core:save_context:
-    "path:expr:const.temp_dir & '/import_metadata.json'": all
-  core:load_context:
-    "path:expr:const.temp_dir & '/import_metadata.json'": all
-  # core:save_upsert_context: {"path:expr:const.temp_dir & '/metadata.json'": [var.metadata]}
-  # core:load_upsert_context: {"path:expr:const.temp_dir & '/metadata.json'": [var.metadata]}
+    "path:expr:const.temp_dir & '/context/import_metadata.json'": all
+  # core:load_upsert_context: {"path:expr:const.temp_dir & '/context/metadata.json'": [var.metadata]}
+  # core:save_upsert_context: {"path:expr:const.temp_dir & '/context/metadata.json'": [var.metadata]}
   # dependencies selects recursive param references; defined selects this step's assignments.
   # all saves/loads every context field; a successful load skips rediscovery and saving.
   core:run: true # true | false; default: false. Enable this step.
