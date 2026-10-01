@@ -60,7 +60,6 @@ vhr workflow --config "$1"
 # param:concurrent_processing_backend: dask
 # param:image_threads: null
 # param:dask_scheduler: [file, /remote/path/to/the/scheduler.json]
-# VHR seamline_metadata also needs param:dask_scheduler_file pointing to that file.
 # Use the same scheduler file below; core settings are not passed as function parameters.
 # SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json"
 # SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
