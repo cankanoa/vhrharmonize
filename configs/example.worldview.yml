@@ -569,7 +569,7 @@ setup_spectralmatch:
   # core: controls stay with VHR; core:calculate_overviews uses shared.param:window_scales.
   # Only state needed by later steps belongs in const:; ordinary settings remain param: values.
   const:spectralmatch.polygon_layer: seamline_metadata # Shared by footprint generation and seamline selection.
-  const:spectralmatch.image_field_name: image_path # Shared by footprint generation, seamlines and masking.
+  const:spectralmatch.image_field_name: image # Shared identifier field for footprint generation, seamlines and masking; image_path is reserved by SpectralMatch.
 
 # Jointly register overlapping imagery before matching.
 joint_coregistration:
