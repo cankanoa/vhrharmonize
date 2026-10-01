@@ -1,22 +1,37 @@
 """Stage required files by replacing declared roots in an ordinary workflow recipe."""
 
 from copy import deepcopy
+from functools import lru_cache
 import os
 from pathlib import Path
 import tempfile
 
 from .context_io import CONTEXT_CONTROLS, SAVE_CONTROLS, validate_snapshot
-from .engine import Workflow, _paths, _within
+from .engine import Workflow, _paths
 from .paths import directory_bindings, validate_path_mappings
 from .registry import load_plugin
 from .staging_files import context_path_value, remote_directory, selected_values, rewrite_file_assignments
-from .values import Deferred, lookup, path, remap_paths, contains_pending
+from .values import Deferred, lookup, path, remap_paths, contains_pending, references
 from vhrharmonize.io.metadata import write_json
+
+
+
+def _cached_path_containment():
+    """Resolve each path once per staging operation, retaining symlink semantics."""
+    realpath = lru_cache(maxsize=None)(os.path.realpath)
+
+    def within(filename, directory):
+        if isinstance(directory, (list, tuple)):
+            return any(within(filename, root) for root in directory)
+        resolved_root = realpath(directory)
+        return os.path.commonpath([realpath(filename), resolved_root]) == resolved_root
+
+    return within
 
 
 def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=None,
                    remote_output_dir=None, remote_temp_dir=None, remote_reference_dir=None,
-                   context_staging_dir=None, upload_groups=None):
+                   context_staging_dir=None, upload_groups=None, workflow=None):
     """Map directory roots or flatten selected files, and transfer dependencies.
 
     Modern staging requires mapping coverage for workflow data and context files.
@@ -30,10 +45,11 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
     elif not all((remote_output_dir, remote_temp_dir, remote_reference_dir)):
         raise ValueError("HPC staging requires remote_work_dir")
     mappings = validate_path_mappings({} if path_mappings is None else path_mappings)
-    workflow = Workflow(config, config_dir=config_dir).plan()
+    workflow = workflow if workflow is not None else Workflow(config, config_dir=config_dir).plan()
     if workflow.barrier_index is not None:
         raise ValueError("HPC staging requires known scenes and paths; use run_to_step_before_prepare to produce them first")
-    staged = deepcopy(workflow.config)
+    within = _cached_path_containment()
+    staged = deepcopy(config)
     context_groups = [[workflow.initial_context, *[record["context"] for record in workflow.initial_records]]]
     for index in dict.fromkeys(node.step_index for node in workflow.nodes):
         nodes = [node for node in workflow.nodes if node.step_index == index]
@@ -86,9 +102,15 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
                 for _, local in directory_bindings(context, {role: selectors}).items():
                     roots[local] = remote_temp_dir if role == "temp_dir" else remote_output_dir
 
+    ordered_roots = sorted(roots, key=len, reverse=True)
+
+    @lru_cache(maxsize=None)
+    def matching_root(local):
+        return next((root for root in ordered_roots if within(local, root)), None)
+
     def mapped(filename, owner="workflow"):
         local = path(filename, base_dir=config_dir)
-        root = next((root for root in sorted(roots, key=len, reverse=True) if _within(local, root)), None)
+        root = matching_root(local)
         if root is None:
             raise ValueError(f"{owner}: required path has no HPC root mapping or explicit file mapping: {local}")
         return roots[root] if local == root else os.path.join(roots[root], os.path.relpath(local, root))
@@ -109,6 +131,9 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
         if not node.needed:
             continue
         owner = node.step["name"]
+        if node.requirements_pending and not any(workflow.nodes[index].file_features["output_hpc_staging_paths"]
+                                                 for index in node.dependencies):
+            raise ValueError(f"{owner}: unresolved core:requires; advance run_to_step_before_prepare to identify external inputs")
         for feature, labels in (("input_hpc_staging_paths", sources), ("output_hpc_staging_paths", products)):
             for name, value in node.file_arguments(feature).items():
                 reference = node.step["settings"].get("param:" + name, "param:" + name)
@@ -117,11 +142,27 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
                 for filename in _paths(value):
                     labels.setdefault(filename, (owner, reference))
         for name, value in node.params.items():
-            if name in node.file_features["input_hpc_staging_paths"] | node.file_features["output_hpc_staging_paths"] and contains_pending(value):
-                raise ValueError(f"{owner}: HPC file parameter {name} must resolve during planning")
+            if node.status != "loaded" and name in node.file_features["input_hpc_staging_paths"] | node.file_features["output_hpc_staging_paths"] and contains_pending(value):
+                # Computed output names remain runtime expressions on the remote host.
+                # Unknown inputs need either a declared producer or explicit dependencies.
+                if name in node.file_features["input_hpc_staging_paths"]:
+                    producers = [workflow.nodes[index] for index in node.dependencies]
+                    if not node.requirements and not any(parent.file_features["output_hpc_staging_paths"] for parent in producers):
+                        raise ValueError(f"{owner}: unresolved HPC input {name}; declare core:requires or advance run_to_step_before_prepare")
+                elif name in node.file_features["output_hpc_download_paths"]:
+                    # A filename computed remotely is downloaded via its known containing directory.
+                    directories = list(node.directories["output_dir"])
+                    if not directories:
+                        refs = references(node.step["settings"].get("param:" + name))
+                        directories = [root for root, selector in root_selectors.items()
+                                       if root not in files and selector.replace(":", ".", 1) in refs]
+                    if not directories:
+                        raise ValueError(f"{owner}: unresolved output {name} needs a mapped output directory")
+                    for directory in directories:
+                        downloads[directory] = register(directory, owner)
         for filename in node.paths("output_hpc_staging_paths", "output_hpc_download_paths"):
             remote = register(filename, owner)
-            if filename in node.paths("output_hpc_download_paths") and (filename in node.paths("output_target_paths") if modern else not _within(filename, node.directories["temp_dir"])):
+            if filename in node.paths("output_hpc_download_paths") and (filename in node.paths("output_target_paths") if modern else not within(filename, node.directories["temp_dir"])):
                 downloads[filename] = remote
         if node.status == "loaded":
             needed.update(node.demanded_paths & set(node.paths("output_hpc_staging_paths")))
@@ -133,8 +174,12 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
 
     # Discovery is rerun remotely unless the recipe explicitly loads its context.
     # The importer records the actual files it read, including metadata/companions.
-    needed.update(workflow.discovery_sources)
-    needed.update(workflow.context_files.read_paths)
+    if workflow.preparation_state is None:
+        needed.update(workflow.discovery_sources)
+    prefix_names = {step["name"] for step in workflow.steps[:workflow.preparation_index]} if workflow.preparation_index is not None else set()
+    remaining_context_inputs = {filename for filename in workflow.context_files.read_paths
+                                if workflow.context_files.read_steps.get(filename) not in prefix_names}
+    needed.update(remaining_context_inputs)
     discovery_labels = {name: load_plugin(staged[name]["plugin"]).discovery_input_parameter
                         for name in set(workflow.discovery_source_steps.values())}
     sources.update({filename: (step, "param:" + discovery_labels[step] if discovery_labels[step] else "discovery")
@@ -143,8 +188,8 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
     sources.update({filename: (step, "core:load_context") for filename, step in workflow.context_files.read_steps.items()})
 
     # Explicit context files are normal declared data inputs/outputs, never hidden sidecars.
-    context_inputs = set(workflow.context_files.read_paths)
-    context_outputs = set(workflow.context_files.write_paths)
+    context_inputs = set(remaining_context_inputs)
+    context_outputs = set() if workflow.preparation_state is not None else set(workflow.context_files.write_paths)
     step_contexts = {step["name"]: [] for step in workflow.steps}
     for node in workflow.nodes:
         if node.needed:
@@ -152,6 +197,8 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
     for index in workflow.preflight_steps:
         step_contexts[workflow.steps[index]["name"]].extend(record["context"] for record in workflow.initial_records)
     for index, step in enumerate(workflow.steps):
+        if workflow.preparation_index is not None and index < workflow.preparation_index:
+            continue
         if not step["run"] or not step_contexts[step["name"]] and index not in workflow.preflight_steps:
             continue
         for context in step_contexts[step["name"]] or [workflow.initial_context]:
@@ -282,7 +329,7 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
             # assignment. Add the user's explicit mapping at that source step.
             for index in sorted(workflow.preflight_steps):
                 step = workflow.steps[index]
-                if load_plugin(step["plugin"]).scene_records_return and any(
+                if load_plugin(step["plugin"]).var_records_return and any(
                     workflow._known(record["context"], selector.replace(":", ".", 1))
                     for record in workflow.initial_records
                 ):
@@ -292,6 +339,8 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
         if not assigned:
             raise ValueError(f"Mapped root {selector} needs an explicit var:/const: definition in the recipe")
     for name, run in workflow.discovery_runs.items():
+        if workflow.preparation_state is not None:
+            continue
         plugin = load_plugin(staged[name]["plugin"])
         overrides = plugin.stage_settings(
             settings=deepcopy(staged[name]), params=deepcopy(run["params"]), returned=deepcopy(run["returned"]),
@@ -308,7 +357,7 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
     if not modern:
         for step in workflow.steps:
             plugin = load_plugin(step["plugin"])
-            if plugin.scene_records_return:
+            if plugin.var_records_return:
                 for selector in plugin.temporary_directory_context_paths:
                     if selector.startswith("const."):
                         staged[step["name"]][selector.replace(".", ":", 1)] = "path:" + remote_temp_dir
@@ -351,13 +400,48 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
             uploads[copy] = uploads.pop(filename)
             sources[copy] = sources.get(filename, ("context", "core:load_context"))
             root_selectors[copy] = next((root_selectors[root] for root in sorted(root_selectors, key=len, reverse=True)
-                                         if _within(filename, root)), "core:load_context")
+                                         if within(filename, root)), "core:load_context")
+    if workflow.preparation_state is not None:
+        # Imported existing outputs remain explicit bindings after their source
+        # plugin is replaced by the prepared-context loader.
+        overrides = {}
+        for node in workflow.nodes:
+            for parameter, value in node.parameter_overrides.items():
+                overrides.setdefault((node.step["name"], parameter), []).append(
+                    (node.pre_context, remap_paths(value, roots)))
+        for (name, parameter), pairs in overrides.items():
+            assignment = context_path_value(pairs, workflow, roots)
+            reference = config[name].get("param:" + parameter)
+            staged[name]["param:" + parameter] = assignment
+            if isinstance(reference, str) and reference.startswith(("var:", "const:")):
+                staged[name][reference] = assignment
+        if context_staging_dir is None:
+            context_staging_dir = tempfile.mkdtemp(prefix="vhr-staged-context-")
+        snapshot_file = str(Path(context_staging_dir) / "prepared.json")
+        remote_snapshot = os.path.join(remote_reference_dir, "prepared.json")
+        if remote_snapshot in destinations and destinations[remote_snapshot] != snapshot_file:
+            raise ValueError(f"Prepared context collides with staged data: {remote_snapshot}")
+        snapshot = remap_paths(workflow.preparation_state, roots)
+        if "scenes" in snapshot:
+            snapshot["scenes"] = {remap_paths(key, roots): value for key, value in snapshot["scenes"].items()}
+        write_json(snapshot_file, snapshot)
+        uploads[snapshot_file] = remote_snapshot
+        sources[snapshot_file] = ("preparation", "core:load_context")
+        prefix = {step["name"] for step in workflow.steps[:workflow.preparation_index]}
+        for name in prefix:
+            staged[name]["core:run"] = False
+        restore = "hpc_prepared_context"
+        while restore in staged:
+            restore = "_" + restore
+        # Shared blocks are evaluated before steps irrespective of their position.
+        staged = {restore: {"core:run": True, "core:load_context": {remote_snapshot: "all"}}, **staged}
+
     if upload_groups is not None:
         groups = {}
         for local, remote in sorted(uploads.items()):
             step, variable = sources.get(local, ("inputs", "paths"))
             variable = next((root_selectors[root] for root in sorted(root_selectors, key=len, reverse=True)
-                             if _within(local, root)), variable)
+                             if within(local, root)), variable)
             groups.setdefault((step, variable), []).append(local)
         upload_groups.extend({"step": step, "variable": variable, "files": files}
                              for (step, variable), files in groups.items())

@@ -17,7 +17,7 @@ def test_any_function_sets_plain_scenes_and_keeps_constants(monkeypatch, tmp_pat
             "items": [{"name": "a", "nested": {"gain": 2}}, {"name": "b", "nested": {"gain": 3}}],
             "destination": str(tmp_path / "results"),
         },
-        scene_records_return="items",
+        var_records_return="items",
     )
     install_function(
         monkeypatch, "consume", lambda name, gain, common: calls.append((name, gain, common))
@@ -56,11 +56,11 @@ def test_later_replacement_rebuilds_dependencies_and_scene_count(monkeypatch, tm
         monkeypatch,
         "seed",
         lambda: [{"n": 1}, {"n": 2}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     install_function(monkeypatch, "double", lambda n: n * 2)
     install_function(
-        monkeypatch, "reset", lambda values: [{"total": sum(values)}], scene_records_return="$"
+        monkeypatch, "reset", lambda values: [{"total": sum(values)}], var_records_return="$"
     )
     install_function(monkeypatch, "consume", lambda total, label: seen.append((total, label)))
     recipe = {
@@ -92,7 +92,7 @@ def test_scene_replacement_loads_explicit_snapshot_without_calling_function(monk
         "source",
         source,
         output_paths={"output_path"},
-        scene_records_return="data.items",
+        var_records_return="data.items",
         output_temporary_cleanup_paths=(),
     )
     install_function(monkeypatch, "consume", lambda n: seen.append(n))
@@ -119,14 +119,14 @@ def test_scene_replacement_loads_explicit_snapshot_without_calling_function(monk
 
 @pytest.mark.parametrize("returned", [None, {}, [3], ["bad"]])
 def test_invalid_scene_returns_fail_in_python_api(monkeypatch, tmp_path, returned):
-    install_function(monkeypatch, "source", lambda: returned, scene_records_return="$")
+    install_function(monkeypatch, "source", lambda: returned, var_records_return="$")
     with pytest.raises(ValueError, match="list of plain dictionaries"):
         run_workflow({"source": {"plugin": 'source', "core:run": True, "core:require_outputs": True}}, config_dir=tmp_path)
 
 
 def test_empty_replacement_still_runs_aggregate_functions(monkeypatch, tmp_path):
     calls = []
-    install_function(monkeypatch, "source", lambda: [], scene_records_return="$")
+    install_function(monkeypatch, "source", lambda: [], var_records_return="$")
     install_function(monkeypatch, "scene", lambda: pytest.fail("No scenes should run"))
     install_function(
         monkeypatch, "aggregate", lambda values: calls.append(values), scope="aggregate"
@@ -149,7 +149,7 @@ def test_dry_run_initializes_scenes_without_a_planning_opt_in(monkeypatch, tmp_p
         monkeypatch,
         "source",
         lambda: calls.append("source") or [{"n": 1}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     install_function(
         monkeypatch, "next", lambda n: pytest.fail("Processing does not run in dry-run")
@@ -168,7 +168,7 @@ def test_hpc_snapshot_works_with_a_custom_discovery_plugin(monkeypatch, tmp_path
         monkeypatch,
         "source",
         lambda: [{"n": 4}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     install_function(monkeypatch, "consume", lambda n: seen.append(n))
     recipe = {"source": {"plugin": 'source', "core:run": True, "core:require_outputs": True}, "consume": {"plugin": 'consume', "core:run": True, "core:require_outputs": True, "param:n": "var:n"}}
@@ -185,10 +185,10 @@ def test_disabled_source_neither_runs_nor_resets_scenes(monkeypatch, tmp_path):
         monkeypatch,
         "seed",
         lambda: [{"n": 1}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     install_function(
-        monkeypatch, "disabled", lambda: pytest.fail("Disabled"), scene_records_return="$"
+        monkeypatch, "disabled", lambda: pytest.fail("Disabled"), var_records_return="$"
     )
     workflow = Workflow(
         {"seed": {"plugin": 'seed', "core:run": True, "core:require_outputs": True}, "disabled": {"plugin": 'disabled', "core:run": False, "core:require_outputs": True}}, config_dir=tmp_path
@@ -203,10 +203,10 @@ def test_scene_reset_keeps_original_files_protected(monkeypatch, tmp_path):
         monkeypatch,
         "seed",
         lambda: [{"files": [str(original)]}],
-        scene_records_return="$",
+        var_records_return="$",
         source_file_protection_paths_return="files",
     )
-    install_function(monkeypatch, "reset", lambda: [{}], scene_records_return="$")
+    install_function(monkeypatch, "reset", lambda: [{}], var_records_return="$")
     install_function(
         monkeypatch,
         "write",
@@ -232,10 +232,10 @@ def test_scene_setters_require_aggregate_scope(monkeypatch, tmp_path):
         monkeypatch,
         "source",
         lambda: [{}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     with pytest.raises(ValueError, match="aggregate scope"):
-        Workflow({"source": {"plugin": 'source', "core:run": True, "core:require_outputs": True, "core:scope": "scene"}}, config_dir=tmp_path)
+        Workflow({"source": {"plugin": 'source', "core:run": True, "core:require_outputs": True, "core:scope": "var"}}, config_dir=tmp_path)
 
 
 def test_plugin_only_run_restores_scene_setter_or_reports_missing_outputs(monkeypatch, tmp_path):
@@ -249,7 +249,7 @@ def test_plugin_only_run_restores_scene_setter_or_reports_missing_outputs(monkey
         monkeypatch,
         "source",
         source,
-        scene_records_return="$",
+        var_records_return="$",
         output_paths={"output_path"},
         output_temporary_cleanup_paths=(),
     )
@@ -275,7 +275,7 @@ def test_planning_scene_replacement_preserves_independent_processing(monkeypatch
         monkeypatch,
         "source",
         lambda: calls.append("source") or [{"name": "a"}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     recipe = {
         "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},

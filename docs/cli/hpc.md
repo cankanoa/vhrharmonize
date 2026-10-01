@@ -137,14 +137,27 @@ pattern directly in `param:search_glob`; no `const:input_root` is needed. The tw
 files have separate constants and share a remote reference folder rather than
 being copied for each scene. Uploads under the common input directory remain batched.
 
-The WorldView example saves and loads the complete import context with `all`.
-`run_to_step_before_prepare: discover_inputs` creates or loads it before staging,
-and the existing `const:temp_dir` mapping places `import_metadata.json` in the
-remote temp directory. Locally, the example uses a stable `./temp` directory beside
-the workflow YAML so subsequent runs can load the same file before discovery.
-The examples do not need `project_root`. Additional context files outside mapped
-directories need their own mapping; statistics and generated workflow/sbatch
-control files are staged separately.
+`run_to_step_before_prepare` is the local plugin-call boundary. Preparation runs
+one workflow: steps through the named cutoff may call plugins, and later steps
+receive `core:skip_plugin_call: true` in the generated `.prepare.yml`. They remain
+in the dependency plan, but do not call plugins, compute overviews, or save
+processing results locally. `null` permits no local plugin calls. The alternate
+spelling `run_to_stop_before_prepare` is accepted; conflicting settings are rejected.
+
+The prepared constants and initialized `var` records are handed directly to
+staging and written to one relocated `prepared.json` control file. The remote
+recipe restores that state and disables the locally completed prefix. Discovery
+is not repeated, even when the original recipe does not load a saved context.
+Explicit context files remain supported. Preparation retains intermediates needed
+for upload instead of deleting them during cleanup.
+
+Paths derivable from configuration and prepared values are checked normally.
+Unresolved paths remain needed, with their expressions intact for remote execution.
+Dynamically named outputs require a known mapped output directory for downloading.
+An unresolved external input must have explicit `core:requires` dependencies or
+be resolved by advancing the local cutoff. If record discovery is still pending,
+advance the cutoff through that producer so staging can determine per-record inputs.
+Constants-only workflows need no record producer and can use a null cutoff.
 
 Required scene/context paths must be covered; missing coverage is an error.
 Mapping a directory to itself, or a file to its existing parent folder, keeps its

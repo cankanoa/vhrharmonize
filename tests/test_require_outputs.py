@@ -227,6 +227,7 @@ def test_hpc_yaml_accepts_reference_mappings_without_legacy_roots(tmp_path):
     hpc = tmp_path / "hpc.yml"
     hpc.write_text(yaml.safe_dump({
         "workflow_config": str(workflow_file), "slurm_start_file": str(sbatch),
+        "run_to_step_before_prepare": "files",
         "ssh_host": "example.invalid", "ssh_user": "test", "run_id": "test",
         "remote_work_dir": "/remote/{run_id}", "remote_log_dir": "/remote/logs",
         "path_mappings": {"const:root": "/remote/{run_id}/sources"},

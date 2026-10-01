@@ -104,7 +104,7 @@ def test_workflow_collects_once_or_fetches_per_scene(aggregate, dem_request, mak
         step.pop("const:dem_path")
         step.pop("param:output_tif_path")
         step.update({
-            "core:scope": "scene", "param:image_paths": "var:mul",
+            "core:scope": "var", "param:image_paths": "var:mul",
             "var:dem": "expr:const.temp_dir & '/fetch_dem/' & var.basename & '.tif'",
             "param:output_tif_path": "var:dem",
         })

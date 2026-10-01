@@ -39,7 +39,7 @@
 # The controls below enable those selected features; they do not select additional paths.
 # Every processing plugin accepts these runner controls alongside its param: settings:
 #   core:run: false # true | false; default: false. Enable explicitly.
-#   core:scope: scene # scene | aggregate; default: plugin scope; scene setters always aggregate.
+#   core:scope: var # var | aggregate; default: plugin scope; scene setters always aggregate.
 #   core:processing_direction: vertical # horizontal | vertical; default: shared.core:processing_direction.
 #   core:requires: [] # path/list; default: []. Extra file dependencies, not function arguments.
 #   core:calculate_overviews: false # true | false; default: false. Selected raster outputs; requires shared.param:window_scales.
@@ -232,7 +232,7 @@ file_source:
 # The DEM should contain WGS84 ellipsoidal heights in meters:
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
 # Enable to download one DEM covering all imported images; downstream const:dem_path links already use it.
-# For per-scene DEMs: set scope to scene, image_paths to var:current_image_paths, define var:dem as a unique path,
+# For per-scene DEMs: set scope to var, image_paths to var:current_image_paths, define var:dem as a unique path,
 # and use var:dem for output_tif_path and downstream DEM inputs.
 fetch_dem:
   plugin: fetch_dem

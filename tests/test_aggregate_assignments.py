@@ -200,7 +200,7 @@ def test_relative_batch_outputs_update_nested_scene_paths(tmp_path, monkeypatch)
 
 @pytest.mark.parametrize("invalid", [[1], {"wrong": 1, "keys": 2}, 1])
 def test_returned_mapping_is_validated_after_invocation(monkeypatch, tmp_path, invalid):
-    install_function(monkeypatch, "scenes", lambda: [{}, {}], scene_records_return="$")
+    install_function(monkeypatch, "scenes", lambda: [{}, {}], var_records_return="$")
     install_function(monkeypatch, "result", lambda: invalid, scope="aggregate")
     recipe = {"source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},
               "result": {"plugin": "result", "core:run": True, "core:require_outputs": True, "var:data": "returned:$"}}
@@ -210,7 +210,7 @@ def test_returned_mapping_is_validated_after_invocation(monkeypatch, tmp_path, i
 
 
 def test_scene_collect_can_write_same_named_shared_constant(monkeypatch):
-    install_function(monkeypatch, "scenes", lambda: [{"gain": 2}, {"gain": 3}], scene_records_return="$")
+    install_function(monkeypatch, "scenes", lambda: [{"gain": 2}, {"gain": 3}], var_records_return="$")
     seen = []
     install_function(monkeypatch, "inspect", lambda gain, all_gains: seen.append((gain, all_gains)))
     recipe = {
@@ -227,7 +227,7 @@ def test_scene_collect_can_write_same_named_shared_constant(monkeypatch):
 
 @pytest.mark.parametrize("assignment", ["var:gain", "returned:$", "expr:$", "expr:$lookup($, 'var').gain"])
 def test_scene_constants_reject_conflicting_scalar_values(monkeypatch, assignment):
-    install_function(monkeypatch, "scenes", lambda: [{"gain": 2}, {"gain": 3}], scene_records_return="$")
+    install_function(monkeypatch, "scenes", lambda: [{"gain": 2}, {"gain": 3}], var_records_return="$")
     install_function(monkeypatch, "inspect", lambda gain: gain)
     recipe = {
         "source": {"plugin": "scenes", "core:run": True, "core:require_outputs": True},

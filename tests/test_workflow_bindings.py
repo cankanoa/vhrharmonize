@@ -66,7 +66,7 @@ def test_disabled_steps_require_explicit_links_and_do_not_change_names(
     assert len(workflow.nodes) == 1 + first_enabled + second_enabled
 
 
-@pytest.mark.parametrize("scope", ["scene", "aggregate"])
+@pytest.mark.parametrize("scope", ["var", "aggregate"])
 def test_disabled_steps_do_not_load_resolve_export_or_change_metadata(recipe, monkeypatch, scope):
     from vhrharmonize.workflow import engine
 

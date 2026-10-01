@@ -109,9 +109,9 @@ def context_path_value(pairs, workflow, mapping, *, literal=False, plugin=None):
         load_plugin(step["plugin"]) for step in workflow.steps if step["run"]
     ]
     for candidate in plugins:
-        if not candidate.scene_records_return:
+        if not candidate.var_records_return:
             continue
-        for field, path_key in ((candidate.scene_path_return, True), (candidate.scene_id_return, False)):
+        for field, path_key in ((candidate.var_path_return, True), (candidate.var_id_return, False)):
             if not field:
                 continue
             selector = "var." + field
@@ -120,4 +120,4 @@ def context_path_value(pairs, workflow, mapping, *, literal=False, plugin=None):
                 return per_scene_value(keyed, selector=selector, path_key=path_key, literal=literal)
             except ValueError:
                 continue
-    raise ValueError("Per-scene HPC mappings need a declared scene_path_return or scene_id_return with unambiguous values")
+    raise ValueError("Per-scene HPC mappings need a declared var_path_return or var_id_return with unambiguous values")

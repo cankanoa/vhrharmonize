@@ -28,7 +28,7 @@ def test_names_select_instances_and_plugin_selects_implementation(monkeypatch):
 
 def test_context_steps_work_before_and_after_scene_discovery(monkeypatch):
     install_function(
-        monkeypatch, "discover", lambda: [{"name": "a"}, {"name": "b"}], scene_records_return="$"
+        monkeypatch, "discover", lambda: [{"name": "a"}, {"name": "b"}], var_records_return="$"
     )
     calls = []
     install_function(monkeypatch, "record", lambda value: calls.append(value))
@@ -109,7 +109,7 @@ def test_disabled_context_and_shared_steps_do_nothing(monkeypatch):
 
 def test_named_steps_and_context_setup_survive_hpc(monkeypatch, tmp_path):
     calls = []
-    install_function(monkeypatch, "discover", lambda: [{"n": 4}], scene_records_return="$")
+    install_function(monkeypatch, "discover", lambda: [{"n": 4}], var_records_return="$")
     install_function(monkeypatch, "record", lambda n: calls.append(n))
     recipe = {
         "settings": {"plugin": "shared", "core:run": True, "core:log_to_console": False},

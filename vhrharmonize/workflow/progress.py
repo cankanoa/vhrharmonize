@@ -191,7 +191,7 @@ def _plain_text(value):
 class WorkflowProgress:
     """Collect worker events and publish detached snapshots to parent consumers."""
 
-    def __init__(self, workflow, *, callbacks=(), snapshot_path=None, echo_messages=True):
+    def __init__(self, workflow, *, callbacks=(), snapshot_path=None):
         self.workflow = workflow
         workers = workflow.controls["concurrent_processing"]
         if workers == "num_cpu":
@@ -201,7 +201,6 @@ class WorkflowProgress:
         self.manager = None
         self.dask_topic = None
         self.snapshot_path = snapshot_path
-        self.echo_messages = echo_messages
         self.snapshot_status = "running"
         self.run_id = getattr(workflow, "_run_id", None) or uuid4().hex
         self.callbacks: list[ProgressCallback] = list(callbacks)
@@ -361,7 +360,7 @@ class WorkflowProgress:
             if event is None:
                 return
             self.state.handle(event)
-            if event["kind"] == "message" and self.echo_messages:
+            if event["kind"] == "message" and not self.workflow.controls["show_progress"]:
                 # Headless reporting must still preserve ordinary console logs.
                 with progress_context():
                     print(_plain_text(event["text"]), flush=True)

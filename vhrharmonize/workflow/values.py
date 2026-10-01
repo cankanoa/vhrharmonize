@@ -15,7 +15,7 @@ from jsonata.utils import Utils
 
 
 UNSET = object()
-VAR_UNAVAILABLE = "var is unavailable until a plugin initializes scenes with scene_records_return"
+VAR_UNAVAILABLE = "var is unavailable until a plugin initializes scenes with var_records_return"
 AGGREGATE_VAR = "Aggregate parameters have no single scene: use collect: to gather var values"
 
 
@@ -43,7 +43,7 @@ class PathResolver:
         return path(value, base_dir=self.base_dir)
 
 
-def require_scene_variables(context):
+def require_var_records(context):
     if "var" not in context:
         raise ValueError(VAR_UNAVAILABLE)
 
@@ -251,7 +251,7 @@ def expression_names(source):
 def expression(source, context, *, aggregate=False):
     names = expression_names(source)
     if any(name.startswith("var.") for name in names):
-        require_scene_variables(context)
+        require_var_records(context)
         if aggregate:
             raise ValueError(AGGREGATE_VAR)
     if any(
@@ -302,7 +302,7 @@ def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, re
         return (path_resolver or PathResolver())(resolved, path_key)
     if kind in {"var", "const"}:
         if kind == "var":
-            require_scene_variables(context)
+            require_var_records(context)
             if aggregate:
                 raise ValueError(AGGREGATE_VAR)
         return deepcopy(lookup(context[kind], text))
@@ -313,7 +313,7 @@ def resolve(value, context, *, returned=UNSET, records=None, aggregate=False, re
             raise Deferred("The current function has not returned yet")
         return deepcopy(lookup(returned, text))
     if kind == "collect":
-        require_scene_variables(context)
+        require_var_records(context)
         if records is None:
             raise ValueError("collect: values require initialized scene records")
         return [deepcopy(lookup(record["var"], text)) for record in records]
@@ -410,7 +410,7 @@ def aggregate_variables(records):
     return {name: [deepcopy(record["var"][name]) for record in records] for name in fields}
 
 
-def update_scene_variables(records, updates, scene_ids):
+def update_var_records(records, updates, scene_ids):
     """Apply aggregate var assignments without touching the shared constants."""
     for name, value in updates.items():
         if name.startswith("var."):
@@ -444,7 +444,7 @@ def evaluate_settings(
     if records is not None:
         records = deepcopy(records)
         scene_ids = list(map(str, range(len(records)))) if scene_ids is None else scene_ids
-        require_scene_variables(current)
+        require_var_records(current)
         if aggregate:
             current["var"] = aggregate_variables(records)
     params, updates, post = {}, {}, set()
@@ -459,7 +459,7 @@ def evaluate_settings(
         if kind == "core":
             continue
         if kind == "var":
-            require_scene_variables(current)
+            require_var_records(current)
         qualified = kind + "." + name
         if key in overridden_variables:
             assign(current[kind], name, overridden_variables[key])
@@ -520,7 +520,7 @@ def evaluate_settings(
             any(ref.startswith("var.") for ref in template_refs)
             or "var" in current and template_refs == {"*"}
         ):
-            require_scene_variables(current)
+            require_var_records(current)
             if not records:
                 raise ValueError(f"{key} needs a scene; use collect: for an empty collection")
             values = [evaluate({"const": current["const"], "var": r["var"]}) for r in records]
@@ -536,7 +536,7 @@ def evaluate_settings(
             if after:
                 post.add(kind + "." + name.split(".")[0])
             if kind == "var" and records is not None and aggregate:
-                update_scene_variables(records, {qualified: value}, scene_ids)
+                update_var_records(records, {qualified: value}, scene_ids)
                 current["var"] = aggregate_variables(records)
             else:
                 assign(current[kind], name, value)

@@ -103,6 +103,7 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
         yaml.safe_dump(
             {
                 "workflow_config": str(recipe),
+                "run_to_step_before_prepare": "import_files",
                 "slurm_start_file": str(sbatch),
                 "run_id": "example",
                 "ssh_host": "example.invalid",
@@ -121,7 +122,7 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
         tmp_path / "remote" / "output" / "image.tif"
     )
     config = load_config(plan["staged_workflow_file"])
-    assert list(config) == ["shared", "import_files", "file_source"]
+    assert list(config) == ["hpc_prepared_context", "shared", "import_files", "file_source"]
     for local, remote in plan["uploaded_input_paths"].items():
         Path(remote).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local, remote)

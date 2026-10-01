@@ -35,7 +35,7 @@ def copy_step(name, source, destination=None, *, suffix="", run=True, folder="te
 
 
 def install_function(
-    monkeypatch, name, function, *, scope="scene", input_paths=(), output_paths=(), **file_features
+    monkeypatch, name, function, *, scope="var", input_paths=(), output_paths=(), **file_features
 ):
     from vhrharmonize.workflow import registry
 

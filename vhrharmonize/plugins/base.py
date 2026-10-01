@@ -45,14 +45,14 @@ def json_value(value):
 
 
 class FunctionPlugin:
-    scope = "scene"
-    scene_records_return = None  # Returned field (or "$" for the whole result) containing scenes.
-    scene_records_mode = "replace"  # replace | merge (preserve existing fields, keyed by scene ID).
+    scope = "var"
+    var_records_return = None  # Returned field (or "$" for the whole result) containing scenes.
+    var_records_mode = "replace"  # replace | merge (preserve existing fields, keyed by scene ID).
     constant_values_return = None
     temporary_directory_context_paths = ()
     output_directory_context_paths = ()
-    scene_id_return = None
-    scene_path_return = None  # Primary path within each returned scene; used by core:satisfies and HPC mappings.
+    var_id_return = None
+    var_path_return = None  # Primary path within each returned scene; used by core:satisfies and HPC mappings.
     source_file_protection_paths_return = None
     directory_parameters = {}  # Declared directory context location -> function parameter accepting that directory.
     discovery_input_parameter = None  # Optional parameter name for discovery upload labels.
@@ -77,20 +77,22 @@ class FunctionPlugin:
 
     def file_features(self):
         """Validate independent file-feature declarations without loading the function."""
+        if self.scope not in {"var", "aggregate"}:
+            raise ValueError("Plugin scope must be var or aggregate")
         for name in (
-            "scene_records_return",
-            "scene_id_return",
-            "scene_path_return",
+            "var_records_return",
+            "var_id_return",
+            "var_path_return",
             "constant_values_return",
             "source_file_protection_paths_return",
         ):
             selector = getattr(self, name)
             if selector is not None and (not isinstance(selector, str) or not selector):
                 raise ValueError(f"{name} must be a returned-field selector or None")
-        if self.scene_records_mode not in {"replace", "merge"}:
-            raise ValueError("scene_records_mode must be replace or merge")
-        if self.scene_records_mode == "merge" and not self.scene_id_return:
-            raise ValueError("Merging scenes requires scene_id_return for stable scene identities")
+        if self.var_records_mode not in {"replace", "merge"}:
+            raise ValueError("var_records_mode must be replace or merge")
+        if self.var_records_mode == "merge" and not self.var_id_return:
+            raise ValueError("Merging scenes requires var_id_return for stable scene identities")
         for name in ("temporary_directory_context_paths", "output_directory_context_paths"):
             selectors = getattr(self, name)
             if not isinstance(selectors, (tuple, list, set, frozenset)) or any(
@@ -112,6 +114,10 @@ class FunctionPlugin:
         ):
             raise ValueError("discovery_input_parameter must be a parameter name or None")
         obsolete = {
+            "scene_records_return",
+            "scene_records_mode",
+            "scene_id_return",
+            "scene_path_return",
             "path_parameters",
             "output_parameters",
             "manages_reuse",

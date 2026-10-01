@@ -103,23 +103,25 @@ def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later
         "run_to_step_before_prepare": "import", "path_mappings": {"const:root": str(tmp_path / "remote")},
     }, sort_keys=False))
     plan = prepare_slurm_plan(str(hpc))
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out
     if debug_logs:
         assert output.startswith("[hpc:prepare] Start\n")
         local = output.index("[hpc:prepare] Running local steps | through=import")
         staging = output.index("[hpc:prepare] Staging workflow and planning transfers")
         assert local < output.index("[core:workflow] Start") < staging
-        assert staging < output.rindex("[core:workflow] Start")
+        assert output.count("[core:workflow] Start") == 1
     else:
         assert "[hpc:prepare]" not in output
-    assert "VHRHarmonize Workflow Progress" not in output
-    assert "[core:cleanup] Start" in output
+    assert "VHRHarmonize Workflow Progress" in captured.out + captured.err
+    assert "[core:cleanup] Start" not in captured.out + captured.err
     assert context.exists()
     assert not (tmp_path / "products/scene.txt").exists()
     assert workflow.read_text() == text
     prepared = Path(plan["staged_workflow_file"]).with_suffix(".prepare.yml").read_text()
     assert "# original recipe" in prepared and "# keep this comment" in prepared
-    assert yaml.safe_load(prepared)["copy"]["core:run"] is False
+    assert yaml.safe_load(prepared)["copy"]["core:run"] is True
+    assert yaml.safe_load(prepared)["copy"]["core:skip_plugin_call"] is True
     staged = Path(plan["staged_workflow_file"]).read_text()
     assert "# original recipe" in staged and "# keep this comment" in staged
     assert yaml.safe_load(staged)["copy"]["core:run"] is True
@@ -173,3 +175,44 @@ def test_all_import_context_and_cached_intermediate_avoid_source_upload(tmp_path
     transfer(uploads)
     Workflow(staged, config_dir=tmp_path).run()
     assert (remote / "finished.txt").read_text() == "data"
+
+
+def test_staging_containment_resolves_each_distinct_path_once(tmp_path, monkeypatch):
+    from vhrharmonize.workflow import staging
+
+    original = staging.os.path.realpath
+    calls = []
+
+    def counted(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(staging.os.path, "realpath", counted)
+    within = staging._cached_path_containment()
+    roots = [str(tmp_path / f"root{i}") for i in range(20)]
+    files = [str(tmp_path / "root0" / f"image{i}.tif") for i in range(30)]
+    for _ in range(2):
+        for filename in files:
+            for root in roots:
+                assert within(filename, root) == (root == roots[0])
+    assert len(calls) == len(roots) + len(files)
+
+
+def test_staging_containment_preserves_symlinks_and_cache_is_per_run(tmp_path):
+    from vhrharmonize.workflow.staging import _cached_path_containment
+    from vhrharmonize.workflow.engine import _within
+
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    within = _cached_path_containment()
+    for candidate in (alias / "new.tif", root / "escape" / "new.tif", tmp_path / "root_other" / "new.tif"):
+        assert within(str(candidate), str(root)) == _within(str(candidate), str(root))
+    assert within(str(alias / "new.tif"), [str(outside), str(root)])
+    alias.unlink()
+    alias.symlink_to(outside, target_is_directory=True)
+    assert not _cached_path_containment()(str(alias / "new.tif"), str(root))

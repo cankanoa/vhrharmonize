@@ -69,7 +69,7 @@ def test_shared_cannot_initialize_or_read_scene_variables(settings, tmp_path):
         )
 
 
-@pytest.mark.parametrize("scope", ["scene", "aggregate"])
+@pytest.mark.parametrize("scope", ["var", "aggregate"])
 @pytest.mark.parametrize(
     "settings",
     [
@@ -102,7 +102,7 @@ def test_ordinary_steps_run_before_scenes_and_publish_constants(monkeypatch, tmp
         monkeypatch,
         "source",
         lambda scale: [{"n": scale}, {"n": scale + 1}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     install_function(monkeypatch, "consume", lambda n: seen.append(n))
     workflow = Workflow(
@@ -140,7 +140,7 @@ def test_source_cannot_read_var_until_its_return_is_mapped(during_planning, monk
         monkeypatch,
         "source",
         lambda value: [{"n": value}],
-        scene_records_return="$",
+        var_records_return="$",
     )
     with pytest.raises(ValueError, match="var is unavailable"):
         Workflow(
@@ -152,7 +152,7 @@ def test_source_cannot_read_var_until_its_return_is_mapped(during_planning, monk
 @pytest.mark.parametrize("items", [[], [{}]])
 def test_empty_scene_list_and_empty_scene_dict_are_initialized(items, monkeypatch, tmp_path):
     seen = []
-    install_function(monkeypatch, "source", lambda: items, scene_records_return="$")
+    install_function(monkeypatch, "source", lambda: items, var_records_return="$")
     install_function(monkeypatch, "scene", lambda name: seen.append(name))
     install_function(
         monkeypatch, "aggregate", lambda scenes: seen.append(scenes), scope="aggregate"

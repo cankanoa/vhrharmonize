@@ -131,7 +131,7 @@ def test_custom_scene_json_locations_drive_output_paths_and_cleanup(tmp_path, mo
             }
             for name in ("a", "b")
         ],
-        scene_records_return="$",
+        var_records_return="$",
         temporary_directory_context_paths=("var.paths.cache",),
         output_directory_context_paths=("var.paths.products",),
     )
@@ -184,7 +184,7 @@ def test_source_protection_has_an_explicit_shared_switch(tmp_path, monkeypatch, 
         monkeypatch,
         "source",
         lambda: [{"files": [str(raw)]}],
-        scene_records_return="$",
+        var_records_return="$",
         source_file_protection_paths_return="files",
     )
     install_function(
@@ -323,7 +323,7 @@ def test_hpc_preserves_distinct_scene_directory_locations(tmp_path, monkeypatch)
         monkeypatch,
         "source",
         lambda: scenes,
-        scene_records_return="$",
+        var_records_return="$",
         temporary_directory_context_paths=("var.paths.work",),
         output_directory_context_paths=("var.paths.products",),
     )
@@ -363,7 +363,7 @@ def test_missing_declared_temp_directory_disables_cleanup(tmp_path, monkeypatch)
         monkeypatch,
         "source",
         lambda: [{}],
-        scene_records_return="$",
+        var_records_return="$",
         temporary_directory_context_paths=("var.work",),
     )
     install_function(

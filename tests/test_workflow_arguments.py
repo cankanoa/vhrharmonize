@@ -161,10 +161,10 @@ def test_context_argument_is_never_injected(recipe, monkeypatch, defaulted):
     "binding,scope",
     [
         ("const:$", "aggregate"),
-        ("var:$", "scene"),
+        ("var:$", "var"),
         ("expr:$", "aggregate"),
         ("const:", "aggregate"),
-        ("var:", "scene"),
+        ("var:", "var"),
     ],
 )
 def test_explicit_scope_arguments_track_runtime_dependencies_locally_and_on_hpc(

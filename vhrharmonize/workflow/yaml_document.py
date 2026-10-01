@@ -74,6 +74,15 @@ def rewrite_yaml(source, original, updated):
                     changes.append((start, line_end, replacement))
                 else:
                     changes.append((start, end, ""))
+            if node is tree:
+                # Step order is semantic: a new context loader must precede consumers.
+                for name in list(added):
+                    following = list(new)[list(new).index(name) + 1:]
+                    successor = next((key for key in following if key in entries and key not in removed), None)
+                    if successor is not None:
+                        offset = entries[successor][0].start_mark.index
+                        changes.append((offset, offset, fragment({name: new[name]}, 0) + newline))
+                        added.remove(name)
             if added:
                 indent = node.start_mark.column
                 # Insert after the last original value, before following comments.
@@ -138,4 +147,21 @@ def preparation_config(config, target):
         if name == target:
             settings["core:run"] = True
             after = True
+    return result
+
+
+def hpc_preparation_config(config, target):
+    """Keep the full graph, but permit plugin calls only through the local cutoff."""
+    if target is not None and (target not in config or config[target].get("plugin") == "shared"):
+        raise ValueError(f"Unknown preparation step: {target}")
+    result = deepcopy(config)
+    skip = target is None
+    for name, settings in result.items():
+        if settings.get("plugin") == "shared":
+            continue
+        settings["core:skip_plugin_call"] = skip or settings.get("core:skip_plugin_call", False)
+        if name == target:
+            settings["core:run"] = True
+            settings["core:require_outputs"] = True
+            skip = True
     return result

@@ -14,7 +14,7 @@ from workflow_helpers import install_function, import_settings, copy_step, stage
 def pipeline(monkeypatch, direction="horizontal"):
     events = []
     install_function(monkeypatch, "scenes", lambda: [{"name": "a"}, {"name": "b"}],
-                     scene_records_return="$")
+                     var_records_return="$")
 
     def function(stage):
         def call(value):
@@ -80,7 +80,7 @@ def test_collect_waits_for_all_preceding_scene_values(monkeypatch, aggregate):
         assert values == ["a", "b"]
         events.append(("gather", tuple(values)))
 
-    install_function(monkeypatch, "gather", gather, scope="aggregate" if aggregate else "scene")
+    install_function(monkeypatch, "gather", gather, scope="aggregate" if aggregate else "var")
     recipe["stage2"] = {"plugin": "gather", "core:run": True, "core:require_outputs": True, "param:values": "collect:value"}
     Workflow(recipe).run()
     assert events == [(1, "a"), (1, "b"), *[("gather", ("a", "b"))] * (1 if aggregate else 2),

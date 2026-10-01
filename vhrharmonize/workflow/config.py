@@ -25,6 +25,7 @@ UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _ma
 
 STEP_CONTROLS = {
     "run",
+    "skip_plugin_call",
     "scope",
     "reuse",
     "check_validity",
@@ -58,6 +59,7 @@ BOOLEANS = {
     "protect_source_files",
     "delete_final_json_first",
     "run",
+    "skip_plugin_call",
     "reuse",
     "check_validity",
     "calculate_overviews",
@@ -126,8 +128,8 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 or value.startswith(("var:", "const:", "expr:", "returned:", "collect:"))
             ):
                 raise ValueError(f"core:{name} must be a literal file path or null")
-            if name == "scope" and value not in {"scene", "aggregate"}:
-                raise ValueError("core:scope must be scene or aggregate")
+            if name == "scope" and value not in {"var", "aggregate"}:
+                raise ValueError("core:scope must be var or aggregate")
             if name == "processing_direction" and value not in ("horizontal", "vertical"):
                 raise ValueError("core:processing_direction must be horizontal or vertical")
             if name == "validity_check_grid_size" and (

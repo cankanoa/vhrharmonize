@@ -255,14 +255,14 @@ def test_var_directory_roots_survive_reimport_and_new_scenes_get_own_roots(tmp_p
 
 def test_merge_declaration_requires_stable_id_and_valid_mode():
     plugin = FunctionPlugin()
-    plugin.scene_records_return = "scenes"
-    plugin.scene_records_mode = "merge"
-    with pytest.raises(ValueError, match="scene_id_return"):
+    plugin.var_records_return = "scenes"
+    plugin.var_records_mode = "merge"
+    with pytest.raises(ValueError, match="var_id_return"):
         plugin.file_features()
-    plugin.scene_id_return = "name"
+    plugin.var_id_return = "name"
     plugin.file_features()
-    plugin.scene_records_mode = "invalid"
-    with pytest.raises(ValueError, match="scene_records_mode"):
+    plugin.var_records_mode = "invalid"
+    with pytest.raises(ValueError, match="var_records_mode"):
         plugin.file_features()
 
 

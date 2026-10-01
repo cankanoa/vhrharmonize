@@ -211,7 +211,7 @@ def test_prepare_records_control_group_and_progress_default(tmp_path):
     job = tmp_path / "job.sbatch"
     job.write_text("#!/bin/sh\n")
     hpc = tmp_path / "hpc.yml"
-    hpc.write_text(yaml.safe_dump(dict(workflow_config=str(workflow), slurm_start_file=str(job),
+    hpc.write_text(yaml.safe_dump(dict(workflow_config=str(workflow), slurm_start_file=str(job), run_to_step_before_prepare="import",
         ssh_user="user", ssh_host="example.invalid", remote_work_dir="/remote", remote_log_dir="/remote/logs",
         path_mappings={"const:root": "/remote"})))
     result = slurm.prepare_slurm_plan(str(hpc))

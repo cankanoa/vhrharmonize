@@ -49,7 +49,7 @@ from .values import (
     resolve,
     aggregate_variables,
     scene_values,
-    update_scene_variables,
+    update_var_records,
 )
 
 
@@ -120,7 +120,7 @@ def _arguments(features, params, context, settings, base_dir, *, scene_ids=None,
                     for i in range(len(scene_ids))
                 ]
                 update = {"var." + field: params[name]}
-                update_scene_variables(records, update, scene_ids)
+                update_var_records(records, update, scene_ids)
                 context["var"] = aggregate_variables(records)
                 if updates is not None:
                     updates.update(update)
@@ -191,12 +191,14 @@ class Node:
     file_features: dict = field(default_factory=dict)
     directory_locations: dict = field(default_factory=dict)
     runtime_directory_context: dict | None = None
+    requirements_pending: bool = False
 
     def file_arguments(self, *features):
         return _selected(self.params, set().union(*(self.file_features[f] for f in features)))
 
     def paths(self, *features):
-        return _paths(self.file_arguments(*features))
+        names = set().union(*(self.file_features[feature] for feature in features))
+        return [filename for name, value in self.params.items() if name in names for filename in _paths(value)]
 
     @property
     def directories(self):
@@ -247,7 +249,7 @@ def _execute(payload):
 
 class Workflow:
     @timed_core("initialization")
-    def __init__(self, config, *, config_dir=".", selected_plugin=None, selected_step=None):
+    def __init__(self, config, *, config_dir=".", selected_plugin=None, selected_step=None, preparing=False):
         self._timing_lock = RLock()
         self._timing_buffer = []
         self._timing_callbacks = None
@@ -259,6 +261,17 @@ class Workflow:
         self.selected_step = selected_step
         self.config = validate_config(config)
         self.steps = steps(self.config)
+        self.preparing = preparing
+        self.preparation_state = None
+        self.preparation_index = None
+        self.has_skipped_calls = any(step.get("skip_plugin_call", False) for step in self.steps)
+        skipping = False
+        for step in self.steps:
+            if not step["run"]:
+                continue
+            if skipping and not step.get("skip_plugin_call", False):
+                raise ValueError("Skipped plugin calls must form a suffix of the workflow")
+            skipping |= step.get("skip_plugin_call", False)
         if selected_step is not None:
             matching = [i for i, step in enumerate(self.steps) if step["name"] == selected_step]
             if not matching:
@@ -318,8 +331,8 @@ class Workflow:
                 continue
             plugin = load_plugin(step["plugin"])
             plugin.file_features()
-            if not plugin.scene_records_return or not plugin.scene_path_return:
-                raise ValueError("core:satisfies requires a plugin declaring scene_records_return and scene_path_return")
+            if not plugin.var_records_return or not plugin.var_path_return:
+                raise ValueError("core:satisfies requires a plugin declaring var_records_return and var_path_return")
             for name, parameter in step["satisfies"].items():
                 if name not in configured:
                     raise ValueError(f"{step['name']}: unknown satisfies step {name}")
@@ -353,9 +366,9 @@ class Workflow:
                 self.start_index = index + 1
                 continue
             plugin = load_plugin(step["plugin"])
-            if plugin.scene_records_return or step["plugin"] is None and any(step.get(control) for control in LOAD_CONTROLS):
+            if plugin.var_records_return or step["plugin"] is None and any(step.get(control) for control in LOAD_CONTROLS):
                 constants, self.records = self._load_context_collection(step, self.initial_context["const"], self.records,
-                                                                      establish_scenes=bool(plugin.scene_records_return))
+                                                                      establish_scenes=bool(plugin.var_records_return))
                 initialized = self.records or "var" in self.initial_context or step["name"] in self.context_files.scene_loads
                 self.initial_context = {"const": constants, **({"var": {}} if initialized else {})}
             if step["plugin"] is None and any(step.get(control) for control in LOAD_CONTROLS):
@@ -369,11 +382,12 @@ class Workflow:
                     self.initial_context["const"] = deepcopy(constants)
                 else:
                     self.initial_context = self._evaluate(step["settings"], self.initial_context, path_scope=(step["name"], None))[2]
-                self.context_files.save(step, self.initial_context["const"], self.records)
+                if not step.get("skip_plugin_call", False):
+                    self.context_files.save(step, self.initial_context["const"], self.records)
                 self.preflight_steps.add(index)
                 self.start_index = index + 1
                 continue
-            if not plugin.scene_records_return:
+            if not plugin.var_records_return:
                 break
             features = _target_features(plugin, step)
             self._register_directories(plugin)
@@ -412,6 +426,8 @@ class Workflow:
                 self.preflight_steps.add(index)
                 self.start_index = index + 1
                 continue
+            if step.get("skip_plugin_call", False):
+                break
             if file_parameter_names(features, "output"):
                 break  # File-producing scene functions use normal planning below.
             if step.get("scope", "aggregate") != "aggregate":
@@ -463,13 +479,13 @@ class Workflow:
                 settings, self.initial_context, path_scope=(step["name"], None), returned=returned, constants=frozen,
                 aggregate=True, records=scene_records, scene_ids=scene_ids,
             )
-            self._update_scenes(plugin, step, returned, current)
+            self._update_var_records(plugin, step, returned, current)
             self.discovery_sources.update(p for record in self.records for p in record["source_paths"])
             for filename in self.discovery_sources:
                 self.discovery_source_steps.setdefault(filename, step["name"])
             imported_ids = {
-                str(lookup(item, plugin.scene_id_return)) if plugin.scene_id_return else str(i)
-                for i, item in enumerate(lookup(returned, plugin.scene_records_return))
+                str(lookup(item, plugin.var_id_return)) if plugin.var_id_return else str(i)
+                for i, item in enumerate(lookup(returned, plugin.var_records_return))
             }
             self.context_files.save(step, self.initial_context["const"],
                                     [record for record in self.records if record["id"] in imported_ids])
@@ -491,7 +507,7 @@ class Workflow:
     def _register_satisfied_outputs(self, step, records, *, loaded=False):
         if not step.get("satisfies"):
             return
-        primary = load_plugin(step["plugin"]).scene_path_return
+        primary = load_plugin(step["plugin"]).var_path_return
         selectors = [primary]
         if loaded:
             selectors.extend(key[4:] for key, value in step["settings"].items()
@@ -500,7 +516,7 @@ class Workflow:
             fields = record["context"]["var"]
             filename = next((lookup(fields, selector) for selector in selectors if self._known(fields, selector)), None)
             if not isinstance(filename, str) or not filename:
-                raise ValueError(f"{step['name']}: scene_path_return {primary!r} must supply one file path")
+                raise ValueError(f"{step['name']}: var_path_return {primary!r} must supply one file path")
             for target, parameter in step["satisfies"].items():
                 key = (target, parameter, record["id"])
                 if key in self.satisfied and self.satisfied[key] != filename:
@@ -524,11 +540,11 @@ class Workflow:
     @staticmethod
     def _settings(step, plugin=None):
         plugin = plugin or load_plugin(step["plugin"])
-        discovered = Workflow._discovered_constants(step) if plugin.scene_records_return else {}
+        discovered = Workflow._discovered_constants(step) if plugin.var_records_return else {}
         return {
             key: value
             for key, value in step["settings"].items()
-            if not (plugin.scene_records_return and key.startswith("var:")) and key not in discovered
+            if not (plugin.var_records_return and key.startswith("var:")) and key not in discovered
         }
 
     def _register_directories(self, plugin):
@@ -542,8 +558,8 @@ class Workflow:
             context, self.directory_locations, base_dir=self.config_dir, required=required
         )
 
-    def _update_scenes(self, plugin, step, returned, context):
-        merge = plugin.scene_records_mode == "merge"
+    def _update_var_records(self, plugin, step, returned, context):
+        merge = plugin.var_records_mode == "merge"
         if self.controls["protect_source_files"]:
             self._retained_protected_paths.update(
                 p for record in self.records for p in record["source_paths"]
@@ -564,10 +580,10 @@ class Workflow:
                 context["const"].update(deepcopy(constants))
             for name, value in explicit.items():
                 assign(context["const"], name, value)
-        scenes = lookup(returned, plugin.scene_records_return)
+        scenes = lookup(returned, plugin.var_records_return)
         if not isinstance(scenes, list) or any(not isinstance(item, dict) for item in scenes):
             raise ValueError(
-                f"{step['plugin']}.{plugin.scene_records_return} must return a list of plain dictionaries"
+                f"{step['plugin']}.{plugin.var_records_return} must return a list of plain dictionaries"
             )
         # Validate actual JSON, without silently stringifying arbitrary Python objects.
         scenes = json.loads(json.dumps(scenes, allow_nan=False))
@@ -583,7 +599,7 @@ class Workflow:
             def field(selector, default):
                 return lookup(item, selector) if selector else default
 
-            scene_id = str(field(plugin.scene_id_return, index))
+            scene_id = str(field(plugin.var_id_return, index))
             if scene_id in seen:
                 raise ValueError("Scene identifiers must be unique")
             seen.add(scene_id)
@@ -638,7 +654,7 @@ class Workflow:
         self.records = records
         if step.get("satisfies"):
             self._register_satisfied_outputs(step, [
-                {"id": str(lookup(item, plugin.scene_id_return)) if plugin.scene_id_return else str(index),
+                {"id": str(lookup(item, plugin.var_id_return)) if plugin.var_id_return else str(index),
                  "context": {"var": item}}
                 for index, item in enumerate(scenes)
             ])
@@ -652,7 +668,7 @@ class Workflow:
         self.runtime_values = [{} for _ in self.records]
         self.constant_values = {}
         self.constant_steps = {}
-        self.scene_constant_writes = {}
+        self.var_constant_writes = {}
         self._restored_nodes = set()
         self.context = deepcopy(self.initial_context)
         producers = [{} for _ in self.records]
@@ -686,15 +702,17 @@ class Workflow:
             self._register_directories(plugin)
             input_names = file_parameter_names(features, "input")
             output_names = file_parameter_names(features, "output")
-            source = plugin.scene_records_return is not None
+            source = plugin.var_records_return is not None
             if source and step.get("scope", "aggregate") != "aggregate":
                 raise ValueError("Scene-setting plugins run once with aggregate scope")
             initialized = "var" in self.context
+            if step.get("scope") == "var" and not initialized:
+                raise ValueError(f"{step['name']}: core:scope var requires initialized var records")
             scope = "aggregate" if source or not initialized else step.get("scope", plugin.scope)
             settings = self._settings(step, plugin)
             constants = {}
             step_producers = deepcopy(constant_producers)
-            if scope == "scene":
+            if scope == "var":
                 constants_settings = constant_settings(settings, owner=step["plugin"])
                 before = {"const": deepcopy(self.context["const"]), "var": {}}
                 _, constants, constant_context, _ = self._evaluate(
@@ -768,11 +786,11 @@ class Workflow:
                     aggregate=record_index is None,
                     scene_ids=[r["id"] for r in self.records],
                     planning=True,
-                    constants=constants if scope == "scene" else None,
+                    constants=constants if scope == "var" else None,
                     restored=self.context_files.restored(step, scene_id),
                     parameter_overrides=overrides,
                 )
-                if scope == "scene":
+                if scope == "var":
                     updates = {k: v for k, v in updates.items() if k not in constants}
                 for name in input_names | output_names:
                     if name not in params:
@@ -806,20 +824,24 @@ class Workflow:
                             f"{step['name']} core:require_outputs param:{name} must resolve to "
                             "a nonempty path or flat list of paths"
                         )
-                requirements = (
-                    _paths(
-                        path(
-                            self._resolve(
-                                step["requires"],
-                                current,
-                                records=self.contexts if record_index is None else None,
-                            ),
-                            base_dir=base_dir,
+                requirements_pending = False
+                try:
+                    requirements = (
+                        _paths(
+                            path(
+                                self._resolve(
+                                    step["requires"],
+                                    current,
+                                    records=self.contexts if record_index is None else None,
+                                ),
+                                base_dir=base_dir,
+                            )
                         )
+                        if step.get("requires")
+                        else []
                     )
-                    if step.get("requires")
-                    else []
-                )
+                except Deferred:
+                    requirements, requirements_pending = [], True
                 for name, value in _selected(params, output_names).items():
                     filenames = value if isinstance(value, list) else [value]
                     if any(not isinstance(filename, str) or not filename for filename in filenames):
@@ -904,6 +926,7 @@ class Workflow:
                     directory_locations=deepcopy(self.directory_locations),
                     parameter_overrides=overrides,
                     value_dependencies=value_dependencies,
+                    requirements_pending=requirements_pending,
                 )
                 node.collection_snapshot = deepcopy(step_records)
                 self.nodes.append(node)
@@ -927,7 +950,7 @@ class Workflow:
                     target.pop(key, None)
                 target.update({key: {node.index} for key in names if record_index is not None or key.startswith("const.")})
                 if record_index is None:
-                    update_scene_variables(
+                    update_var_records(
                         self.contexts, updates, [r["id"] for r in self.records]
                     )
                     for producer in producers:
@@ -941,7 +964,7 @@ class Workflow:
             if source:
                 self.barrier_index = step_index
                 break
-            if scope == "scene":
+            if scope == "var":
                 step_nodes = [n for n in self.nodes if n.step_index == step_index]
                 for name in {k for n in step_nodes for k in n.updates if k.startswith("const.")}:
                     contributors = [n for n in step_nodes if name in n.updates]
@@ -1043,8 +1066,11 @@ class Workflow:
             node.needed = True
             plugin = load_plugin(node.step["plugin"])
             reuse = node.step.get("reuse", self.controls["run_from_existing"])
-            values_ready = not plugin.scene_records_return and all(self._known(node.context, name) for name in node.demanded_values)
-            ready = (
+            values_ready = not plugin.var_records_return and all(self._known(node.context, name) for name in node.demanded_values)
+            unresolved = any(contains_pending(node.params.get(name)) for name in file_parameter_names(node.file_features, "output"))
+            unresolved |= node.requirements_pending
+            unresolved |= self.has_skipped_calls and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
+            ready = not unresolved and (
                 values_ready and bool(node.demanded_values) and not node.demanded_paths
                 or self._valid(node, node.demanded_paths)
             )
@@ -1060,11 +1086,6 @@ class Workflow:
                     f"Unselected step {node.step['plugin']} has missing outputs or return values required by a later step"
                 )
             node.status = "processing"
-            for name, value in node.params.items():
-                if name not in file_parameter_names(node.file_features, "output"):
-                    continue
-                if contains_pending(value):
-                    raise ValueError(f"{node.step['name']}: output parameter {name} must resolve during planning")
             for dependency in node.dependencies:
                 parent = self.nodes[dependency]
                 used_paths = set(parent.paths("output_dependency_paths")) & set(
@@ -1076,23 +1097,22 @@ class Workflow:
         for node in self.nodes:
             # Even a plugin-only run needs the scene list before its selected
             # processing step can be planned. Unselected setters may only restore.
-            if not self._runs(node) and not load_plugin(node.step["plugin"]).scene_records_return:
+            if not self._runs(node) and not load_plugin(node.step["plugin"]).var_records_return:
                 continue
             targets = node.paths("output_target_paths")
-            if node.step.get("require_outputs"):
-                for name in node.file_features["output_target_paths"]:
-                    if contains_pending(node.params.get(name)):
-                        raise ValueError(f"{node.step['name']}: requested output parameter {name} must resolve during planning")
             if (
                 targets
                 or node.step.get("require_outputs") is True
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
-                or load_plugin(node.step["plugin"]).scene_records_return
+                or self.preparing and not node.step.get("skip_plugin_call", False)
+                or load_plugin(node.step["plugin"]).var_records_return
+                or node.step.get("skip_plugin_call", False) and (contains_pending(node.params) or node.requirements_pending)
             ):
-                require(node, targets or None)
+                local_returns = node.dynamic_names if self.preparing and not node.step.get("skip_plugin_call", False) else ()
+                require(node, targets or None, local_returns)
         self._planned = True
-        self._discover_ready_scenes()
+        self._discover_ready_var_records()
         return self
 
     def counts(self):
@@ -1160,12 +1180,12 @@ class Workflow:
         for name, value in values.items():
             scope, field = name.split(".", 1)
             if scope == "const" and node.record is not None and name in node.updates:
-                previous = self.scene_constant_writes.setdefault(node.step_index, {})
+                previous = self.var_constant_writes.setdefault(node.step_index, {})
                 if name in previous and previous[name] != value:
                     raise ValueError(f"{node.step['name']} {name} has conflicting scene values; use collect: for a shared list or var: for per-scene values")
                 previous[name] = deepcopy(value)
             if scope == "var" and node.record is None:
-                update_scene_variables(
+                update_var_records(
                     [{"var": item} for item in self.runtime_values],
                     {name: value}, [r["id"] for r in self.records],
                 )
@@ -1215,8 +1235,27 @@ class Workflow:
             scene_ids=[r["id"] for r in self.records] if node.record is None else None,
         )
         output_names = file_parameter_names(node.file_features, "output")
-        if _selected(params, output_names) != node.file_arguments(*OUTPUT_PATH_FEATURES):
+        known_outputs = node.file_arguments(*OUTPUT_PATH_FEATURES)
+        if any(params.get(name) != value for name, value in known_outputs.items()):
             raise ValueError(f"{node.step['name']} output paths changed after planning")
+        for name in output_names & params.keys():
+            value = params[name]
+            if value is None:
+                continue
+            filenames = value if isinstance(value, list) else [value]
+            if any(not isinstance(filename, str) or not filename for filename in filenames):
+                raise ValueError(f"{node.step['name']}: output parameter {name} must resolve before execution")
+            for other in self.nodes if name not in known_outputs else ():
+                if other is node:
+                    continue
+                collisions = set(filenames) & set(other.paths(*OUTPUT_PATH_FEATURES))
+                if collisions and (name in node.file_features["output_collision_check_paths"]
+                                   or collisions & set(other.paths("output_collision_check_paths"))):
+                    raise ValueError(f"Output path collision: {sorted(collisions)[0]}")
+        if node.requirements_pending:
+            node.requirements = _paths(path(self._resolve(node.step["requires"], context,
+                records=self._record_values(node) if node.record is None else None), base_dir=node.base_dir))
+            node.requirements_pending = False
         params = _required_arguments(
             params,
             node.step,
@@ -1269,9 +1308,9 @@ class Workflow:
         values = {k: updates[k] for k in node.dynamic_names}
         values = json.loads(json.dumps(values, allow_nan=False))
         self._publish_values(node, values)
-        source = load_plugin(node.step["plugin"]).scene_records_return
+        source = load_plugin(node.step["plugin"]).var_records_return
         if source:
-            self._scene_result = (node, returned)
+            self._var_result = (node, returned)
         overview_paths = node.paths("output_overview_calculation_paths")
         if node.step.get("calculate_overviews", False) and overview_paths:
             from vhrharmonize.io.geospatial import calculate_raster_overviews
@@ -1290,7 +1329,7 @@ class Workflow:
             raise RuntimeError(
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
             )
-        if not load_plugin(node.step["plugin"]).scene_records_return:
+        if not load_plugin(node.step["plugin"]).var_records_return:
             self._save_node_context(node)
         node.status = "completed"
         if self._executing:
@@ -1300,6 +1339,8 @@ class Workflow:
 
     @timed_core("cleanup")
     def _cleanup(self, *, final=False):
+        if self.preparing:
+            return  # Local intermediates may be required by the remote suffix.
         # Later scenes can reference any earlier result; retain files until their
         # readers are known. A scene reset must never invalidate its own inputs.
         if self.barrier_index is not None:
@@ -1361,10 +1402,12 @@ class Workflow:
                             break
                         parent = parent.parent
 
-    def _discover_ready_scenes(self):
+    def _discover_ready_var_records(self):
         if self.barrier_index is None:
             return
         node = next(n for n in self.nodes if n.step_index == self.barrier_index)
+        if node.step.get("skip_plugin_call", False):
+            return
         # Advancing replaces the current graph. Preserve independent unfinished work too.
         if not node.needed or any(
             previous.needed
@@ -1399,7 +1442,7 @@ class Workflow:
                     self._execute_preflight(previous)
         if node.status == "processing":
             self._execute_preflight(node)
-        self._advance_scenes(node.step_index)
+        self._advance_var_records(node.step_index)
         if not self._executing:
             self.preflight_steps.update(range(node.step_index + 1))
             self.start_index = node.step_index + 1
@@ -1411,7 +1454,7 @@ class Workflow:
         with timed_preflight(self, node.step, scene=scene, weight=weight):
             payload = self._payload(node)
             returned = _execute(payload)
-            if load_plugin(node.step["plugin"]).scene_records_return:
+            if load_plugin(node.step["plugin"]).var_records_return:
                 self.discovery_runs[node.step["name"]] = {"params": {**payload[2], **payload[1]}, "returned": returned}
             self._finish(node, returned)
 
@@ -1454,17 +1497,17 @@ class Workflow:
             self._append_metadata(context)
         self._exported_nodes.add(key)
 
-    def _advance_scenes(self, step_index):
+    def _advance_var_records(self, step_index):
         if step_index != self.barrier_index:
             return
-        node, returned = self._scene_result
+        node, returned = self._var_result
         context = _materialize(node.context, {"const": self.constant_values, "var": {}})
         plugin = load_plugin(node.step["plugin"])
-        if plugin.scene_records_mode == "merge":
+        if plugin.var_records_mode == "merge":
             # Carry actual completed/cached values across the planning boundary.
             for record, current in zip(self.records, self._record_values(node)):
                 record["context"] = available_context(current)
-        self._update_scenes(plugin, node.step, returned, context)
+        self._update_var_records(plugin, node.step, returned, context)
         self.discovery_sources.update(p for record in self.records for p in record["source_paths"])
         for filename in self.discovery_sources:
             self.discovery_source_steps.setdefault(filename, node.step["name"])
@@ -1511,7 +1554,7 @@ class Workflow:
                 self._save_final_metadata(node)
         pending = [node for node in nodes if node.status == "processing"]
         if not pending:
-            self._advance_scenes(step_index)
+            self._advance_var_records(step_index)
             return
         payloads = [(node, self._payload(node)) for node in pending]
         total = sum(node.step_index == step_index for node in self.nodes)
@@ -1560,10 +1603,12 @@ class Workflow:
             for node, payload in dispatches():
                 self._finish(node, _execute(payload))
         self._cleanup()
-        self._advance_scenes(step_index)
+        self._advance_var_records(step_index)
 
     def _can_run_vertical(self, step_index):
         step = self.steps[step_index]
+        if step.get("skip_plugin_call", False):
+            return False
         if not step["run"] or step.get("processing_direction", self.controls["processing_direction"]) != "vertical":
             return False
         nodes = [n for n in self.nodes if n.step_index == step_index and n.needed]
@@ -1801,14 +1846,9 @@ class Workflow:
         from contextlib import ExitStack
         from .progress import WorkflowProgress
 
-        # Discovery/preflight steps have already finished and have no progress rows.
-        show_progress = self.controls["show_progress"] and any(
-            step["run"] and index not in self.preflight_steps
-            for index, step in enumerate(self.steps)
-        )
         with ExitStack() as stack:
             callbacks = []
-            if show_progress:
+            if self.controls["show_progress"]:
                 from .progress_terminal import TerminalProgressDisplay
 
                 display = stack.enter_context(TerminalProgressDisplay())
@@ -1816,7 +1856,7 @@ class Workflow:
             if progress_callback is not None:
                 callbacks.append(progress_callback)
             reporter = WorkflowProgress(
-                self, callbacks=callbacks, echo_messages=not show_progress,
+                self, callbacks=callbacks,
                 snapshot_path=progress_path if progress_path is not None else getattr(self, "progress_path", None),
             )
             self._progress = reporter
@@ -1827,6 +1867,40 @@ class Workflow:
                 self._last_progress_snapshot = reporter.snapshot()
                 self._progress = None
 
+    def _prepare_remaining(self, step_index):
+        """Freeze actual local results and plan the suffix without plugin calls."""
+        first = next((node for node in self.nodes if node.step_index >= step_index), None)
+        if first is not None:
+            context = _materialize(first.pre_context, {"const": self.constant_values})
+            bindings = self.constant_steps.get(first.step_index)
+            if bindings is not None:
+                context["const"] = _materialize(bindings.before, {"const": self.constant_values})["const"]
+            records = self._record_values(first)
+        else:
+            context = _materialize(self.context, {"const": self.constant_values})
+            records = self._record_values()
+        self.preparation_state = {"const": deepcopy(context["const"])}
+        if "var" in self.initial_context:
+            self.preparation_state["scenes"] = {
+                record["id"]: deepcopy(values["var"])
+                for record, values in zip(self.records, records)
+            }
+        if contains_pending(self.preparation_state):
+            raise ValueError("Local preparation has unresolved return values at its cutoff")
+        self.preparation_index = step_index
+        self.initial_context = {"const": deepcopy(context["const"])}
+        if "scenes" in self.preparation_state:
+            self.initial_context["var"] = {}
+        for record, values in zip(self.records, records):
+            record["context"] = {"const": deepcopy(context["const"]), "var": deepcopy(values["var"])}
+        self.initial_records = deepcopy(self.records)
+        self.nodes = []
+        self._planned = False
+        self._build(step_index)
+        self.plan()
+        if self._progress:
+            self._progress.sync()
+
     @timed_core("execution")
     def _run(self):
         self.plan()
@@ -1836,7 +1910,7 @@ class Workflow:
             print(f"[workflow] Discovered {len(self.records)} input records")
             snapshot = self._progress.snapshot() if self._progress else None
             estimates = {row["name"]: row["eta_seconds"] for row in snapshot["rows"]} if snapshot else {}
-            if snapshot and snapshot["rows"] and snapshot["total"]["eta_seconds"] is not None:
+            if snapshot and snapshot["total"]["eta_seconds"] is not None:
                 print(f"[workflow] Estimated remaining runtime: ~{snapshot['total']['eta_seconds']:.0f}s")
             disabled_steps = {step["name"] for step in self.steps if not step["run"]}
             for step, counts in self.counts().items():
@@ -1859,6 +1933,12 @@ class Workflow:
             raise ValueError("concurrent_processing_backend must be process_pool or dask")
         step_index = self.start_index
         while step_index < len(self.steps):
+            if self.steps[step_index].get("skip_plugin_call", False):
+                if any(step["run"] and not step.get("skip_plugin_call", False)
+                       for step in self.steps[step_index:]):
+                    raise ValueError("Skipped plugin calls must form a suffix of the workflow")
+                self._prepare_remaining(step_index)
+                return self.records
             if self._can_run_vertical(step_index):
                 end = step_index + 1
                 while end < len(self.steps):
@@ -1870,6 +1950,9 @@ class Workflow:
             else:
                 self._run_horizontal_step(step_index, workers, backend)
                 step_index += 1
+        if self.preparing:
+            self._prepare_remaining(len(self.steps))
+            return self.records
         # A discovery-only workflow can still export its imported scenes.
         if not self.nodes and not self._exported_nodes and self.records:
             for record in self.records:

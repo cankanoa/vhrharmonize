@@ -186,11 +186,11 @@ class ImportFiles(FunctionPlugin):
     """Add imported scenes and missing fields while retaining earlier workflow state."""
 
     target = "vhrharmonize.plugins.import_files:import_files"
-    scene_records_return = "scenes"
-    scene_records_mode = "merge"
+    var_records_return = "scenes"
+    var_records_mode = "merge"
     constant_values_return = "const"
-    scene_id_return = "scene_id"  # The function computes this from its scene_id argument.
-    scene_path_return = "file_path"
+    var_id_return = "scene_id"  # The function computes this from its scene_id argument.
+    var_path_return = "file_path"
     source_file_protection_paths_return = "source_paths"
     temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")
     output_directory_context_paths = ("var.output_dir", "const.output_dir")
@@ -207,7 +207,7 @@ class ImportFiles(FunctionPlugin):
         original_settings = deepcopy(settings)
         candidates = [path(remap_paths(filename, path_mappings), base_dir=config_dir)
                       for filename in discovery_paths]
-        items = lookup(returned, self.scene_records_return)
+        items = lookup(returned, self.var_records_return)
         if not items:
             return {}
         if any(item["file_path"] in file_paths for item in items):
@@ -247,6 +247,6 @@ class ImportFiles(FunctionPlugin):
                 # A per-step override of a shared rule map must retain all rules.
                 inherited = {field: {kind: "literal:" + value if isinstance(value, str) else value
                                     for kind, value in rule.items()} for field, rule in rules.items()}
-                settings.setdefault("param:create_metadata_json", inherited).setdefault(field, {})[kind] = per_scene_value(pairs, selector="var." + self.scene_path_return, path_key=True, literal=True)
+                settings.setdefault("param:create_metadata_json", inherited).setdefault(field, {})[kind] = per_scene_value(pairs, selector="var." + self.var_path_return, path_key=True, literal=True)
         return {key: value for key, value in settings.items()
                 if key not in original_settings or value != original_settings[key]}

@@ -120,7 +120,7 @@ def find_items():
 
 class FindItems(FunctionPlugin):
     target = "my_package.discovery:find_items"
-    scene_records_return = "items"  # Use "$" if the function returns the list itself.
+    var_records_return = "items"  # Use "$" if the function returns the list itself.
 ```
 
 After registering this plugin as `find_items`:
@@ -140,17 +140,17 @@ my_processor:
 
 Before a scene-setting function returns, `var` is unavailable: reads, assignments, JSONata access and `collect:` raise `ValueError`. Other enabled functions can run once with constants and ordinary parameters. `shared.var:` is therefore invalid. Whole-context expressions (`expr:$`) contain only `const` before initialization.
 
-The scene-setting function runs once with aggregate scope. Each dictionary becomes one scene's `var` object; optional `var:` assignments map each dictionary afterward, with `returned:` selecting from that dictionary. Plugin `const:` assignments refer to the whole function result. Existing constants remain available unless explicitly reassigned. By default, a later scene-setting function replaces the list, and core rebuilds scene indexes, contexts and remaining dependencies. Functions need no scheduling bookkeeping. In this mode an empty list removes all scenes; subsequent aggregate steps still run. Set `scene_records_mode = "merge"` with a stable `scene_id_return` to add new scenes and fill missing fields in existing scenes. Existing values win recursively, including nulls and lists. An empty merge leaves existing scenes in place; source-protection paths are combined. Previously completed and cached values survive the update.
+The scene-setting function runs once with aggregate scope. Each dictionary becomes one scene's `var` object; optional `var:` assignments map each dictionary afterward, with `returned:` selecting from that dictionary. Plugin `const:` assignments refer to the whole function result. Existing constants remain available unless explicitly reassigned. By default, a later scene-setting function replaces the list, and core rebuilds scene indexes, contexts and remaining dependencies. Functions need no scheduling bookkeeping. In this mode an empty list removes all scenes; subsequent aggregate steps still run. Set `var_records_mode = "merge"` with a stable `var_id_return` to add new scenes and fill missing fields in existing scenes. Existing values win recursively, including nulls and lists. An empty merge leaves existing scenes in place; source-protection paths are combined. Previously completed and cached values survive the update.
 
-`import_files` uses this same contract with `scene_records_mode = "merge"` and `scene_id_return = "scene_id"`; the function computes each returned ID from its ordinary `scene_id` parameter (configured as `param:scene_id` in YAML). The adapter only selects the returned field; it does not decide which input field or expression supplies the ID. Scene-setting functions run during planning, including dry-run and HPC preparation, once their required inputs and preceding work are available. There is no planning opt-in. A scene setter depending on unfinished processing remains pending until execution supplies its inputs. Keep discovery functions lightweight: dry-run can invoke them, including their own file-writing behavior.
+`import_files` uses this same contract with `var_records_mode = "merge"` and `var_id_return = "scene_id"`; the function computes each returned ID from its ordinary `scene_id` parameter (configured as `param:scene_id` in YAML). The adapter only selects the returned field; it does not decide which input field or expression supplies the ID. Scene-setting functions run during planning, including dry-run and HPC preparation, once their required inputs and preceding work are available. HPC preparation limits calls to the explicitly selected local prefix; `core:skip_plugin_call: true` prevents discovery calls as well as ordinary processing calls. A scene setter depending on unfinished processing remains pending until execution supplies its inputs. Keep discovery functions lightweight: dry-run can invoke them, including their own file-writing behavior.
 
 Optional declarations:
 
 | Declaration | Default | Purpose |
 |---|---|---|
-| `scene_records_mode` | `"replace"` | `"replace"` resets scenes; `"merge"` adds scenes and missing fields while preserving existing values. Merge requires `scene_id_return`. |
-| `scene_id_return` | `None` | Field within each returned scene dictionary for its unique ID; otherwise use the list index. |
-| `scene_path_return` | `None` | Primary file path within each returned scene, used by `core:satisfies` and per-scene HPC assignments. Nested fields such as `asset.uri` are supported. |
+| `var_records_mode` | `"replace"` | `"replace"` resets scenes; `"merge"` adds scenes and missing fields while preserving existing values. Merge requires `var_id_return`. |
+| `var_id_return` | `None` | Field within each returned scene dictionary for its unique ID; otherwise use the list index. |
+| `var_path_return` | `None` | Primary file path within each returned scene, used by `core:satisfies` and per-scene HPC assignments. Nested fields such as `asset.uri` are supported. |
 | `source_file_protection_paths_return` | `None` | Field within each scene dictionary containing original paths to protect. Controlled by `shared.core:protect_source_files`, default `true`. |
 | `constant_values_return` | `None` | Returned constant dictionary. Replace mode updates fields; merge mode recursively fills only missing fields. Explicit YAML `const:` assignments take precedence. |
 | `temporary_directory_context_paths` | `()` | Ordered JSON locations containing temporary roots, for example `("var.paths.work", "const.paths.work")`. |
@@ -174,7 +174,7 @@ until their future readers are known.
 ### Custom discovery staging
 
 Core uses the declarations above without checking plugin names. `core:satisfies`
-requires `scene_records_return` and `scene_path_return`; saved context can supply
+requires `var_records_return` and `var_path_return`; saved context can supply
 the declared primary field or a YAML variable assigned directly from that returned
 field. Per-scene HPC assignments use a declared primary path, or a declared scene
 ID when no suitable primary path is available. No `file_path` field is required.
@@ -229,3 +229,9 @@ Plugins need no extra declaration to write either scope through YAML. `const:` s
 ### User-selected deliverables
 
 Adapters do not populate `output_target_paths`. Core fills that selection from each step's `core:require_outputs` setting (`false` by default, `param:name`, a list of parameter selectors, or `true`). Continue declaring output dependencies, reuse, validation and transfer capabilities independently. Outputs inside temporary roots can be requested explicitly and are then protected from cleanup. Paths can be normalized in YAML with `path:var:name`, `path:./file` or `path:sys`; directory roles do not select the relative-path base.
+
+`core:scope: var` selects per-record execution; `aggregate` selects one call for
+the collection. Plugins declare `var_records_return`, `var_records_mode`,
+`var_id_return`, and `var_path_return`. The former `scene` scope and `scene_*`
+declarations are rejected. Return-field names are selected by those declarations
+and belong to the function's data schema.

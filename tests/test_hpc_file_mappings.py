@@ -353,7 +353,7 @@ def test_prepare_resolves_run_id_before_scene_expressions_and_preserves_yaml(tmp
     job.write_text("#!/bin/sh\n")
     hpc = tmp_path / "hpc.yml"
     hpc.write_text("# HPC settings\n" + yaml.safe_dump(dict(workflow_config=str(workflow_file),
-        slurm_start_file=str(job), run_id="R42", ssh_host="example.invalid", ssh_user="user",
+        slurm_start_file=str(job), run_to_step_before_prepare="import", run_id="R42", ssh_host="example.invalid", ssh_user="user",
         remote_work_dir="~/runs/{run_id}", remote_log_dir="~/runs/{run_id}/logs", path_mappings=mappings), sort_keys=False))
     original_hpc = hpc.read_text()
     plan = prepare_slurm_plan(str(hpc))
@@ -361,6 +361,6 @@ def test_prepare_resolves_run_id_before_scene_expressions_and_preserves_yaml(tmp
     assert Path(plan["staged_workflow_file"]).read_text().startswith("# original recipe\n")
     assert Path(plan["staged_hpc_file"]).read_text().startswith("# HPC settings\n")
     for source, target in plan["uploaded_input_paths"].items():
-        if "local-references" not in source:
+        if "local-references" not in source and not source.endswith("prepared.json"):
             assert target.startswith("~/inputs/R42/P")
     assert plan["path_mappings"]["var:current_image_paths"] == "expr:'~/inputs/R42/' & var.scene_id"

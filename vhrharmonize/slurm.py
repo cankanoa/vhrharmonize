@@ -29,6 +29,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "run_id",
     "workflow_config",
     "run_to_step_before_prepare",
+    "run_to_stop_before_prepare",
     "staged_workflow_file",
     "slurm_start_file",
     "staged_slurm_start_file",
@@ -443,6 +444,11 @@ def prepare_slurm_plan(
         overrides: Optional mapping of HPC settings overriding values in the YAML.
     """
     slurm_config = _slurm_config_with_overrides(config, overrides)
+    if "run_to_stop_before_prepare" in slurm_config:
+        alias = slurm_config["run_to_stop_before_prepare"]
+        if "run_to_step_before_prepare" in slurm_config and slurm_config["run_to_step_before_prepare"] != alias:
+            raise ValueError("Conflicting HPC preparation cutoffs")
+        slurm_config["run_to_step_before_prepare"] = alias
     _validate_slurm_config(slurm_config)
     log_enabled = _debug_enabled(slurm_config)
     _log("Start", enabled=log_enabled, step="hpc:prepare")
@@ -452,22 +458,24 @@ def prepare_slurm_plan(
     staged_hpc_file = _resolve_staged_hpc_file(slurm_config, config_path=config, run_id=resolved_run_id)
     workflow_config = _require_config_value(slurm_config, "workflow_config")
     workflow_config_data = load_config(workflow_config)
-    from vhrharmonize.workflow.yaml_document import preparation_config, write_yaml_copy
+    from vhrharmonize.workflow.yaml_document import hpc_preparation_config, write_yaml_copy
 
     staged_config = _resolve_staged_workflow_file(
         slurm_config, config_path=config, workflow_config=workflow_config, run_id=resolved_run_id,
     )
     cutoff = slurm_config.get("run_to_step_before_prepare")
-    if cutoff is not None:
-        from vhrharmonize.workflow.api import run_workflow
+    from vhrharmonize.workflow.engine import Workflow
 
-        prepared = preparation_config(workflow_config_data, cutoff)
-        preparation_file = str(Path(staged_config).with_suffix(".prepare.yml"))
-        if os.path.abspath(preparation_file) == os.path.abspath(workflow_config):
-            raise ValueError("Preparation copy must not overwrite workflow_config")
-        write_yaml_copy(workflow_config, preparation_file, workflow_config_data, prepared)
-        _log(f"Running local steps | through={cutoff}", enabled=log_enabled, step="hpc:prepare")
-        run_workflow(preparation_file, config_dir=os.path.dirname(os.path.abspath(workflow_config)), run_to_step=cutoff)
+    prepared = hpc_preparation_config(workflow_config_data, cutoff)
+    preparation_file = str(Path(staged_config).with_suffix(".prepare.yml"))
+    if os.path.abspath(preparation_file) == os.path.abspath(workflow_config):
+        raise ValueError("Preparation copy must not overwrite workflow_config")
+    write_yaml_copy(workflow_config, preparation_file, workflow_config_data, prepared)
+    _log(f"Running local steps | through={cutoff}", enabled=log_enabled, step="hpc:prepare")
+    workflow = Workflow(prepared, config_dir=os.path.dirname(os.path.abspath(workflow_config)), preparing=True)
+    workflow.config_path = preparation_file
+    workflow.progress_path = preparation_file + ".progress.json"
+    workflow.run()
     mappings = {key: _resolve_run_template(value, resolved_run_id)
                 for key, value in slurm_config.get("path_mappings", {}).items()}
     staging_paths = {key: value for key, value in paths.items() if key != "remote_log_dir"}
@@ -475,7 +483,7 @@ def prepare_slurm_plan(
     _log("Staging workflow and planning transfers", enabled=log_enabled, step="hpc:prepare")
     staged_config_data, input_uploads, output_downloads = stage_workflow(
         workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
-        **staging_paths, path_mappings=mappings,
+        **staging_paths, path_mappings=mappings, workflow=workflow,
         context_staging_dir=staged_config + ".contexts",
         upload_groups=upload_groups,
     )

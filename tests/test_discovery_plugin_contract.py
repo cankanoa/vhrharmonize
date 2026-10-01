@@ -38,7 +38,7 @@ def discovery_recipe(tmp_path, monkeypatch):
         return {"result": {"items": items}, "globals": {"version": 1}}
 
     plugin = install_function(monkeypatch, "catalog_reader", discover,
-        scene_records_return="result.items", scene_id_return="identity.key", scene_path_return="asset.uri",
+        var_records_return="result.items", var_id_return="identity.key", var_path_return="asset.uri",
         constant_values_return="globals", source_file_protection_paths_return="originals",
         output_directory_context_paths=("var.folders.products",),
         temporary_directory_context_paths=("var.folders.workspace",),
@@ -77,7 +77,7 @@ def test_custom_discovery_fields_stage_directories_and_execute_remotely(tmp_path
     recipe, plugin, mappings, calls, hooks = discovery_recipe(tmp_path, monkeypatch)
     if context_setup:
         recipe = {"setup": {"core:run": True, "const:tag": "ready"}, **recipe}
-    plugin.scene_path_return = primary_path  # A stable declared ID can key per-scene mappings too.
+    plugin.var_path_return = primary_path  # A stable declared ID can key per-scene mappings too.
     original = deepcopy(recipe)
     remote = tmp_path / "remote"
     staged, uploads, downloads = stage_workflow(recipe, config_dir=tmp_path,
@@ -177,14 +177,14 @@ def test_runtime_discovery_registers_satisfied_outputs_before_replanning(tmp_pat
 
 def test_satisfaction_requires_declared_discovery_capabilities(tmp_path, monkeypatch):
     recipe, plugin, _, _, _ = discovery_recipe(tmp_path, monkeypatch)
-    plugin.scene_path_return = None
+    plugin.var_path_return = None
     recipe["discover_inputs"]["core:satisfies"] = {"copy": "output_path"}
-    with pytest.raises(ValueError, match="scene_records_return and scene_path_return"):
+    with pytest.raises(ValueError, match="var_records_return and var_path_return"):
         Workflow(recipe, config_dir=tmp_path)
 
 
 @pytest.mark.parametrize("declaration, value", [
-    ("scene_path_return", 1), ("scene_path_return", ""),
+    ("var_path_return", 1), ("var_path_return", ""),
     ("directory_parameters", []), ("directory_parameters", {"var.missing": "products"}),
     ("discovery_input_parameter", "param:locations"), ("discovery_input_parameter", False),
 ])

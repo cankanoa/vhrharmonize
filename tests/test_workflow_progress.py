@@ -107,7 +107,7 @@ def test_disable_does_not_start_dashboard(tmp_path, dashboards):
     assert dashboards == []
 
 
-def test_discovery_only_keeps_logs_and_snapshots_without_empty_dashboard(tmp_path, dashboards, capsys):
+def test_discovery_only_honors_show_progress(tmp_path, dashboards, capsys):
     from vhrharmonize.workflow.api import load_workflow
 
     config = recipe(tmp_path)
@@ -122,16 +122,16 @@ def test_discovery_only_keeps_logs_and_snapshots_without_empty_dashboard(tmp_pat
         workflow.run(progress_callback=snapshots.append, progress_path=snapshot_path)
         assert len(workflow.records) == 3
         assert context.exists()
-        assert dashboards[-1].test_display is None
+        assert dashboards[-1].test_display is not None
         assert snapshots[-1]["rows"] == []
         assert snapshots[-1]["status"] == "completed"
         assert workflow.get_progress()["status"] == "completed"
         assert snapshots[-1] == read_progress_snapshot(snapshot_path)
-        output = capsys.readouterr().out
+        output = dashboards[-1].test_display.stream.getvalue()
         assert "[workflow] Discovered 3 input records" in output
         assert "[core:cleanup] Start" in output
-        assert "VHRHarmonize Workflow Progress" not in output
-        assert "Estimated remaining runtime" not in output
+        assert "VHRHarmonize Workflow Progress" in output
+
 
 
 def test_forced_reprocessing_is_not_counted_as_reused(tmp_path, dashboards):
@@ -318,9 +318,9 @@ def test_opaque_operation_elapsed_time_keeps_updating(tmp_path, monkeypatch):
 
 
 def test_runtime_scene_discovery_replans_dashboard(tmp_path, monkeypatch, dashboards):
-    install_function(monkeypatch, "seed", lambda: [{"n": 1}, {"n": 2}], scene_records_return="$")
+    install_function(monkeypatch, "seed", lambda: [{"n": 1}, {"n": 2}], var_records_return="$")
     install_function(monkeypatch, "double", lambda n: n * 2)
-    install_function(monkeypatch, "reset", lambda values: [{"total": sum(values)}], scene_records_return="$")
+    install_function(monkeypatch, "reset", lambda values: [{"total": sum(values)}], var_records_return="$")
     install_function(monkeypatch, "consume", lambda value: value)
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:show_progress": True},
