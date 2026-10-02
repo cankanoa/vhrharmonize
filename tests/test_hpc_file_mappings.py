@@ -323,7 +323,8 @@ def test_directory_destination_expressions_are_resolved_before_remote_import(tmp
         "import": {"plugin": "import_files", "core:run": True,
             "param:search_glob": str(source / "*/*.txt"),
             "param:scene_id": "literal:expr:$split(var.file_path, '/')[-2]",
-            "var:raw": "returned:file_path"},
+            "var:raw": "returned:file_path",
+            "var:output_dir": r"path:expr:$replace(var.file_path, /[^\/]+$/, '') & 'output'"},
         "copy": {"plugin": "file_source", "core:run": True, "core:require_outputs": "param:output_path",
             "param:input_path": "var:raw", "param:output_path": "expr:var.output_dir & '/copy.txt'"}}
     remote = tmp_path / "remote"

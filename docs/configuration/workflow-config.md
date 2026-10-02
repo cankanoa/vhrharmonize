@@ -11,8 +11,11 @@ shared:
   plugin: shared
   core:run: true
   param:epsg: 6635
-  core:output_metadata_path: expr:var.output_dir & '/processing.json'
+  core:output_metadata_path: expr:var.relative_output_dir & '/processing.json'
   # core:delete_final_json_first: true
+  const:output_dir: path:./output
+  const:temp_dir: path:./temp
+  core:cleanup_dirs: [const:temp_dir]
   const:reference_path: /data/reference.tif
   const:band_wavelengths_um: [0.4273, 0.4779, 0.5462]
   # core:run_from_existing: true
@@ -21,10 +24,8 @@ discover_inputs:
   plugin: import_files
   core:run: true
   param:search_glob: /data/images/*.tif
-  param:output_dir: ../output
-  # param:temp_dir: sys
-  # param:temp_dir_scope: const
-  # param:output_dir_scope: var
+  var:relative_output_dir: >-
+    path:expr:$replace(var.file_path, /[^\/]+$/, '') & '../output'
   var:mul: returned:file_path
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:suffix: ""
@@ -40,7 +41,7 @@ alignment:
   param:moving_image_path: var:mul
   param:fixed_image_path: const:reference_path
   var:suffix: expr:var.suffix & '_aligned'
-  var:aligned: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:aligned: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:aligned
 ```
 
@@ -113,7 +114,7 @@ match:
 
 The first collection reads old paths and the second reads the replacements. Later scene steps use `param:input_path: var:current_image_paths` to receive their single path. Returned assignments use the same count/ID validation after execution; known output expressions allow planning and HPC staging before execution.
 
-Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by [jsonata-python](https://github.com/rayokota/jsonata-python). JSONata sees both scopes: `expr:var.output_dir & '/' & var.basename & '.tif'`. Use `&` for strings and JSONata functions such as `$map`, `$lookup`, `$replace` and `$substring`. Python comprehensions and function calls are not supported.
+Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by [jsonata-python](https://github.com/rayokota/jsonata-python). JSONata sees both scopes: `expr:var.relative_output_dir & '/' & var.basename & '.tif'`. Use `&` for strings and JSONata functions such as `$map`, `$lookup`, `$replace` and `$substring`. Python comprehensions and function calls are not supported.
 
 Assignments resolve in declaration order and may update an existing value, such as `var:suffix: expr:var.suffix & '_aligned'`. Function parameters see preceding assignments. `returned:` assignments and their dependents take effect after the function returns. A function parameter cannot depend on that same invocation's result; place its input reference before the return assignment. An explicitly passed scope snapshot contains the values at its parameter’s position in the settings. Missing fields or undefined expression results raise `ValueError`; JSON null remains `None`. JSONata's `??` supplies a default for a missing field.
 
@@ -161,15 +162,13 @@ Use explicit [context operations](#explicit-context-files) to persist and load s
 
 `import_files` is an ordinary `FunctionPlugin` wrapping `import_files(...)`. It declares `var_records_return = "scenes"`; any plugin can declare a returned field containing a list of plain dictionaries to establish scenes. The adapter selects whether to replace or merge them. `import_files` uses merge mode. No plugin is required to be first. Before any plugin establishes scenes, enabled functions run once using ordinary parameters and constants. Reading or assigning `var` raises `ValueError`, including through JSONata or `collect:`. The context contains only `const` at this point, so `expr:$` still works. Once scenes are established, scene functions run per record and aggregate functions run once. An initially empty list establishes zero scenes. A later empty import preserves existing scenes. See [adding plugins](../getting-started/adding-plugins.md#creating-or-replacing-scenes) for the contract and optional declarations.
 
-The import function returns `{"const": {...}, "scenes": [...]}`. By default, its adapter publishes `temp_dir` into `const`. Each scene contains `scene_id`, `file_path`, `source_paths`, `output_dir` and the fields named in `create_metadata_json`. Each directory can independently be published into `var` or `const` using `temp_dir_scope` and `output_dir_scope`. Each dictionary becomes a scene's `var` object directly. For example:
+The import function returns `{"scenes": [...]}`. Each scene contains `scene_id`, `file_path`, `source_paths` and the fields named in `create_metadata_json`. Each dictionary becomes a scene's `var` object directly. The importer creates no directory roots or constants; define those with YAML assignments. For example:
 
 ```json
 {
-  "const": {"temp_dir": "/tmp/vhr-example"},
   "scenes": [{
     "scene_id": "/data/scene.TIF",
     "file_path": "/data/scene.TIF",
-    "output_dir": "/data/output",
     "source_paths": ["/data/scene.TIF", "/data/scene.RPB", "/data/scene.IMD"],
     "rpc": ["/data/scene.RPB"],
     "metadata": {"IMAGE_1": {"cloudCover": 0.1}}
@@ -206,11 +205,11 @@ param:create_metadata_json:
 param:where: literal:expr:100 * var.metadata.IMAGE_1.cloudCover <= 75
 ```
 
-Rules resolve relative paths from the matched file's parent; absolute paths and `~` are also supported. Both rule types add discovered inputs to `source_paths`, which core uses to protect originals when `core:protect_source_files` is enabled. Field names `scene_id`, `file_path`, `source_paths`, `temp_dir` and `output_dir` cannot be overwritten by rules.
+Rules resolve relative paths from the matched file's parent; absolute paths and `~` are also supported. Both rule types add discovered inputs to `source_paths`, which core uses to protect originals when `core:protect_source_files` is enabled. Field names `scene_id`, `file_path` and `source_paths` cannot be overwritten by rules.
 
 `literal:` delays the expression until the importer evaluates it for each discovered file. Rules run in declaration order and may read `var.file_path` and fields produced by earlier rules. The filter runs after all rules, before YAML scene mappings; therefore it reads `var.metadata`, not a later YAML alias. Plain relative paths need no expression or `literal:` prefix. Block mappings keep expressions containing commas unquoted; YAML flow mappings such as `{path: '*.RPB'}` also work.
 
-The importer receives no workflow constants object. Use ordinary `const:` or `expr:` arguments to resolve specific values before the call, for example `param:output_dir: const:products_dir`. Per-file expressions see the imported scene fields. Parsing preserves structure; YAML defines sensor mappings and calibration. A later step can consume `var:rpc` directly through `core:requires` or `file_source`'s `param:companions` argument. Shared function parameters follow the usual precedence.
+The importer receives no workflow constants object. Use ordinary `const:` or `expr:` arguments to resolve specific values before the call, for example `param:search_glob: const:input_pattern`. Per-file expressions see the imported scene fields. Parsing preserves structure; YAML defines sensor mappings and calibration. A later step can consume `var:rpc` directly through `core:requires` or `file_source`'s `param:companions` argument. Shared function parameters follow the usual precedence.
 
 ### Importing more files later
 
@@ -223,7 +222,7 @@ initial_images:
   param:search_glob: /data/initial/*.tif
   param:scene_id: literal:expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:initial_image: returned:file_path
-  param:output_dir: /data/products
+  var:relative_output_dir: path:/data/products
 
 # Processing steps for the initial images can go here.
 
@@ -233,21 +232,44 @@ additional_images:
   param:search_glob: /data/additional/*.tif
   param:scene_id: literal:expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:additional_image: returned:file_path
-  param:temp_dir: const:temp_dir
-  param:output_dir: /data/products
+  var:relative_output_dir: path:/data/products
 ```
 
 Imports build on the existing context. New IDs add new scenes; matching IDs merge into the existing scene without duplicating it. The example above matches filenames across two folders. Existing values win, including lists and nulls; nested objects gain missing fields. Per-import `var:` mappings initialize new scenes and missing fields without resetting existing values such as a processed path or suffix. Previously completed or cached function returns remain available. Source-protection path lists accumulate all imported inputs. An empty import does not clear the scene list. When different paths share an ID, the original `file_path` stays intact. Use a new alias such as `var:additional_image: returned:file_path` to retain the newly imported path.
 
-Returned directory constants fill missing fields; they do not replace established roots. Explicit YAML `const:` assignments still update constants using the normal assignment rules. Pass existing directory constants as ordinary parameters when reusing those roots, as above. Output roots are per-scene by default; use `param:temp_dir_scope: var` for per-scene temporary roots too. Reimported scenes keep their roots and new scenes receive their own.
+Directory variables follow the same assignment rules as other metadata. Per-import `var:` assignments fill new scenes and missing fields; existing scene values survive reimport. Define shared roots once with `const:`; an explicit later `const:` assignment changes the shared value.
 
 All subsequent scene steps process the combined collection. New scenes do not run earlier steps, so downstream parameters must be available on both existing and new scenes. Imports that depend on unfinished work execute at their position and rebuild the remaining plan. HPC preparation can stage multiple imports when their files and preceding required results are already available; unresolved later discovery remains a preparation error. `file_source` only copies files and its companions; it does not establish or replace scenes.
 
 ### Directory roots
 
-Directory defaults belong to `import_files`: `param:temp_dir` defaults to `sys`, `param:output_dir` to `./output`, `param:temp_dir_scope` to `const`, and `param:output_dir_scope` to `var`. Each scope accepts `const` or `var` independently. `sys` creates a unique system temporary directory; other values are resolved as paths. Constant roots resolve relative to the first discovered file's parent (the working directory if no files match). A directory with scope `var` resolves separately for each file and is returned in that scene's variable object. The defaults therefore provide one shared `const.temp_dir` and per-scene `var.output_dir` values. Use absolute roots for a shared project location. An explicit temp path allows reuse across runs. For one aggregate product, explicitly collect roots using `const:output_dirs: collect:output_dir`, then select `const.output_dirs[0]` in the output expression, as the WorldView mosaic does.
+Directory roots are ordinary YAML values. For example:
 
-Core does not reserve `temp_dir` or `output_dir` as variable names. The import adapter declares `temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")` and `output_directory_context_paths = ("var.output_dir", "const.output_dir")`. Other plugins can register arbitrary nested locations and populate them using returned dictionaries or YAML assignments. Declared fields may contain a path or list of roots. Missing fields are not invented. Temporary cleanup applies only when a temporary root has been declared and populated. No temporary root is required for processing, and directory membership never requests a product. Relative declared roots normalize from the YAML directory; the importer has already made its own returned paths absolute.
+```yaml
+shared:
+  plugin: shared
+  core:run: true
+  const:output_dir: path:./output
+  const:temp_dir: path:./temp
+  core:cleanup_dirs: [const:temp_dir]
+
+discover_inputs:
+  plugin: import_files
+  core:run: true
+  param:search_glob: /data/images/**/*.tif
+  var:relative_output_dir: >-
+    path:expr:$replace(var.file_path, /[^\/]+$/, '') & '../../processed'
+```
+
+`path:./output` and `path:./temp` resolve from the YAML directory. The per-scene expression derives an absolute output root from the original input's parent; `path:` normalizes `..` components. Use `path:sys` to explicitly allocate a system temporary directory instead. A stable path is preferable when saved context must survive between runs. No directory is allocated by `import_files` itself.
+
+The names have no intrinsic meaning: use any `const:` or `var:` field in downstream path expressions. The WorldView example puts per-scene products under `var.relative_output_dir`, intermediates under `const.temp_dir`, and the final mosaic under `const.output_dir`. Output directories need no core declaration. HPC `path_mappings` can reference these values directly.
+
+`core:cleanup_dirs` is a shared control, default `[]`. It accepts one `const:name` or `var:name` reference, or a list of these references (including nested fields). Each selected value can contain one root or a list of roots. It makes roots eligible for cleanup; it does not create values or request processing. Missing or not-yet-available fields are ignored until populated. Existing plugin `temporary_directory_context_paths` declarations remain supported and are combined with these explicit selections.
+
+Cleanup still requires the function's `output_temporary_cleanup_paths` declaration and the existing cleanup controls. It removes only owned, consumed intermediate outputs, retaining requested products and protected inputs. `core:require_outputs` selects deliverables independently of directories.
+
+**Migration:** remove `param:temp_dir`, `param:output_dir`, `param:temp_dir_scope`, and `param:output_dir_scope` from `import_files` steps. Replace them with explicit YAML assignments, update path expressions/HPC mappings, and select cleanup roots with `core:cleanup_dirs` if needed. The removed Python arguments are rejected rather than silently ignored. Processing functions that independently accept `param:temp_dir` still support it.
 
 Scene-setting functions may run during planning, dry-run and HPC preparation without an opt-in. Ordinary processing functions are not run by dry-run. The planner stops at scene discovery whose preceding required work has not finished, reporting later enabled steps as `pending`; execution resumes planning after the scene update. HPC requires scenes and file paths to be known during preparation. HPC recipes preserve ordinary imports and explicit context loads; no scene snapshot is embedded in the generated YAML.
 
@@ -263,7 +285,7 @@ shared:
   # core:delete_final_json_first: true      # true | false; default: true.
 ```
 
-Define `var:report_path` in an enabled plugin, for example `expr:var.output_dir & '/' & var.basename & '.json'`. A constant destination such as `/data/results/processing.json` combines scenes in one file. Relative destinations resolve from the YAML directory.
+Define `var:report_path` in an enabled plugin, for example `expr:var.relative_output_dir & '/' & var.basename & '.json'`. A constant destination such as `/data/results/processing.json` combines scenes in one file. Relative destinations resolve from the YAML directory.
 
 Each completion of the last needed step appends its combined `{const, var}` context to a JSON array. A scene step writes as each scene finishes, including when its output is reused from cache. A final aggregate step writes one entry per scene using the aggregate's final constants; a workflow without scenes writes its const context. Discovery-only runs export their imported scenes. Different resolved paths produce separate files naturally.
 
@@ -355,7 +377,7 @@ Prefix a value with `path:` to normalize it before it reaches a function:
 | `path:expr:const.folder & '/result.tif'` | Evaluate the expression, then normalize. |
 | `path:sys` | Create a unique system temporary directory, stable for that assignment during planning, execution and staging. |
 
-Declare a shared temporary path once, for example `const:scratch: path:sys`, then reference it with `const:scratch`. Scene assignments can create separate paths per scene. `path:` does not mark a path as an input, deliverable, upload or cleanup candidate. `var:` and `const:` alone simply read values. There are no `output:` or `temp:` resolution prefixes. Plugin-selected legacy output normalization remains available, using the YAML directory; other unprefixed values keep their existing function-specific semantics. The importer still supports its native input-relative directory and companion rules; `path:` values arrive already absolute. Write `path:sys` without a space after the colon, or quote the entire scalar.
+Declare a shared temporary path once, for example `const:scratch: path:sys`, then reference it with `const:scratch`. Scene assignments can create separate paths per scene. `path:` does not mark a path as an input, deliverable, upload or cleanup candidate. `var:` and `const:` alone simply read values. There are no `output:` or `temp:` resolution prefixes. Plugin-selected legacy output normalization remains available, using the YAML directory; other unprefixed values keep their existing function-specific semantics. The importer resolves metadata and companion rules relative to each input; `path:` values arrive already absolute. Write `path:sys` without a space after the colon, or quote the entire scalar.
 
 Migrating older recipes: rename `core:process_for_paths` to `core:require_outputs`, keeping its value unchanged. Explicitly request desired products, including the final processing step. Moving a file outside temporary storage no longer requests it. Use `path:` or explicit expressions for destinations that previously depended on a registered output root.
 
@@ -371,6 +393,7 @@ Shared runner controls are:
 | `run_from_existing` | `true` |
 | `check_validity` | `true` |
 | `validity_check_grid_size` | `2048` |
+| `cleanup_dirs` | `[]` (explicit `const:`/`var:` cleanup-root references) |
 | `delete_temp_dir` | `false` |
 | `delete_temp_steps_proactively` | `true` |
 | `log_to_console` | `true` |
@@ -428,7 +451,7 @@ The active-operation panel uses one row per operation, with **Step, ID, Status, 
 
 When running a YAML file with reporting enabled, core writes `<workflow.yml>.progress.json` beside that file. The snapshot is replaced atomically at most once per second, with initial and final updates on success or failure. `vhr hpc-status --config <staged.hpc.yml>` fetches the snapshot through `get_slurm_progress()` and gives it to the same `prompt_toolkit` frontend for a static display. This works while Slurm output is redirected. Snapshots from a different Slurm job ID are ignored, and the displayed timestamp identifies the last update. The staged HPC YAML retains the fetched data under `workflow_progress`. Apps can receive the same versioned data through a Python callback, `Workflow.get_progress()`, the JSON file, or the HPC accessor; see the [progress API](../api/progress.md).
 
-Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under `const.temp_dir`**. It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Explicitly required products and terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
+Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under selected temporary roots** (`core:cleanup_dirs` or plugin declarations). It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Explicitly required products and terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
 
 ### Horizontal and vertical execution
 

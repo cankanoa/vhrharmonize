@@ -296,6 +296,11 @@ class Workflow:
         if contains_pending(self.shared_context):
             raise ValueError("Shared variables cannot depend on returned values")
         self.directory_locations = {role: [] for role in DIRECTORY_FEATURES}
+        temporary = core["cleanup_dirs"]
+        self.directory_locations["temp_dir"] = [
+            selector.replace(":", ".", 1)
+            for selector in ([temporary] if isinstance(temporary, str) else temporary)
+        ]
         self.metadata_writer = FinalMetadataWriter(delete_first=core["delete_final_json_first"])
         self._exported_nodes = set()
         self._executing = False

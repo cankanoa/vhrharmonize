@@ -26,7 +26,7 @@
 # Aggregate returned: assignments to var: map a list in scene order or a dictionary keyed by scene ID.
 # Each scene stores its own value; collect:name reads the current values in scene order.
 # Unquoted prefixes work in YAML. Use >- for expressions containing a colon followed by a space.
-# import_files resolves file-relative paths and publishes absolute directory roots.
+# YAML defines directory roots; import_files resolves metadata relative to each discovered file.
 # Pass absolute input paths to processing functions. Output paths must be unique.
 # File descriptor fields become scene variables; mul, source and scene_id are explicit mappings below.
 # Suffix assignments run before path expressions; disabled steps perform no assignments or I/O.
@@ -53,7 +53,7 @@ shared:
   plugin: shared
   core:run: true # true | false; default: false. Apply workflow-wide defaults.
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
-  core:output_metadata_path: expr:var.output_dir & '/' & var.scene_id & '_processing_metadata.json' # One metadata file per scene, locally and on HPC.
+  core:output_metadata_path: expr:var.relative_output_dir & '/' & var.scene_id & '_processing_metadata.json' # One metadata file per scene, locally and on HPC.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
   # Shared parameters are offered to every function that accepts them; no shared defaults exist.
   # Set shared values directly; per-step param: settings override them.
@@ -96,10 +96,8 @@ shared:
   param:log_to_console: true # true | false; default: NA. Use this to pass logging preferences to the plugins.
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
+  core:cleanup_dirs: [const:temp_dir] # Cleanup roots; default: []. Requested outputs and sources stay protected.
   # Workflow-wide constants. They remain available to every scene and aggregate.
-  const:temp_dir: path:/path/to/temp # Stable temp directory beside this YAML; holds intermediates and saved import context.
-  const:dem_path: path:/path/to/dem.tif # path; recipe setting. Shared local DEM; fetch_dem replaces this when enabled.
-  const:reference_path: path:/path/to/reference.tif # path; recipe setting. Alignment reference; may share an HPC folder with the DEM.
   const:red_band_index: 5 # one-based integer; recipe setting. WorldView red.
   const:green_band_index: 3 # one-based integer; recipe setting. WorldView green.
   const:nir_band_index: 7 # one-based integer; recipe setting. WorldView NIR1.
@@ -110,8 +108,8 @@ discover_inputs:
   # To refresh from the original metadata, leave load_context commented during that run.
   # core:load_context:
   #   "path:expr:const.temp_dir & '/context/import_metadata.json'": all
-  core:save_context:
-    "path:expr:const.temp_dir & '/context/import_metadata.json'": all
+  # core:save_context:
+  #   "path:expr:const.temp_dir & '/context/import_metadata.json'": all
   # core:load_upsert_context: {"path:expr:const.temp_dir & '/context/metadata.json'": [var.metadata]}
   # core:save_upsert_context: {"path:expr:const.temp_dir & '/context/metadata.json'": [var.metadata]}
   # dependencies selects recursive param references; defined selects this step's assignments.
@@ -119,10 +117,13 @@ discover_inputs:
   core:run: true # true | false; default: false. Enable this step.
   # Later import_files steps add scenes and missing metadata fields; existing values and roots are preserved.
   # Output filenames are defined by YAML expressions; functions receive complete explicit paths.
-  param:output_dir: literal:expr:$replace(var.file_path, /[^\/]+$/, '') & '../../processed' # path; default: ./output. Explicitly relative to each original input.
-  param:temp_dir: const:temp_dir # path; default: sys. Reuse the shared temp directory so saved context survives between runs.
-  # param:temp_dir_scope: const # const | var; default: const. Share one temporary root across scenes.
-  # param:output_dir_scope: var # const | var; default: var. Resolve an output root for each scene.
+  # Define hard coded path variables
+  const:output_dir: path:./output # Shared products, including the final mosaic; relative to this YAML.
+  const:temp_dir: path:./temp # Stable root for intermediates and saved context.
+  var:relative_output_dir: path:expr:$replace(var.file_path, /[^\/]+$/, '') & '../../processed' # Per-scene output root, resolved from the original input.
+  const:dem_path: path:/path/to/dem.tif # path; recipe setting. Shared local DEM; fetch_dem replaces this when enabled.
+  const:reference_path: path:/path/to/reference.tif # path; recipe setting. Alignment reference; may share an HPC folder with the DEM.
+
   # Sensor constants shared by all imported images.
   const:band_order: [BAND_C, BAND_B, BAND_G, BAND_Y, BAND_R, BAND_RE, BAND_N, BAND_N2]
   const:band_wavelengths_um: [0.4273, 0.4779, 0.5462, 0.6086, 0.6588, 0.7237, 0.8313, 0.9080]
@@ -226,7 +227,7 @@ file_source:
   # Alternative output path: expr:const.temp_dir & '/file_source/' & $split(var.file_path, '/')[-1]
   # core:calculate_overviews: false # true | false; default: false.
 
-# Optional online DEM. Otherwise set shared.const:dem_path for correction and both ortho steps.
+# Optional online DEM. Otherwise set discover_inputs.const:dem_path for correction and both ortho steps.
 # The DEM should contain WGS84 ellipsoidal heights in meters:
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.082016.4326.1
 # Enable to download one DEM covering all imported images; downstream const:dem_path links already use it.
@@ -256,9 +257,9 @@ fetch_atmosphere:
   plugin: fetch_atmosphere
   # Optional explicit metadata reuse; no implicit output sidecars or restore hooks.
   # core:save_context:
-  #   "path:expr:var.output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
+  #   "path:expr:var.relative_output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
   # core:load_context:
-  #   "path:expr:var.output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
+  #   "path:expr:var.relative_output_dir & '/context/' & var.basename & '_atmosphere.json'": var.atmosphere
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
   # param:source: nasa_power # nasa_power | modis_gee; default: nasa_power.
@@ -460,9 +461,9 @@ cloud_mask:
   core:run: true # true | false; default: false. Enable this step.
   core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:current_image_paths # path; required.
-  var:cloudmask: expr:var.output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
+  var:cloudmask: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
-  var:current_image_paths: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:current_image_paths: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_raster_path: var:current_image_paths # path; required. Or a path under const.temp_dir when only an intermediate.
   param:output_mask_path: var:cloudmask # path; required. Binary mask; may use const:temp_dir if not a deliverable.
   param:red_band_index: const:red_band_index # one-based integer; required. WorldView red.
@@ -505,7 +506,7 @@ alignment:
   param:moving_image_path: var:current_image_paths # path; required. Cached image can satisfy this dependency directly.
   param:fixed_image_path: const:reference_path # path; required when alignment runs.
   var:suffix: expr:var.suffix & '_aligned'
-  var:current_image_paths: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:current_image_paths: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:current_image_paths # path; required.
   # param:band_index: 0 # zero-based integer; default: 0. Registration metric band when per-image overrides are null.
   param:moving_band_index: 0 # zero-based integer | null; default: null -> band_index.
@@ -852,9 +853,8 @@ merge_rasters:
   core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Defines input files from a glob path, folder, or list of paths.
-  const:mosaic_output_dirs: collect:output_dir # Explicitly collect scene roots for this one shared product.
-  const:mosaic_path: expr:const.mosaic_output_dirs[0] & '/mosaic.tif'
-  param:output_image_path: const:mosaic_path # string; required. One mosaic in the first scene's output directory; output_tiles=True uses a folder.
+  const:mosaic_path: expr:const.output_dir & '/mosaic.tif'
+  param:output_image_path: const:mosaic_path # string; required. One mosaic in the shared output directory; output_tiles=True uses a folder.
   var:current_image_paths: const:mosaic_path # One final mosaic path per contributing scene.
   # param:output_tiles: false # true | false; default: false. Write tiles into a folder instead of one mosaic file.
   # param:cache: null # positive GB | null; default: null. GDAL cache size in GB, or None for the GDAL default. Inherits shared.param:cache when set.

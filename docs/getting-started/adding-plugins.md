@@ -59,8 +59,8 @@ discover_inputs:
   plugin: import_files
   core:run: true
   param:search_glob: /data/files/*.tif
-  param:output_dir: ../output
-  # param:temp_dir: sys
+  var:output_dir: >-
+    path:expr:$replace(var.file_path, /[^\/]+$/, '') & '../output'
   var:image: returned:file_path
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')
   var:suffix: ""
@@ -160,7 +160,7 @@ Optional declarations:
 
 Returned-field selectors support dotted fields and `$` for the whole result. Directory selectors start with `const.` or `var.` and may point to a path or list of paths. Core resolves existing declared locations; it does not create context fields or invent directory defaults. The workflow YAML directory is the base for selected relative output arguments. Cleanup applies only under populated temporary roots and retains explicitly required outputs. Roots do not request processing products.
 
-`import_files` supplies directory defaults through its ordinary `temp_dir`, `output_dir`, `temp_dir_scope` (default `const`) and `output_dir_scope` (default `var`) arguments. Its adapter registers `var.temp_dir`/`const.temp_dir` and `var.output_dir`/`const.output_dir`. Other plugins can publish completely different field names and declare those locations. Input arguments are passed unchanged by core: the importer resolves metadata and companions relative to each found file and returns absolute paths for later functions.
+`import_files` returns scenes and metadata without directory defaults or directory declarations. Define output and temporary roots through ordinary YAML `const:`/`var:` assignments, and select cleanup roots with `shared.core:cleanup_dirs: [const:temp_dir]`. Those names are examples, not reserved fields. Other plugins can still declare arbitrary directory locations through the optional interface above. The importer resolves metadata and companions relative to each found file and returns absolute source paths.
 
 Final JSON saving is independent of plugin return selectors: `shared.core:output_metadata_path` resolves against the completed context and appends `{const, var}` to a JSON array. The same destination collects multiple completions; scene-specific destinations naturally produce separate files. `core:delete_final_json_first` defaults to `true`, replacing old contents on the first write to each resolved destination during a workflow run. See [final metadata](../configuration/workflow-config.md#final-metadata-json).
 

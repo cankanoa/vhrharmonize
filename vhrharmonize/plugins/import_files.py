@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 
 from wcmatch import glob
@@ -13,7 +12,7 @@ from .base import FunctionPlugin
 from vhrharmonize.io.progress import progress, reports_progress
 
 FLAGS = glob.GLOBSTAR | glob.BRACE | glob.EXTGLOB | glob.GLOBTILDE | glob.NEGATE
-_RESERVED_FIELDS = {"scene_id", "file_path", "source_paths", "temp_dir", "output_dir"}
+_RESERVED_FIELDS = {"scene_id", "file_path", "source_paths"}
 
 
 def _metadata_rules(create_metadata_json):
@@ -89,19 +88,13 @@ def import_files(
     *,
     scene_id: str = "var:file_path",
     create_metadata_json: dict | None = None,
-    temp_dir: str = "sys",
-    output_dir: str = "./output",
-    temp_dir_scope: str = "const",
-    output_dir_scope: str = "var",
     where=True,
 ) -> dict:
-    """Import matching files and publish directory roots and plain scene objects.
+    """Import matching files and publish plain scene objects with metadata.
 
-    Relative paths resolve from each discovered file. Constant directory roots
-    use the first file's directory (cwd when there are no matches). Use absolute
-    roots for a shared project directory. Each directory has its own scope:
-    temp_dir_scope defaults to const and output_dir_scope defaults to var.
-    The search glob itself is relative to the Python working directory.
+    Metadata paths resolve from each discovered file. The search glob itself is
+    relative to the Python working directory. Output and temporary directories
+    belong to the caller's YAML const/var assignments, not to file discovery.
 
     Per-file metadata and filter expressions may be passed as literal:expr:... in
     YAML. They read var.file_path and imported fields, before YAML var assignments.
@@ -116,18 +109,11 @@ def import_files(
             Later imports merge records with the same ID; IDs must be unique within this import.
         create_metadata_json: Mapping of field names to {path: glob} or {to_json: file}.
             Fields are added directly to each scene. Rules run in declaration order.
-        temp_dir: Temporary directory path; sys creates a system temporary directory.
-        output_dir: Persistent output directory, relative to the matched file.
-        temp_dir_scope: const (default) shares one temporary root; var uses per-file roots.
-        output_dir_scope: var (default) uses per-file output roots; const shares one root.
         where: Boolean or per-file expression controlling which scenes are imported.
     """
     _scene_id(scene_id)
     if not search_glob:
         raise ValueError("import_files.param:search_glob is required")
-    for name, scope in (("temp_dir_scope", temp_dir_scope), ("output_dir_scope", output_dir_scope)):
-        if scope not in {"const", "var"}:
-            raise ValueError(f"{name} must be const or var")
     rules = _metadata_rules(create_metadata_json)
     patterns = search_glob if isinstance(search_glob, list) else [search_glob]
     files = sorted(
@@ -139,30 +125,11 @@ def import_files(
         }
     )
 
-    def directories(context, base_dir, scope):
-        result = {}
-        for name, template, selected_scope in (
-            ("temp_dir", temp_dir, temp_dir_scope),
-            ("output_dir", output_dir, output_dir_scope),
-        ):
-            if selected_scope != scope:
-                continue
-            value = resolve(template, context)
-            result[name] = (
-                tempfile.mkdtemp(prefix="vhr-")
-                if name == "temp_dir" and value == "sys"
-                else path(value, base_dir=base_dir)
-            )
-        return result
-
-    base_dir = str(Path(files[0]).parent) if files else os.getcwd()
-    published = directories({}, base_dir, "const")
     scenes = []
     seen_ids = set()
     for filename in progress(files, desc="Importing files", unit="files"):
         item = {"file_path": filename, "source_paths": [filename]}
         context = {"var": item}
-        item.update(directories(context, str(Path(filename).parent), "var"))
         _create_metadata(item, rules)
         item["scene_id"] = _scene_id(resolve(scene_id, context, returned=item))
         if resolve(where, context, returned=item):
@@ -172,7 +139,7 @@ def import_files(
                 )
             seen_ids.add(item["scene_id"])
             scenes.append(item)
-    return {"const": published, "scenes": scenes}
+    return {"scenes": scenes}
 
 
 def exact_glob(filename):
@@ -188,14 +155,9 @@ class ImportFiles(FunctionPlugin):
     target = "vhrharmonize.plugins.import_files:import_files"
     var_records_return = "scenes"
     var_records_mode = "merge"
-    constant_values_return = "const"
     var_id_return = "scene_id"  # The function computes this from its scene_id argument.
     var_path_return = "file_path"
     source_file_protection_paths_return = "source_paths"
-    temporary_directory_context_paths = ("var.temp_dir", "const.temp_dir")
-    output_directory_context_paths = ("var.output_dir", "const.output_dir")
-    directory_parameters = {"var.temp_dir": "temp_dir", "const.temp_dir": "temp_dir",
-                            "var.output_dir": "output_dir", "const.output_dir": "output_dir"}
     discovery_input_parameter = "search_glob"
 
     def stage_settings(self, *, settings, params, returned, path_mappings, file_paths,

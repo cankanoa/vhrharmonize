@@ -17,8 +17,8 @@ def settings(pattern, tmp_path, **extra):
         "plugin": "import_files",
         "core:run": True,
         "param:search_glob": str(pattern),
-        "param:temp_dir": str(tmp_path / "temp"),
-        "param:output_dir": str(tmp_path / "out"),
+        "const:temp_dir": str(tmp_path / "temp"),
+        "var:output_dir": str(tmp_path / "out"),
         **extra,
     }
 
@@ -34,8 +34,8 @@ def test_id_parameter_reads_parsed_metadata_before_filtering(tmp_path):
     scene = import_file(str(source), **arguments)
     assert scene["scene_id"] == "acquisition-17"
     assert import_files(
-        str(source), **arguments, temp_dir="temp", where="expr:var.scene_id = 'acquisition-17'"
-    )["scenes"] == [{**scene, "output_dir": str(tmp_path / "output")}]
+        str(source), **arguments, where="expr:var.scene_id = 'acquisition-17'"
+    )["scenes"] == [scene]
     assert import_file(str(source), scene_id="my-explicit-id")["scene_id"] == "my-explicit-id"
 
 
@@ -103,7 +103,7 @@ def test_duplicate_ids_within_an_import_raise_the_same_python_and_cli_error(tmp_
         (tmp_path / f"{name}.txt").touch()
     pattern = str(tmp_path / "*.txt")
     with pytest.raises(ValueError, match="unique within an import") as direct:
-        import_files(pattern, scene_id="duplicate", temp_dir=str(tmp_path / "temp"))
+        import_files(pattern, scene_id="duplicate")
     config = {"import": settings(pattern, tmp_path, **{"param:scene_id": "duplicate"})}
     filename = tmp_path / "recipe.yml"
     filename.write_text(yaml.safe_dump(config, sort_keys=False))

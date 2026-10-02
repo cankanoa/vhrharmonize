@@ -152,24 +152,17 @@ def test_custom_scene_json_locations_drive_output_paths_and_cleanup(tmp_path, mo
     assert outputs == [str(tmp_path / name / "out/image.tif") for name in ("a", "b")]
 
 
-def test_import_resolves_relative_paths_and_can_publish_scene_roots(tmp_path):
+def test_import_resolves_relative_metadata_without_directory_fields(tmp_path):
     for name in ("a", "b"):
         directory = tmp_path / name
         directory.mkdir()
         (directory / "image.tif").write_text("source")
         (directory / "document.json").write_text('{"gain": 2}')
-    returned = import_files(
-        str(tmp_path / "*/image.tif"),
-        temp_dir_scope="var",
-        output_dir_scope="var",
-        temp_dir="work",
-        output_dir="products",
-        create_metadata_json={"metadata": {"to_json": "document.json"}},
-    )
-    assert returned["const"] == {}
+    returned = import_files(str(tmp_path / "*/image.tif"),
+                            create_metadata_json={"metadata": {"to_json": "document.json"}})
+    assert set(returned) == {"scenes"}
     for name, scene in zip(("a", "b"), returned["scenes"]):
-        assert scene["temp_dir"] == str(tmp_path / name / "work")
-        assert scene["output_dir"] == str(tmp_path / name / "products")
+        assert "temp_dir" not in scene and "output_dir" not in scene
         assert scene["metadata"]["gain"] == 2
         assert set((tmp_path / name).iterdir()) == {
             tmp_path / name / "image.tif", tmp_path / name / "document.json"

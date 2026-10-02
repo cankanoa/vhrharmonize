@@ -72,7 +72,8 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
     recipe.write_text(
         yaml.safe_dump(
             {
-                "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
+                "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False,
+                           "const:root": str(tmp_path)},
                 "import_files": {"plugin": 'import_files', 
                     "core:run": True,
                     "param:search_glob": str(source),
@@ -108,6 +109,11 @@ def test_hpc_prepares_ordered_workflow_and_executes_staged_recipe(tmp_path, make
                 "run_id": "example",
                 "ssh_host": "example.invalid",
                 "ssh_user": "user",
+                "path_mappings": {
+                    "const:root": str(tmp_path / "remote/reference"),
+                    "const:output_dir": str(tmp_path / "remote/output"),
+                    "const:temp_dir": str(tmp_path / "remote/temp"),
+                },
                 **{
                     f"remote_{key}_dir": str(tmp_path / "remote" / key)
                     for key in ["output", "log", "temp", "reference"]
@@ -137,7 +143,8 @@ def test_hpc_stages_declared_rpc_companions_beside_the_raster(tmp_path, make_tes
     rpc = source.with_suffix(".RPB")
     rpc.write_text("example RPC coefficients")
     config = {
-        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
+        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False,
+                   "const:root": str(tmp_path)},
         "import_files": {"plugin": 'import_files', 
             "core:run": True,
             "param:search_glob": str(source),
@@ -164,6 +171,11 @@ def test_hpc_stages_declared_rpc_companions_beside_the_raster(tmp_path, make_tes
         remote_output_dir=str(tmp_path / "remote/out"),
         remote_temp_dir=str(tmp_path / "remote/temp"),
         remote_reference_dir=str(tmp_path / "remote/ref"),
+        path_mappings={
+            "const:root": str(tmp_path / "remote/ref"),
+            "const:output_dir": str(tmp_path / "remote/out"),
+            "const:temp_dir": str(tmp_path / "remote/temp"),
+        },
     )
     assert Path(uploads[str(source)]).parent == Path(uploads[str(rpc)]).parent
     for local, remote in uploads.items():
@@ -229,7 +241,8 @@ def test_hpc_uploads_declared_directory_inputs(tmp_path, make_test_raster):
     coefficients = calibration / "values.json"
     coefficients.write_text('{"gain": 1}')
     config = {
-        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
+        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False,
+                   "const:root": str(tmp_path)},
         "import_files": {"plugin": 'import_files', 
             "core:run": True,
             "param:search_glob": str(source),
@@ -255,6 +268,10 @@ def test_hpc_uploads_declared_directory_inputs(tmp_path, make_test_raster):
         remote_output_dir=str(remote_root / "out"),
         remote_temp_dir=str(remote_root / "temp"),
         remote_reference_dir=str(remote_root / "ref"),
+        path_mappings={
+            "const:root": str(remote_root / "ref"),
+            "const:output_dir": str(remote_root / "out"),
+        },
     )
     assert str(calibration) in uploads
     upload_tree = tmp_path / "upload_tree"

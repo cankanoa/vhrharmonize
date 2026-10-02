@@ -24,14 +24,14 @@ def recipe(tmp_path):
         "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
         "import_files": {"plugin": 'import_files', 
             **import_settings(source, tmp_path),
-            "const:output_dir": "./products",
-            "const:temp_dir": "./work",
+            "const:output_dir": "path:./products",
+            "const:temp_dir": "path:./work",
         },
         "file_source": copy_step("copied", "mul", "expr:const.output_dir & '/' & var.filename", require_outputs=True),
     }
 
 
-def test_default_system_temp_is_shared_per_run_and_unique_between_runs(
+def test_explicit_system_temp_is_shared_per_run_and_unique_between_runs(
     recipe, tmp_path, monkeypatch
 ):
     system = tmp_path / "system"
@@ -40,8 +40,7 @@ def test_default_system_temp_is_shared_per_run_and_unique_between_runs(
     (tmp_path / "inputs" / "second.bin").write_bytes(b"second")
     discovery = recipe["import_files"]
     discovery["param:search_glob"] = str(tmp_path / "inputs" / "*.bin")
-    discovery.pop("const:output_dir")
-    discovery.pop("const:temp_dir")
+    discovery["const:temp_dir"] = "path:sys"
     first = load_workflow(recipe, config_dir=str(tmp_path))
     second = load_workflow(recipe, config_dir=str(tmp_path))
     records = [r["context"]["const"] for r in first.records]
@@ -49,7 +48,7 @@ def test_default_system_temp_is_shared_per_run_and_unique_between_runs(
     assert Path(root).is_dir()
     assert Path(root).parent == system
     assert {r["temp_dir"] for r in records} == {root}
-    assert records[0]["output_dir"] == str(tmp_path / "inputs/output")
+    assert records[0]["output_dir"] == str(tmp_path / "products")
     assert second.records[0]["context"]["const"]["temp_dir"] != root
     assert "temp_dir" not in first.shared
     assert "temp" not in first.records[0]["context"]["var"]
@@ -174,7 +173,8 @@ def test_new_registration_automatically_gets_cli_and_only_runs_selected_plugin(
 def test_hpc_staging_rewrites_metadata_roots(recipe, tmp_path):
     from vhrharmonize.workflow.staging import stage_workflow
 
-    recipe["import_files"].pop("const:temp_dir")
+    recipe["import_files"]["const:temp_dir"] = "path:sys"
+    recipe["shared"]["const:root"] = str(tmp_path)
     original = deepcopy(recipe)
     remote = tmp_path / "remote"
     staged, uploads, downloads = stage_workflow(
@@ -183,6 +183,9 @@ def test_hpc_staging_rewrites_metadata_roots(recipe, tmp_path):
         remote_output_dir=str(remote / "out"),
         remote_temp_dir=str(remote / "temp"),
         remote_reference_dir=str(remote / "refs"),
+        path_mappings={"const:root": str(remote / "refs"),
+                       "const:output_dir": str(remote / "out"),
+                       "const:temp_dir": str(remote / "temp")},
     )
     assert recipe == original
     assert "temp_dir" not in staged["shared"]
@@ -231,12 +234,15 @@ def test_staged_metadata_roots_expand_on_the_execution_host(recipe, tmp_path, mo
             else expanduser(value)
         ),
     )
+    recipe["shared"]["const:root"] = str(tmp_path)
     staged, uploads, _ = stage_workflow(
         recipe,
         config_dir=str(tmp_path),
         remote_output_dir="~/remote/out",
         remote_temp_dir="~/remote/temp",
         remote_reference_dir="~/remote/refs",
+        path_mappings={"const:root": "~/remote/refs", "const:output_dir": "~/remote/out",
+                       "const:temp_dir": "~/remote/temp"},
     )
     for local, destination in uploads.items():
         destination = Path(os.path.expanduser(destination))
@@ -256,7 +262,7 @@ def test_cached_metadata_preserves_current_system_temp_root(recipe, tmp_path, mo
     system = tmp_path / "system"
     system.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(system))
-    recipe["import_files"].pop("const:temp_dir")
+    recipe["import_files"]["const:temp_dir"] = "path:sys"
     recipe["import_files"]["var:custom"] = {"sensor_setting": 3}
     recipe["file_source"]["var:saved"] = "returned:$"
     recipe["file_source"].update(context_controls(tmp_path / "selected.json", "var.saved"))

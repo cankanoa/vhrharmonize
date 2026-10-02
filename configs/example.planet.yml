@@ -4,7 +4,7 @@ shared:
   plugin: shared
   core:run: true # true | false; default: false. Apply workflow-wide defaults.
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
-  core:output_metadata_path: expr:var.output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
+  core:output_metadata_path: expr:var.relative_output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
   # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
   # core:run_from_existing: true # true | false; default: true.
@@ -15,7 +15,10 @@ shared:
   # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
   # core:save_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Append raw timings; null disables saving.
   # core:load_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Seed ETAs from past timings; null disables loading.
+  core:cleanup_dirs: [const:temp_dir] # Cleanup roots; default: []. Requested outputs and sources stay protected.
   # Workflow-wide constants. They remain available to every scene and aggregate.
+  const:output_dir: path:./output # Shared products; relative to this YAML.
+  const:temp_dir: path:./temp # Stable intermediate and context directory beside this YAML.
   const:reference_root: path:/path/to # Shared DEM/alignment directory.
 
   const:reference_path: expr:const.reference_root & '/reference.tif'
@@ -28,17 +31,14 @@ discover_inputs:
   # Explicit persistence only. Missing load files warn (when logs are on), then discovery continues.
   # To refresh from the original metadata, leave load_context commented during that run.
   # core:save_context:
-  #   "path:./context/import_metadata.json": [defined, var.file_path, var.output_dir, var.metadata, const.temp_dir]
+  #   "path:./context/import_metadata.json": [defined, var.file_path, var.relative_output_dir, var.metadata, const.temp_dir]
   # core:load_context:
-  #   "path:./context/import_metadata.json": [defined, var.file_path, var.output_dir, var.metadata, const.temp_dir]
+  #   "path:./context/import_metadata.json": [defined, var.file_path, var.relative_output_dir, var.metadata, const.temp_dir]
   # core:save_upsert_context: {"path:./context/metadata.json": [var.metadata]}
   # core:load_upsert_context: {"path:./context/metadata.json": [var.metadata]}
   # dependencies selects recursive param references; defined selects this step's assignments.
   # Use all instead of the selector list to save/load every context field.
-  param:output_dir: literal:expr:$replace(var.file_path, /[^\/]+$/, '') & '../processed_planet' # path; default: ./output. Explicitly relative to each original input.
-  param:temp_dir: path:sys # path; default: sys. Create one system temporary directory for this import.
-  # param:temp_dir_scope: const # const | var; default: const. Share one temporary root across scenes.
-  # param:output_dir_scope: var # const | var; default: var. Resolve an output root for each scene.
+  var:relative_output_dir: path:expr:$replace(var.file_path, /[^\/]+$/, '') & '../processed_planet' # Per-scene output root, resolved from the original input.
   core:run: true # true | false; default: false. Enable this step.
   param:search_glob: /path/to/planet/*_AnalyticMS_SR.tif
   var:reflectance: returned:file_path
@@ -58,9 +58,9 @@ cloud_mask:
   core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:reflectance
   var:suffix: expr:var.suffix & '_cloudmasked'
-  var:cloudmasked: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:cloudmasked: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_raster_path: var:cloudmasked
-  var:cloudmask: expr:var.output_dir & '/' & var.basename & '_cloudmask.tif'
+  var:cloudmask: expr:var.relative_output_dir & '/' & var.basename & '_cloudmask.tif'
   param:output_mask_path: var:cloudmask
   param:red_band_index: const:red_band_index
   param:green_band_index: const:green_band_index
@@ -73,7 +73,7 @@ alignment:
   param:moving_image_path: var:cloudmasked
   param:fixed_image_path: const:reference_path
   var:suffix: expr:var.suffix & '_aligned'
-  var:aligned: expr:var.output_dir & '/' & var.basename & var.suffix & '.tif'
+  var:aligned: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:aligned
   param:moving_band_index: expr:const.nir_band_index - 1
   param:fixed_band_index: 0

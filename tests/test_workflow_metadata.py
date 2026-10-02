@@ -50,7 +50,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     filename.write_text(text.replace("END;", extra + "END;"))
     config = load_config("configs/example.worldview.yml")
     config["discover_inputs"].update(
-        {"param:output_dir": str(tmp_path / "output"), "const:temp_dir": str(tmp_path / "temp")}
+        {"var:relative_output_dir": str(tmp_path / "output"), "const:temp_dir": str(tmp_path / "temp")}
     )
     config["shared"]["core:validity_check_grid_size"] = 0
     config["discover_inputs"]["param:search_glob"] = str(bundle["mul_tif"])
@@ -67,7 +67,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
         not {"band_order", "band_wavelengths_um", "calibration", "temp_dir"}
         & metadata.keys()
     )
-    assert metadata["output_dir"] == str(tmp_path / "output")
+    assert metadata["relative_output_dir"] == str(tmp_path / "output")
     assert workflow.records[0]["id"] == metadata["scene_id"] == bundle["basename"]
     assert metadata["solar_zenith"] == 17
     assert metadata["cloud_cover"] == 10

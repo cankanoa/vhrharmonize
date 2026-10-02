@@ -1,6 +1,7 @@
 """Small fixtures using the public prefixed recipe format."""
 
 from pathlib import Path
+from copy import deepcopy
 import shutil
 from vhrharmonize.plugins.base import FunctionPlugin, INPUT_PATH_FEATURES, OUTPUT_PATH_FEATURES
 from vhrharmonize.workflow.staging import stage_workflow
@@ -11,7 +12,6 @@ def import_settings(source, tmp_path):
         "plugin": "import_files",
         "core:run": True,
         "param:search_glob": str(source),
-        "param:output_dir_scope": "const",
         "var:mul": "returned:file_path",
         "var:basename": r"expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '')",
         "var:filename": "expr:$split(var.file_path, '/')[-1]",
@@ -62,12 +62,24 @@ def install_function(
 
 
 def stage(recipe, tmp_path):
+    recipe = deepcopy(recipe)
+    shared = next((settings for settings in recipe.values()
+                   if settings.get("plugin") == "shared" and settings.get("core:run")), None)
+    if shared is None:
+        shared = recipe["staging_roots"] = {"plugin": "shared", "core:run": True}
+    shared["const:staging_root"] = str(tmp_path)
+    mappings = {"const:staging_root": str(tmp_path / "remote/reference")}
+    for reference, destination in (("const:output_dir", "output"), ("var:output_dir", "output"),
+                                    ("var:relative_output_dir", "output"), ("const:temp_dir", "temp")):
+        if any(reference in settings for settings in recipe.values()):
+            mappings[reference] = str(tmp_path / "remote" / destination)
     return stage_workflow(
         recipe,
         config_dir=str(tmp_path),
         remote_output_dir=str(tmp_path / "remote/output"),
         remote_temp_dir=str(tmp_path / "remote/temp"),
         remote_reference_dir=str(tmp_path / "remote/reference"),
+        path_mappings=mappings,
     )
 
 

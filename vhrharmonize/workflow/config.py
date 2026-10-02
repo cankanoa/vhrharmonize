@@ -45,6 +45,7 @@ DEFAULT_SHARED = {
     "validity_check_grid_size": 2048,
     "delete_temp_dir": False,
     "delete_temp_steps_proactively": True,
+    "cleanup_dirs": [],
     "log_to_console": True,
     "show_progress": True,
     "report_progress": False,
@@ -100,6 +101,14 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError(f"{key} must be a boolean")
             if name in CONTEXT_CONTROLS:
                 validate_operation(value, name)
+            if name == "cleanup_dirs":
+                selected = [value] if isinstance(value, str) else value
+                if not isinstance(selected, list) or any(
+                    not isinstance(v, str) or v.split(":", 1)[0] not in {"const", "var"}
+                    or ":" not in v or not all(p.isidentifier() for p in v.split(":", 1)[1].split("."))
+                    for v in selected
+                ):
+                    raise ValueError("core:cleanup_dirs must be a const:name or var:name reference, or a list of these references")
             if name == "satisfies" and (
                 not isinstance(value, dict) or not value
                 or any(not isinstance(target, str) or not target.strip()

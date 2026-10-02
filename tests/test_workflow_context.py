@@ -26,7 +26,8 @@ def recipe(tmp_path):
         source.parent.mkdir()
         source.write_text(folder)
     return {
-        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False, "const:scale": 2},
+        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False, "const:scale": 2,
+                   "core:cleanup_dirs": ["const:temp_dir"]},
         "import_files": import_settings(tmp_path / "[ab]/same.txt", tmp_path),
     }
 

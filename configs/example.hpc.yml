@@ -40,7 +40,8 @@ path_mappings:
   var:metadata_path: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
   var:mul_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
   var:pan_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
-  var:output_dir: ~/koa_scratch/vhrharmonize/output
+  const:output_dir: ~/koa_scratch/vhrharmonize/output
+  var:relative_output_dir: ~/koa_scratch/vhrharmonize/output
   const:temp_dir: ~/koa_scratch/vhrharmonize/temp
   const:dem_path: ~/koa_scratch/vhrharmonize/references
   const:reference_path: ~/koa_scratch/vhrharmonize/references

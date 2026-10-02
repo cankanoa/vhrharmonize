@@ -184,6 +184,7 @@ def test_vertical_copy_chain_reuses_checkpoints_cleans_up_and_stages(tmp_path, w
         source.write_text(name)
     recipe = {
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
+                   "core:cleanup_dirs": ["const:temp_dir"],
                    "core:processing_direction": "vertical", "core:concurrent_processing": workers},
         "files": import_settings(tmp_path / "source/*.txt", tmp_path),
         "first": {**copy_step("first", "mul", suffix="_first"), "var:copied": "returned:$"},

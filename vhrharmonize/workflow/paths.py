@@ -1,4 +1,4 @@
-"""Resolve directories declared by plugins without inventing context variables."""
+"""Resolve directory roots selected by core or plugins without inventing variables."""
 
 from .values import assign, Deferred, lookup, path
 

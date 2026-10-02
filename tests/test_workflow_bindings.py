@@ -19,7 +19,8 @@ def recipe(tmp_path):
     source.parent.mkdir()
     source.write_text("original scene")
     return {
-        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
+        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False,
+                   "core:cleanup_dirs": ["const:temp_dir"]},
         "import_files": import_settings(source, tmp_path),
     }
 
@@ -450,8 +451,8 @@ def test_shared_function_values_reference_initialized_scene_variables(recipe, mo
 
 def test_import_directory_expressions_follow_prior_assignments(recipe, tmp_path):
     recipe["shared"]["const:project"] = "scene"
-    recipe["import_files"]["const:output_dir"] = "expr:'./products/' & const.project"
-    recipe["import_files"]["const:temp_dir"] = "expr:const.output_dir & '/work'"
+    recipe["import_files"]["const:output_dir"] = "path:expr:'./products/' & const.project"
+    recipe["import_files"]["const:temp_dir"] = "path:expr:const.output_dir & '/work'"
     metadata = Workflow(recipe, config_dir=tmp_path).records[0]["context"]["const"]
     assert metadata["output_dir"] == str(tmp_path / "products/scene")
     assert metadata["temp_dir"] == str(tmp_path / "products/scene/work")

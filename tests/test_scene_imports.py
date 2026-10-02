@@ -16,8 +16,8 @@ def importing(pattern, tmp_path, **settings):
         "plugin": "import_files",
         "core:run": True,
         "param:search_glob": str(pattern),
-        "param:temp_dir": str(tmp_path / "work"),
-        "param:output_dir": str(tmp_path / "out"),
+        "const:temp_dir": str(tmp_path / "work"),
+        "var:output_dir": str(tmp_path / "out"),
         **settings,
     }
 
@@ -66,8 +66,7 @@ def test_later_import_merges_nested_metadata_and_preserves_constants(tmp_path):
             tmp_path / "*.txt",
             tmp_path,
             **{
-                "param:temp_dir": str(tmp_path / "ignored_work"),
-                "param:output_dir": str(tmp_path / "ignored_out"),
+                "var:output_dir": str(tmp_path / "ignored_out"),
                 "param:create_metadata_json": {
                     "metadata": {"to_json": "literal:expr:var.file_path & '.extra.json'"},
                 },
@@ -229,20 +228,16 @@ def test_var_directory_roots_survive_reimport_and_new_scenes_get_own_roots(tmp_p
             tmp_path / "a/image.txt",
             tmp_path,
             **{
-                "param:temp_dir_scope": "var",
-                "param:output_dir_scope": "var",
-                "param:temp_dir": "first",
-                "param:output_dir": "products",
+                "var:temp_dir": "path:expr:$replace(var.file_path, /[^\\/]+$/, '') & 'first'",
+                "var:output_dir": "path:expr:$replace(var.file_path, /[^\\/]+$/, '') & 'products'",
             },
         ),
         "additional": importing(
             tmp_path / "*/image.txt",
             tmp_path,
             **{
-                "param:temp_dir_scope": "var",
-                "param:output_dir_scope": "var",
-                "param:temp_dir": "later",
-                "param:output_dir": "new_products",
+                "var:temp_dir": "path:expr:$replace(var.file_path, /[^\\/]+$/, '') & 'later'",
+                "var:output_dir": "path:expr:$replace(var.file_path, /[^\\/]+$/, '') & 'new_products'",
             },
         ),
     }

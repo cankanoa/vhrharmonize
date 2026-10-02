@@ -37,7 +37,7 @@ The source YAML is preserved. Preparation and remote copies change only selected
 ## Upload progress
 
 `hpc-upload` uses the same terminal display as workflow progress, with a total row
-and one row per step and mapped variable (for example, `alignment` / `var:output_dir`).
+and one row per step and mapped variable (for example, `alignment` / `var:relative_output_dir`).
 Each row shows completed/total files, processed/total bytes, speed, status, ETA, and
 a byte-based bar at the right. Green means transferred, purple means already
 current on HPC, and gray means remaining. File names are not printed. Directories
@@ -69,10 +69,10 @@ data independently of the display using
 ## Local preparation through a named step
 
 ```yaml
-run_to_step_before_prepare: discover_inputs # null disables this optional local run
+run_to_step_before_prepare: discover_inputs # null prevents local plugin calls
 ```
 
-Core writes a `.prepare.yml` copy beside the staged workflow. Later processing steps have `core:run: false`; earlier enable/disable choices remain intact. The named target and its dependencies run normally, including explicit context saves. The full original workflow is then used to generate the remote copy. You can instead prepare manually with `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
+Core writes a `.prepare.yml` copy beside the staged workflow. Steps after the cutoff receive `core:skip_plugin_call: true`; existing enable/disable choices remain intact. Enabled steps through the cutoff run locally, including explicit context saves. Their resulting state is handed directly to staging. The remote copy restores that state and disables the completed prefix. For a separate local run, use `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
 
 With `debug_logs: true` in the HPC YAML, preparation logs its start, the local
 execution cutoff, and the start of staging. Discovery-only local runs keep their
@@ -95,7 +95,9 @@ path_mappings:
   var:metadata_path: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
   var:mul_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
   var:pan_companions: "expr:'~/koa_scratch/vhrharmonize/inputs/' & var.scene_id"
-  var:output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/products
+  const:output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/products
+  var:relative_output_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/products
+  const:temp_dir: ~/koa_scratch/vhrharmonize/run_{run_id}/temp
   const:dem_path: /shared/reference
   const:reference_path: /shared/reference
 ```
@@ -121,7 +123,8 @@ keep their normal expressions. The initial assignment retains its string/list
 shape. For flattened imports, staging selectively replaces the source glob with
 the selected remote image paths and adjusts companion/metadata rules when needed.
 Portable expressions remain unchanged; irregular per-scene file associations use
-small path lookups, without embedding metadata or restoring scene snapshots.
+small path lookups. Prepared metadata is stored once in a separate JSON control
+file rather than embedded in the workflow YAML.
 
 Destination expressions use the existing JSONata syntax: quote literal path text,
 join it with `&`, and reference fields as `var.scene_id` or `const.name` inside
@@ -158,6 +161,15 @@ An unresolved external input must have explicit `core:requires` dependencies or
 be resolved by advancing the local cutoff. If record discovery is still pending,
 advance the cutoff through that producer so staging can determine per-record inputs.
 Constants-only workflows need no record producer and can use a null cutoff.
+
+Directory values are ordinary YAML assignments; the importer has no temp/output
+directory parameters. `core:cleanup_dirs` selects the corresponding remapped roots
+for cleanup during remote execution. Optional explicit context files under
+`const:temp_dir` use its mapping too. If a load path depends on `const:temp_dir`,
+define that constant in `shared` or an earlier step so it exists before loading.
+The examples do not need `project_root`. Additional context files outside mapped
+directories need their own mapping; statistics and generated workflow/sbatch
+control files are staged separately.
 
 Required scene/context paths must be covered; missing coverage is an error.
 Mapping a directory to itself, or a file to its existing parent folder, keeps its

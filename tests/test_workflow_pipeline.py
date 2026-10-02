@@ -16,7 +16,8 @@ from workflow_helpers import import_settings, copy_step, install_function
 def pipeline(tmp_path, make_test_raster):
     raw = make_test_raster(tmp_path / "source/image.tif")
     config = {
-        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False},
+        "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False,
+                   "core:cleanup_dirs": ["const:temp_dir"]},
         "import_files": import_settings(raw, tmp_path),
         'file_source_1': {**(copy_step("corrected", "mul", "expr:const.temp_dir & '/corrected.tif'")), "plugin": 'file_source'}, 'file_source_2': {**(copy_step("cloudmasked", "corrected", "expr:const.output_dir & '/cloudmasked.tif'", require_outputs=True)), "plugin": 'file_source'}, 'file_source_3': {**(copy_step("aligned", "cloudmasked", "expr:const.output_dir & '/aligned.tif'", require_outputs=True)), "plugin": 'file_source'},
     }
@@ -200,12 +201,16 @@ def test_staging_resumes_from_cloudmasked_output(pipeline, make_test_raster, tmp
     config["import_files"].update(context_controls(tmp_path / "scenes.json", "defined"))
     Workflow(config)  # Save explicitly selected discovery fields.
     remote_root = tmp_path / "remote"
+    config["shared"]["const:root"] = str(tmp_path)
     staged, uploads, downloads = stage_workflow(
         config,
         config_dir=str(tmp_path),
         remote_output_dir=str(remote_root / "out"),
         remote_temp_dir=str(remote_root / "temp"),
         remote_reference_dir=str(remote_root / "ref"),
+        path_mappings={"const:root": str(remote_root / "ref"),
+                       "const:output_dir": str(remote_root / "out"),
+                       "const:temp_dir": str(remote_root / "temp")},
     )
     assert str(raw) not in uploads
     assert str(masked) in uploads
