@@ -21,6 +21,7 @@ from uuid import uuid4
 from vhrharmonize.progress import PROGRESS_VERSION, ProgressCallback, ProgressSnapshot
 
 from vhrharmonize.io.progress import capture_messages, progress_context
+from .substeps import Substeps
 
 
 @dataclass
@@ -32,7 +33,7 @@ class EventReporter:
         self.queue.put({"task": self.task, "kind": kind, **values})
 
     def __call__(self, **stats):
-        fields = ("n", "total", "prefix", "unit", "elapsed", "rate", "operation", "status", "scene")
+        fields = ("n", "total", "prefix", "unit", "elapsed", "rate", "operation", "status", "scene", "substep", "job_id", "parent_substep")
         self.event("progress", stats={key: stats[key] for key in fields if key in stats})
 
     def message(self, text):
@@ -63,6 +64,7 @@ class StepProgress:
     worker_progress: bool = True
     history: tuple[float, int] = (0.0, 0)
     workers: int = 1
+    parent: str | None = None
 
 
 @dataclass
@@ -83,6 +85,7 @@ class TaskProgress:
     worker_failed: bool = False
     error_type: str | None = None
     timing_reported: bool = False
+    substeps: Substeps = field(default_factory=Substeps)
 
     @property
     def active(self):
@@ -121,6 +124,10 @@ class ProgressState:
             task = self.tasks.get(event["task"])
             if task is None:
                 return
+            if kind == "progress":
+                task.substeps.handle(event["stats"])
+                if event["stats"].get("substep") or event["stats"].get("job_id"):
+                    return
             if "started_ns" in event:
                 task.started_ns = event["started_ns"]
             if kind == "computed":
@@ -247,7 +254,7 @@ class WorkflowProgress:
                             run=sum(c for n, c in zip(nodes, counts) if n.status == "processing"),
                             reused=sum(c for n, c in zip(nodes, counts) if n.loaded and n.status != "processing"),
                             unused=sum(c for n, c in zip(nodes, counts) if not n.needed),
-                            worker_progress=False,
+                            worker_progress=False, parent=name,
                             disabled=step.get("skip_plugin_call", False),
                             history=history.get((label, *key[1:]), (0.0, 0)), workers=1,
                         )
@@ -433,6 +440,10 @@ class WorkflowProgress:
             for identity, task in self.state.tasks.items():
                 if not task.active:
                     continue
+                workers = task.substeps.operations(identity, task.step)
+                if workers:
+                    active.extend(workers)
+                    continue
                 stats = {"n": 0, "total": None, "prefix": "starting", "unit": "it",
                          "elapsed": 0, "rate": None, **deepcopy(task.stats)}
                 stats["elapsed"] = ((stats.get("elapsed") or 0) + now - task.stats_updated
@@ -445,12 +456,36 @@ class WorkflowProgress:
                         eta = max(0.0, mean * task.weight - (now - task.started))
                 active.append({"task_id": identity, "step": task.step, "scene": str(task.scene),
                                "stats": stats, "eta_seconds": eta})
+            rows = []
+            for row in self.state.rows.values():
+                value = self._row_snapshot(row)
+                nested = [child for task in self.state.tasks.values() if task.step == row.name
+                          for child in task.substeps.rows(finished=task.done or task.failed, failed=task.failed)]
+                if nested:
+                    value["children"] = nested
+                    value["active"] = sum(
+                        task.substeps.active_workers()
+                        if any(n['kind'] == 'jobs' for n in task.substeps.nodes.values()) else int(task.active)
+                        for task in self.state.tasks.values() if task.step == row.name and task.active)
+                rows.append(value)
+            total = self._row_snapshot(self.state.total(), total=True)
+            total["active"] = sum(row["active"] for row in rows)
+            by_name = {value["name"]: value for value in rows}
+            roots = []
+            for value in rows:
+                parent = self.state.rows[value["name"]].parent
+                if parent in by_name:
+                    value["name"] = "Overviews"
+                    value["unit"] = "images"
+                    by_name[parent].setdefault("children", []).append(value)
+                else:
+                    roots.append(value)
             return {
                 "version": PROGRESS_VERSION, "run_id": self.run_id,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "job_id": os.environ.get("SLURM_JOB_ID"), "status": self.snapshot_status,
-                "total": self._row_snapshot(self.state.total(), total=True),
-                "rows": [self._row_snapshot(row) for row in self.state.rows.values()],
+                "total": total,
+                "rows": roots,
                 "active": active, "messages": list(self.state.messages)[-5:],
                 "message_history": {"sequence": self.state.messages.sequence,
                                     "messages": list(self.state.messages)},

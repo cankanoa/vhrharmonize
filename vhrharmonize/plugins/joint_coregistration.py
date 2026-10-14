@@ -1,6 +1,6 @@
 """joint_coregistration: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def joint_coregistration(*args, **kwargs):
 joint_coregistration.__parameter_sources__ = (_upstream,)
 
 
-class JointCoregistration(FunctionPlugin):
+class JointCoregistration(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.joint_coregistration:joint_coregistration"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images", "tie_load_path"])

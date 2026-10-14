@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, wait
 from typing import Any, Dict, List, Mapping
 
 import geopandas as gpd
@@ -22,6 +22,7 @@ from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _log_image_completed, _log_image_start, _log_step_start
 from vhrharmonize.io.progress import current_callback, gdal_progress, progress, reports_progress
 from vhrharmonize.io.progress_transport import local_worker_progress, dask_worker_progress
+from vhrharmonize.io.substeps import substep
 from vhrharmonize.io.metadata import materialize_geometry
 
 
@@ -135,15 +136,47 @@ def _project_image_geometry(image_path, geometry, epsg):
     return geometry
 
 
+def _metadata_job(task, reporter):
+    if reporter is not None:
+        reporter.lifecycle("job_start")
+    try:
+        result = _calculate_seamline_metadata_geometry(*task, **({"progress_callback": reporter} if reporter is not None else {}))
+    except BaseException:
+        if reporter is not None:
+            reporter.lifecycle("job_failed")
+        raise
+    if reporter is not None:
+        reporter.lifecycle("job_finished")
+    return result
+
+
 def _iter_seamline_metadata_results(
     tasks: list[tuple],
     *,
     worker_count: int,
     backend: str,
     dask_scheduler: tuple[str, str] | list[str] | None,
+    executor=None,
 ):
     """Yield footprints as workers finish, using the shared workflow backends."""
-    if backend == "dask":
+    if executor is not None:
+        transport = (dask_worker_progress(current_callback(), executor._client)
+                     if hasattr(executor, "_client") else local_worker_progress(current_callback(), processes=True))
+        with transport as reporter, substep(current_callback(), "Calculate footprints", len(tasks), "images", kind="jobs") as phase:
+            futures = {}
+            try:
+                for index, task in enumerate(tasks):
+                    job = phase.reporter(reporter, index, os.path.basename(task[0]))
+                    futures[executor.submit(_metadata_job, task, job)] = index
+                for future in as_completed(futures):
+                    result = future.result()
+                    phase.commit(str(futures[future]))
+                    yield result
+            finally:
+                for future in futures:
+                    future.cancel()
+                wait(futures)
+    elif backend == "dask":
         from dask.distributed import as_completed as dask_as_completed
 
         client = _make_dask_client(dask_scheduler)
@@ -263,11 +296,16 @@ def write_seamline_metadata_gpkg(
     concurrent_processing: int | str = 1,
     concurrent_processing_backend: str = "process_pool",
     dask_scheduler: tuple[str, str] | list[str] | None = None,
+    executor=None,
 ) -> str:
     """Calculate missing footprints in workers and commit each result in the parent.
 
     Matching image_basename values are already processed and never submitted.
     Completed records remain available for reuse if another worker fails.
+
+    executor: Optional caller-owned image executor. The workflow supplies this
+        from core:concurrent_processing; standalone calls can still use the
+        concurrent_processing and backend arguments to create their own pool.
 
 
     """
@@ -349,6 +387,7 @@ def write_seamline_metadata_gpkg(
         worker_count=worker_count,
         backend=backend,
         dask_scheduler=dask_scheduler,
+        executor=executor,
     )
     datasource = output_layer = None
     try:
@@ -388,6 +427,13 @@ __all__ = [
 
 
 class SeamlineMetadata(FunctionPlugin):
+    executor_parameter = "executor"
+
+    def runtime_parameters(self, *, tile_threads):
+        return {**super().runtime_parameters(tile_threads=tile_threads),
+                "concurrent_processing": 1, "concurrent_processing_backend": "process_pool",
+                "dask_scheduler": None}
+
     input_dependency_paths = frozenset({"image_paths"})
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths

@@ -38,6 +38,36 @@ class CopyFile(FunctionPlugin):
 
 Each feature independently selects **function parameter names**, not literal filenames. Selected arguments can contain one path or a flat list of paths; each list item is tracked separately. All selections default to empty: keep only the features the plugin needs. Selecting path resolution does not enable validation, reuse, cleanup or transfers. For example, `output_overview_calculation_paths = {"output_image"}` restricts core overviews to that argument even if the function writes other files. See the [complete feature table](../configuration/workflow-config.md#plugin-file-features) for effects and YAML controls. Explicit `var:`, `const:`, `collect:` and JSONata references in parameters are tracked automatically. Context fields are never matched to function arguments by name. Keep optional imports inside functions so registration and recipe CLI help remain lightweight. Thin wrappers around another package can set `wrapper.__parameter_sources__ = (factory,)`, where `factory()` returns the delegated function. This exposes its native header and docstrings to argument validation and generated function options without copying processing code.
 
+Plugins can independently opt into workflow concurrency by declaring argument names:
+
+```python
+class MyProcessingPlugin(FunctionPlugin):
+    target = "my_package.processing:process"
+    scope = "aggregate"
+    executor_parameter = "worker_pool"
+    tile_threads_parameter = "window_threads"
+```
+
+Both declarations default to `None`. Merely accepting an argument named `executor`
+or `tile_threads` does not opt in. Declared names must be supported function
+parameters (including delegated parameters or declared `options`).
+
+For aggregate steps, core creates and owns the executor using
+`core:concurrent_processing`, the backend, and the Dask scheduler configuration,
+then passes it as `worker_pool`. The function must support `submit()` and returned
+futures, and must not shut down the borrowed executor. Scene steps already run
+inside workflow workers and receive `None` for the declared executor argument.
+`core:tile_threads` overrides `window_threads`; `cpu`/`num_cpu` resolves to the
+local CPU count, and `None` passes through. Undeclared arguments keep their normal
+shared, explicit, and function-default behavior.
+
+Adapters may override `runtime_parameters(*, tile_threads)`, starting with
+`super().runtime_parameters(tile_threads=tile_threads)`, to return additional
+library-specific argument overrides that disable internal worker pools. These
+values are used only for execution and are not stored in YAML or node metadata.
+SpectralMatch adapters use this hook for their native image-worker settings;
+the workflow engine does not know those parameter names.
+
 Register the adapter in your package's `pyproject.toml` and install with `pip install -e .`:
 
 ```toml

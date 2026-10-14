@@ -288,6 +288,10 @@ def test_overviews_have_separate_counts_after_named_step(tmp_path, make_test_ras
     assert list(state.rows) == ["deliver", "deliver / overviews"]
     assert state.rows["deliver / overviews"].done == 1
     assert state.total().done == state.total().run == 2
+    snapshot = dashboards[-1].snapshot()
+    assert [row["name"] for row in snapshot["rows"]] == ["deliver"]
+    overview = snapshot["rows"][0]["children"][-1]
+    assert (overview["name"], overview["done"], overview["unit"]) == ("Overviews", 1, "images")
 
 
 def test_reused_segment_and_eta_exclude_cached_work():

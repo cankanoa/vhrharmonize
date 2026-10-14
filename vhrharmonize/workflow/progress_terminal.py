@@ -68,6 +68,14 @@ def _bar(row, width=22, *, ascii_only=False):
     return FormattedText(parts)
 
 
+def _count_cell(row, key):
+    # Snapshots retain the scheduled run total for ETA/completion accounting.
+    # In the dashboard, Run denotes the work still outstanding, like the bar.
+    count = max(0, row["run"] - row["done"]) if key == "run" else row[key]
+    percentage = (100 * count / row["all"] if row["all"] else 0) if key == "run" else row["percentages"][key]
+    return f"{count}({percentage:.0f}%)"
+
+
 def _line(cells, widths, *, right=(), gap=2):
     result = []
     for index, (cell, width) in enumerate(zip(cells, widths)):
@@ -158,15 +166,24 @@ class TerminalProgressDisplay:
         if data is None:
             return [[("", "Waiting for progress")]]
         width = width or self.width or 116
-        rows = data["rows"]
+        rows = []
+        def flatten(items, depth=0, ancestors=()):
+            for item in items:
+                index = len(rows)
+                rows.append({**item, "_depth": depth, "_ancestors": ancestors})
+                flatten(item.get("children", []), depth + 1, (*ancestors, index))
+        flatten(data["rows"])
         hidden = 0
         if max_rows is not None and len(rows) > max_rows:
-            chosen = sorted(rows, key=lambda r: (not r["active"], r["done"] >= r["run"], r["pending"]))[:max(0, max_rows - 1)]
-            names = {r["name"] for r in chosen}
+            chosen = set()
+            for index in sorted(range(len(rows)), key=lambda i: (not rows[i]["active"], rows[i]["done"] >= rows[i]["run"], rows[i]["pending"])):
+                branch = {index, *rows[index]["_ancestors"]}
+                if len(chosen | branch) <= max(0, max_rows - 1):
+                    chosen.update(branch)
             hidden = len(rows) - len(chosen)
-            rows = [r for r in rows if r["name"] in names]
+            rows = [row for index, row in enumerate(rows) if index in chosen]
         rows = [data["total"], *rows]
-        counts = [[f"{r[key]}({r['percentages'][key]:.0f}%)" for _, key in COUNT_COLUMNS] for r in rows]
+        counts = [[_count_cell(r, key) for _, key in COUNT_COLUMNS] for r in rows]
         etas = [_duration(r["eta_seconds"]) if r["status"] in {"running", "waiting"}
                 else "done" if r["status"] == "completed" else r["status"] for r in rows]
         gap = 1 if width < 100 else 2
@@ -174,7 +191,12 @@ class TerminalProgressDisplay:
         active_width = max(6, *(len("disabled" if r.get("disabled") else str(r["active"])) for r in rows))
         eta_width = max(3, *map(len, etas))
         available = width - sum(number_widths) - active_width - eta_width - gap * 8
-        labels = [r["name"] + (" (no cb)" if not r["worker_progress"] else "") for r in rows]
+        def row_label(row):
+            name = "  " * row.get("_depth", 0) + row["name"]
+            if row.get("_depth") and row.get("unit") not in (None, "call", "it"):
+                name += " [" + row["unit"] + "]"
+            return name
+        labels = [row_label(r) + (" (no cb)" if not r["worker_progress"] else "") for r in rows]
         step_width = max(8, min(max(12, *map(get_cwidth, labels)), max(8, available // 2)))
         bar_width = max(8, available - step_width)
         widths = [step_width, *number_widths, active_width, eta_width, bar_width]
@@ -183,11 +205,14 @@ class TerminalProgressDisplay:
         lines = [_line(headers, widths, right=(1, 2, 3, 4, 5, 6, 7), gap=gap)]
         for row, numbers, eta in zip(rows, counts, etas):
             suffix = " (no cb)" if not row["worker_progress"] else ""
-            name = to_plain_text(_fit([("", row["name"])], max(0, step_width - len(suffix)))).rstrip()
+            name = to_plain_text(_fit([("", row_label(row))], max(0, step_width - len(suffix)))).rstrip()
             label = [("", name + suffix)]
             cells = [label, *[[("", n)] for n in numbers], [("", "disabled" if row.get("disabled") else str(row["active"]))], [("", eta)],
                      _bar(row, bar_width, ascii_only=self.ascii_only)]
-            lines.append(_line(cells, widths, right=(1, 2, 3, 4, 5, 6, 7), gap=gap))
+            line = _line(cells, widths, right=(1, 2, 3, 4, 5, 6, 7), gap=gap)
+            if row.get("_depth"):
+                line = [(style + " italic", text) for style, text in line]
+            lines.append(line)
         if hidden:
             lines.append([("", f"... {hidden} more steps")])
         return lines

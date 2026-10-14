@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .concurrency import _make_dask_client
+from .concurrency import _make_dask_client, image_executor
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
@@ -230,10 +230,13 @@ class ConstantBindings:
     records: list = field(default_factory=list)
 
 
-def _execute(payload):
+def _execute(payload, *, executor=None):
     plugin_name, params, shared, *reporters = payload
+    plugin = load_plugin(plugin_name)
+    if executor is not None:
+        params = {**params, plugin.executor_parameter: executor}
     if not reporters:
-        return load_plugin(plugin_name).run(params=params, shared=shared)
+        return plugin.run(params=params, shared=shared)
     from vhrharmonize.io.progress import capture_messages, progress_context
 
     reporter = reporters[0]
@@ -241,7 +244,7 @@ def _execute(payload):
     reporter.event("start", started_ns=started_ns)
     try:
         with progress_context(reporter, reporter.message), capture_messages():
-            result = load_plugin(plugin_name).run(params=params, shared=shared)
+            result = plugin.run(params=params, shared=shared)
     except BaseException as exc:
         reporter.event("failed", duration=monotonic() - started, started_ns=started_ns, error_type=type(exc).__name__)
         raise
@@ -1306,6 +1309,10 @@ class Workflow:
         )
         for filename in node.paths("output_parent_creation_paths"):
             Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        # Plugins explicitly opt into runtime controls; these are never persisted.
+        if node.step["plugin"] is not None:
+            plugin = load_plugin(node.step["plugin"])
+            params = {**params, **plugin.runtime_parameters(tile_threads=self.controls["tile_threads"])}
         return node.step["plugin"], params, shared
 
     def _finish(self, node, returned):
@@ -1578,7 +1585,13 @@ class Workflow:
                 self._log_node_start(node, index, len(pending), total)
                 yield node, self._progress.payload(node, payload, remote=remote) if self._progress else payload
 
-        if backend == "dask" and pending[0].record is not None:
+        plugin = load_plugin(pending[0].step["plugin"])
+        accepts_executor = getattr(plugin, "executor_parameter", None) is not None
+        if pending[0].record is None and accepts_executor:
+            with image_executor(workers, backend, self.controls.get("dask_scheduler")) as executor:
+                for node, payload in dispatches():
+                    self._finish(node, _execute(payload, executor=executor))
+        elif backend == "dask" and pending[0].record is not None:
             from dask.distributed import as_completed as dask_completed
 
             if workers != 1:

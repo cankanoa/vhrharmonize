@@ -35,6 +35,25 @@ def snapshot(messages=(), sequence=None):
                                      messages=list(messages)))
 
 
+def test_run_column_shows_remaining_scenes_for_steps_and_total():
+    display = terminal.TerminalProgressDisplay(stream=StringIO())
+    for done, expected in ((0, "20(8%)"), (3, "17(6%)"), (19, "1(0%)"), (20, "0(0%)")):
+        data = snapshot()
+        for row in [data["total"], *data["rows"]]:
+            row["done"] = done
+            row["percentages"]["done"] = 100 * done / row["all"]
+        display.update(data)
+        lines = [to_plain_text(line).split() for line in display.table(width=140)]
+        run_column = lines[0].index("Run")
+        assert [line[run_column] for line in lines[1:]] == [expected, expected]
+        assert data["total"]["run"] == data["rows"][0]["run"] == 20
+    data = snapshot()
+    for row in [data["total"], *data["rows"]]:
+        row.update(run=0, done=0, all=0)
+    assert all(to_plain_text(line).split()[run_column] == "0(0%)"
+               for line in display.table(data, width=140)[1:])
+
+
 class ScreenOutput(DummyOutput):
     size = Size(rows=24, columns=120)
 

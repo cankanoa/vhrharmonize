@@ -1,6 +1,6 @@
 """create_cloud_mask_with_omnicloudmask: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,8 @@ def create_cloud_mask_with_omnicloudmask(*args, **kwargs):
 create_cloud_mask_with_omnicloudmask.__parameter_sources__ = (_upstream,)
 
 
-class CreateCloudMaskWithOmnicloudmask(FunctionPlugin):
+class CreateCloudMaskWithOmnicloudmask(SpectralMatchPlugin):
+    executor_parameter = "executor"
     target = "vhrharmonize.plugins.create_cloud_mask_with_omnicloudmask:create_cloud_mask_with_omnicloudmask"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

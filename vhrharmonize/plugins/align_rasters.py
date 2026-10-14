@@ -1,6 +1,6 @@
 """align_rasters: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def align_rasters(*args, **kwargs):
 align_rasters.__parameter_sources__ = (_upstream,)
 
 
-class AlignRasters(FunctionPlugin):
+class AlignRasters(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.align_rasters:align_rasters"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

@@ -52,6 +52,7 @@ DEFAULT_SHARED = {
     "save_statistics_path": "statistics.jsonl",
     "load_statistics_path": "statistics.jsonl",
     "concurrent_processing": 1,
+    "tile_threads": 1,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
 }
@@ -95,6 +96,11 @@ def _validate_settings(settings, *, shared=False, context_only=False):
         if context_only and (kind == "param" or _uses_returned(value)):
             raise ValueError("Steps without a plugin cannot use param: or returned: values")
         if kind == "core":
+            if name == "tile_threads" and not (
+                value is None or value in ("cpu", "num_cpu")
+                or isinstance(value, int) and not isinstance(value, bool) and value > 0
+            ):
+                raise ValueError("core:tile_threads must be a positive integer, cpu, num_cpu, or null")
             if name not in (SHARED_CONTROLS | {"run"} if shared else STEP_CONTROLS):
                 raise ValueError(f"Unknown {'shared ' if shared else ''}core setting: {name}")
             if name in BOOLEANS and not isinstance(value, bool):

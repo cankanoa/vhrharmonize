@@ -45,6 +45,9 @@ def json_value(value):
 
 
 class FunctionPlugin:
+    executor_parameter = None
+    tile_threads_parameter = None
+
     scope = "var"
     var_records_return = None  # Returned field (or "$" for the whole result) containing scenes.
     var_records_mode = "replace"  # replace | merge (preserve existing fields, keyed by scene ID).
@@ -74,6 +77,36 @@ class FunctionPlugin:
     output_temporary_cleanup_paths = frozenset()
     output_hpc_staging_paths = frozenset()
     output_hpc_download_paths = frozenset()
+
+    def runtime_parameters(self, *, tile_threads):
+        """Map workflow controls to explicitly declared function arguments.
+
+        Override in an adapter to configure library-specific internal pools.
+        The workflow injects the borrowed executor separately at execution time.
+        """
+        from os import cpu_count
+        from vhrharmonize.parameters import function_parameters
+
+        declared = {key: getattr(self, key) for key in
+                    ("executor_parameter", "tile_threads_parameter")}
+        accepted = None
+        for key, name in declared.items():
+            if name is None:
+                continue
+            if not isinstance(name, str) or not name.isidentifier():
+                raise ValueError(f"{key} must be a parameter name or None")
+            if accepted is None:
+                accepted = set(function_parameters(self.function())) | self.options
+            if name not in accepted:
+                raise ValueError(f"{key} selects unsupported function parameter {name!r}")
+        if self.executor_parameter is not None and self.executor_parameter == self.tile_threads_parameter:
+            raise ValueError("Executor and tile-thread parameters must be different")
+        values = {}
+        if self.executor_parameter is not None:
+            values[self.executor_parameter] = None
+        if self.tile_threads_parameter is not None:
+            values[self.tile_threads_parameter] = (cpu_count() or 1) if tile_threads in ("cpu", "num_cpu") else tile_threads
+        return values
 
     def file_features(self):
         """Validate independent file-feature declarations without loading the function."""

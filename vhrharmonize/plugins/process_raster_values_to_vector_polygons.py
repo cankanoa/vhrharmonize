@@ -1,6 +1,6 @@
 """process_raster_values_to_vector_polygons: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def process_raster_values_to_vector_polygons(*args, **kwargs):
 process_raster_values_to_vector_polygons.__parameter_sources__ = (_upstream,)
 
 
-class ProcessRasterValuesToVectorPolygons(FunctionPlugin):
+class ProcessRasterValuesToVectorPolygons(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.process_raster_values_to_vector_polygons:process_raster_values_to_vector_polygons"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

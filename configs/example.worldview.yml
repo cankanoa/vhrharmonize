@@ -64,21 +64,17 @@ shared:
 
   # Common SpectralMatch function options also use ordinary shared parameters.
   param:window_size: 1024 # positive integer | null; default: NA. Processing/output tile size.
-  param:image_threads: 1 # cpu | positive integer | null; default: NA. Single-file merge overrides this with null.
   param:io_threads: 1 # cpu | positive integer | null; default: NA. Raster IO workers.
-  param:tile_threads: 1 # cpu | positive integer | null; default: NA. Window workers.
   # param:cache: null # positive GB | null; default: NA. null keeps the existing GDAL cache.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: NA. With Dask, set image_threads: null.
   # param:calculation_dtype: float32 # raster dtype; default: NA.
   # param:save_as_cog: false # true | false; default: NA.
   # param:debug_logs: false # true | false; default: NA.
   # param:resume_from_outputs: "no" # no | yes | validate; default: NA. Native reuse; core reuse is separate.
   # VHR calculates overviews after the selected steps. Leave native build_overviews unset.
 
-  param:concurrent_processing_backend: process_pool # process_pool | dask; default: NA. Single-file merge overrides this with null.
   # core:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
-  # core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent workflow tasks; must be 1 for Dask.
-  # param:concurrent_processing: 1 # positive integer | num_cpu; default: NA. Workers inside accepting functions (seamline_metadata); independent of core task scheduling.
+  core:tile_threads: 1 # positive integer | cpu | null; default: 1. Threads within each image.
+  core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent scene/image jobs; must be 1 for Dask.
   # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.
   # core:dask_scheduler: [file, ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json] # [file, path] | [address, URL] | null; default: null.
 
@@ -611,11 +607,7 @@ joint_coregistration:
   # param:build_overviews: false # true | false; default: false. Leave unset; VHR core calculates overviews.
   # param:window_scales: [2, 4, 8, 16, 32] # list; default: [2, 4, 8, 16, 32]. tuple[int, ...] of overview factors, default (2, 4, 8, 16, 32); None or () disables overview creation. Inherits shared.param:window_scales when set.
   # param:cache: null # positive GB | null; default: null. Positive number of gigabytes for the GDAL cache; None retains its current setting. Inherits shared.param:cache when set.
-  # param:image_threads: null # cpu | positive integer | null; default: null. Positive int worker count, 'cpu' for all cores, or None for serial pair matching and output processing. Inherits shared.param:image_threads when set.
   # param:io_threads: null # cpu | positive integer | null; default: null. Positive int GDAL I/O worker count, 'cpu' for all cores, or None for its default. Inherits shared.param:io_threads when set.
-  # param:tile_threads: null # cpu | positive integer | null; default: null. Positive int warp/tile worker count, 'cpu' for all cores, or None for serial processing. Inherits shared.param:tile_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". 'process_pool' (default) for local execution or 'dask' for an existing cluster. Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. ('file', scheduler_json_path), ('address', 'tcp://host:port'), or None; required with the Dask backend. Inherits shared.param:dask_scheduler when set.
   # param:debug_logs: false # true | false; default: false. bool, default False; print processing details. Inherits shared.param:debug_logs when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". 'no' (default) overwrites, 'yes' reuses existing outputs, or 'validate' reuses outputs that pass validation. Inherits shared.param:resume_from_outputs when set.
 
@@ -636,9 +628,6 @@ seamline_metadata:
   # param:scene_total: null # integer | null; default: null -> input count for progress logs.
   param:reuse: true # true | false; default: false. Native record-level reuse for the footprint table.
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
-  # param:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Function workers; core scene scheduling is separate.
-  # param:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Inherits shared.param:dask_scheduler.
 
 # Global radiometric regression between overlapping images.
 global_regression:
@@ -656,11 +645,7 @@ global_regression:
   # param:debug_logs: false # true | false; default: false. If True, prints debug info and progress. Inherits shared.param:debug_logs when set.
   # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
   # param:cache: null # positive GB | null; default: null. Controls GDAL cache size in GB. Inherits shared.param:cache when set.
-  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
   # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
-  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
   # param:window_size: null # positive integer | null; default: null. Output image tile size. Inherits shared.param:window_size when set.
   # param:save_as_cog: false # true | false; default: false. If True, saves output as a Cloud-Optimized GeoTIFF using proper band and block order. Inherits shared.param:save_as_cog when set.
   # param:estimate_stats: true # true | false; default: true.
@@ -705,11 +690,7 @@ local_block_adjustment:
   # param:debug_logs: false # true | false; default: false. If True, prints debug info and progress. Inherits shared.param:debug_logs when set.
   # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
   # param:cache: null # positive GB | null; default: null. Controls GDAL cache size in GB. Inherits shared.param:cache when set.
-  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
   # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
-  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
   # param:window_size: null # positive integer | null; default: null. Output image tile size. Inherits shared.param:window_size when set.
   # param:save_as_cog: false # true | false; default: false. If True, saves output as a Cloud-Optimized GeoTIFF using proper band and block order. Inherits shared.param:save_as_cog when set.
   # param:number_of_blocks: 100 # positive integer | [rows, columns] | coefficient_of_variation; default: 100. Integer, [rows, columns], or coefficient_of_variation
@@ -746,9 +727,6 @@ postprocess_footprints:
   # param:simplify_area_weight: 0.5 # number; default: 0.5. Weight in [0, 1] balancing normalized area loss against perimeter reduction in the greedy inward shortcut simplifier; larger values favor retaining area.
   # param:filter_area_size: null # number | null; default: null. Minimum component area in squared CRS units
   # param:filter_area_rank: 1 # number; default: 1. Largest N components; negative N keeps smallest abs(N); 0 or null keeps all
-  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-feature geometry operations; "cpu" uses all CPU cores, an integer sets the process count, and None disables local parallelism. Inherits shared.param:image_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address); required for Dask execution, which requires image_threads=None. Inherits shared.param:dask_scheduler when set.
   # param:debug_logs: false # true | false; default: false. Enables debug print statements if True; default is False. Inherits shared.param:debug_logs when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Recompute outputs with "no", reuse existing outputs with "yes", or validate existing outputs before reusing them with "validate"; incomplete streaming outputs are recomputed. Inherits shared.param:resume_from_outputs when set.
 
@@ -813,9 +791,6 @@ markov_triangles:
   # param:quadtree_overlap: 0.1 # number; default: 0.1. Child-block overlap fraction in (0, 0.5); defaults to 0.1.
   # param:quadtree_max_depth: 8 # number; default: 8. Nonnegative quadtree subdivision limit; defaults to 8.
   # param:solver_max_iterations: 50 # number; default: 50. Positive graph-cut sweep limit per node; defaults to 50; reaching the limit warns.
-  # param:image_threads: null # cpu | positive integer | null; default: null. Local worker count, "cpu" or None for serial execution; defaults to None. Inherits shared.param:image_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". "process_pool" for local workers or "dask" for an existing cluster; defaults to "process_pool". Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Dask connection as ("file", path) or ("address", address); requires image_threads=None; defaults to None. Inherits shared.param:dask_scheduler when set.
   # param:debug_logs: false # true | false; default: false. Print node sizes and processing details; defaults to False. Inherits shared.param:debug_logs when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". "no" recomputes, "yes" reuses existing output, "validate" checks the requested polygon layer; incomplete outputs always recompute. Inherits shared.param:resume_from_outputs when set.
   # External raster costs in edge_variables_weights_gsds_bands also need explicit core:requires paths.
@@ -835,11 +810,7 @@ mask_rasters:
   # param:window_size: null # positive integer | null; default: null. Tile size for processing tiles. Inherits shared.param:window_size when set.
   # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
   # param:cache: null # positive GB | null; default: null. Parallelization strategy at the window level within each image. Inherits shared.param:cache when set.
-  # param:image_threads: null # cpu | positive integer | null; default: null. Parallelism for per-image operations. Inherits shared.param:image_threads when set.
   # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
-  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
-  # param:concurrent_processing_backend: "process_pool" # string; default: "process_pool". Use a local process pool or an existing Dask cluster. Inherits shared.param:concurrent_processing_backend when set.
-  # param:dask_scheduler: null # [file, path] | [address, URL] | null; default: null. Existing Dask scheduler as ("file", path) or ("address", address). Inherits shared.param:dask_scheduler when set.
   # param:include_touched_pixels: false # true | false; default: false.
   # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Inherits shared.param:resume_from_outputs when set.
@@ -858,9 +829,7 @@ merge_rasters:
   var:current_image_paths: const:mosaic_path # One final mosaic path per contributing scene.
   # param:output_tiles: false # true | false; default: false. Write tiles into a folder instead of one mosaic file.
   # param:cache: null # positive GB | null; default: null. GDAL cache size in GB, or None for the GDAL default. Inherits shared.param:cache when set.
-  param:image_threads: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
   # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
-  # param:tile_threads: null # cpu | positive integer | null; default: null. "cpu" to get number of cores, int to assign number, and None to disable tile level parallelism. Inherits shared.param:tile_threads when set.
   # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
   # param:output_dtype: null # raster dtype | null; default: null. Data type for output rasters. Inherits shared.param:output_dtype when set.
   # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
@@ -872,6 +841,4 @@ merge_rasters:
   # param:resampling_method: "nearest" # nearest | near | bilinear | cubic | cubicspline | lanczos; default: "nearest".
   # param:custom_tiles_csv: null # string | null; default: null. Tile mode only; filename inside each output level Example: tiles.csv.
   # param:create_vrts: "MergedImage.vrt" # string; default: "MergedImage.vrt". Filename of the full-resolution VRT in the output folder, default "MergedImage.vrt".
-  param:concurrent_processing_backend: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
-  param:dask_scheduler: null # default: null. Override shared tile scheduling for a single-file merge; remove for tile mode.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". "no" overwrites outputs (omits -resume); "yes" skips existing files (-resume); "validate" checks existing tiles with the raster validation helper, removes invalid tiles, then uses -resume. Inherits shared.param:resume_from_outputs when set.

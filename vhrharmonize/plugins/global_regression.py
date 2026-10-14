@@ -1,6 +1,6 @@
 """global_regression: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def global_regression(*args, **kwargs):
 global_regression.__parameter_sources__ = (_upstream,)
 
 
-class GlobalRegression(FunctionPlugin):
+class GlobalRegression(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.global_regression:global_regression"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images", "load_adjustments", "pif_load_ties"])

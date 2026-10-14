@@ -1,6 +1,6 @@
 """local_block_adjustment: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -31,7 +31,9 @@ def local_block_adjustment(*args, **kwargs):
 local_block_adjustment.__parameter_sources__ = (_upstream,)
 
 
-class LocalBlockAdjustment(FunctionPlugin):
+class LocalBlockAdjustment(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.local_block_adjustment:local_block_adjustment"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

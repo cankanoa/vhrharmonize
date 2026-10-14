@@ -156,6 +156,24 @@ overlapping columns do not form an exclusive partition. `fraction_done` is
 Done / Run, or `null` when Run is zero. Total counts sum the step counts, so All
 on the total row represents scene-step work rather than distinct scenes.
 
+Rows may also contain a recursive `children` list of rows with the same columns,
+plus `id` and `unit` fields. The CLI renders these immediately beneath their
+parent, indents each level, and italicizes the whole child row. Child counters
+use their phase's work units (for example, overlap pairs or output images).
+Function phase counts are not added to the main scene totals. Built-in overview
+work also appears as a child row and retains its existing contribution to the
+workflow totals. Root function wrappers are omitted
+because the workflow step already represents them. Completed phase rows remain
+visible; compact displays keep ancestors with any visible descendant.
+
+For executor-aware phases, Active counts jobs that have actually started, rather
+than the coordinator or the configured pool capacity. Each running job has its
+own entry in `active`, so concurrent tile callbacks do not overwrite each other.
+The Run column displays `max(0, run - done)` and the corresponding percentage;
+the stored `run` field retains its scheduled total. Joint-coregistration tie
+phases also report previously loaded pairs in Loaded. A phase interrupted before
+its count completes can have status `stopped`; failures retain unfinished counts.
+
 The dashboard labels the `reused` count **Loaded** and orders its count columns as Unused,
 Loaded, Done, Run, All. Their headers and bar segments share fixed blue, purple,
 green and light gray colors, respectively (All remains neutral). Cached

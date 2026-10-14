@@ -13,6 +13,7 @@ from uuid import uuid4
 import sys
 
 from tqdm import tqdm
+from .substeps import Substep, substep
 
 
 _callback = ContextVar("progress_callback", default=None)
@@ -42,17 +43,27 @@ class CallbackTqdm(tqdm):
 
     def __init__(self, *args, callback, **kwargs):
         self.callback = callback
+        self.substep_row = None
         self.operation = uuid4().hex
         kwargs.update(gui=True, disable=False)
         super().__init__(*args, **kwargs)
+        self.substep_row = Substep(callback, self.desc, self.total, self.unit)
+        self.substep_row.details["id"] = self.operation
+        self.substep_row.emit("start")
         self.display()
 
     def display(self, *args, **kwargs):
+        if self.substep_row is not None:
+            self.substep_row.done = int(self.n)
+            self.substep_row.details["total"] = self.total
+            self.substep_row.emit("update")
         self.callback(**self.format_dict, operation=self.operation)
 
     def close(self):
         if not self.disable:
             self.display()
+            if self.substep_row is not None:
+                self.substep_row.emit("end" if self.total is not None and self.n >= self.total else "stopped")
         super().close()
 
 
@@ -88,16 +99,17 @@ def operation(description, callback=None):
     if callback is None:
         yield
         return
-    identity, started = uuid4().hex, monotonic()
-    fields = dict(prefix=description, unit="call", operation=identity, rate=None)
-    callback(n=0, total=None, elapsed=0, **fields)
-    try:
-        yield
-    except BaseException:
-        callback(n=0, total=None, elapsed=monotonic() - started, status="failed", **fields)
-        raise
-    else:
-        callback(n=1, total=1, elapsed=monotonic() - started, **fields)
+    with substep(callback, description, kind="group"):
+        identity, started = uuid4().hex, monotonic()
+        fields = dict(prefix=description, unit="call", operation=identity, rate=None)
+        callback(n=0, total=None, elapsed=0, **fields)
+        try:
+            yield
+        except BaseException:
+            callback(n=0, total=None, elapsed=monotonic() - started, status="failed", **fields)
+            raise
+        else:
+            callback(n=1, total=1, elapsed=monotonic() - started, **fields)
 
 
 def reports_progress(function=None, *, worker_progress=False):

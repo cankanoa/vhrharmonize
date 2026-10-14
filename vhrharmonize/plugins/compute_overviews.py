@@ -1,6 +1,6 @@
 """compute_overviews: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def compute_overviews(*args, **kwargs):
 compute_overviews.__parameter_sources__ = (_upstream,)
 
 
-class ComputeOverviews(FunctionPlugin):
+class ComputeOverviews(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.compute_overviews:compute_overviews"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images_paths"])

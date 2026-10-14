@@ -14,6 +14,9 @@ PROGRESS_VERSION = 2
 
 class _RowExtras(TypedDict, total=False):
     disabled: bool
+    children: list[ProgressRow]
+    id: str
+    unit: str
 
 
 class ProgressRow(_RowExtras):
@@ -111,7 +114,14 @@ def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
         for key in ("rows", "active", "messages"):
             if not isinstance(result[key], list):
                 raise ValueError(f"Expected progress {key} list")
-        for row in [result["total"], *result["rows"]]:
+        def walk_rows(rows):
+            for row in rows:
+                yield row
+                if "children" in row:
+                    if not isinstance(row["children"], list):
+                        raise ValueError("Expected progress children list")
+                    yield from walk_rows(row["children"])
+        for row in walk_rows([result["total"], *result["rows"]]):
             string(row["name"])
             string(row["status"])
             for key in ("unused", "done", "run", "all", "reused", "active"):

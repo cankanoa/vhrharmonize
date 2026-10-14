@@ -1,6 +1,6 @@
 """band_math: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def band_math(*args, **kwargs):
 band_math.__parameter_sources__ = (_upstream,)
 
 
-class BandMath(FunctionPlugin):
+class BandMath(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.band_math:band_math"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

@@ -1,6 +1,6 @@
 """markov_triangles: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,8 @@ def markov_triangles(*args, **kwargs):
 markov_triangles.__parameter_sources__ = (_upstream,)
 
 
-class MarkovTriangles(FunctionPlugin):
+class MarkovTriangles(SpectralMatchPlugin):
+    executor_parameter = "executor"
     target = "vhrharmonize.plugins.markov_triangles:markov_triangles"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images", "input_polygons", "foreground_path"])

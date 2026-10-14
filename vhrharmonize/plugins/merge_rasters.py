@@ -1,6 +1,6 @@
 """merge_rasters: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -23,7 +23,9 @@ def merge_rasters(*args, **kwargs):
 merge_rasters.__parameter_sources__ = (_upstream,)
 
 
-class MergeRasters(FunctionPlugin):
+class MergeRasters(SpectralMatchPlugin):
+    executor_parameter = "executor"
+    tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.merge_rasters:merge_rasters"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images"])

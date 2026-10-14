@@ -4,6 +4,50 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import Future, ProcessPoolExecutor
+from contextlib import contextmanager
+from multiprocessing import get_context
+
+
+class DaskExecutor:
+    """Borrow a workflow client and expose concurrent.futures-compatible jobs."""
+
+    def __init__(self, client):
+        self._client = client
+        self._jobs = []
+
+    def submit(self, function, /, *args, **kwargs):
+        result = Future()
+        # A running remote job must finish before its progress transport closes.
+        result.set_running_or_notify_cancel()
+        job = self._client.submit(function, *args, pure=False, **kwargs)
+        self._jobs.append(job)
+        def complete(job):
+            try:
+                value = job.result()
+            except BaseException as exc:
+                result.set_exception(exc)
+            else:
+                result.set_result(value)
+        job.add_done_callback(complete)
+        return result
+
+
+@contextmanager
+def image_executor(workers, backend, scheduler=None):
+    """Own an image pool while the aggregate coordinator runs in the parent."""
+    if backend == "dask":
+        if workers != 1:
+            raise ValueError("Use concurrent_processing: 1 with Dask; the cluster controls worker capacity")
+        with _make_dask_client(scheduler) as client:
+            executor = DaskExecutor(client)
+            try:
+                yield executor
+            finally:
+                client.cancel(executor._jobs)
+    else:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
+            yield executor
 
 
 def _resolve_concurrent_processing(value: object) -> int:
