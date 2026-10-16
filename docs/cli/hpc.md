@@ -72,7 +72,7 @@ data independently of the display using
 run_to_step_before_prepare: discover_inputs # null prevents local plugin calls
 ```
 
-Core writes a `.prepare.yml` copy beside the staged workflow. Steps after the cutoff receive `core:skip_plugin_call: true`; existing enable/disable choices remain intact. Enabled steps through the cutoff run locally, including explicit context saves. Their resulting state is handed directly to staging. The remote copy restores that state and disables the completed prefix. For a separate local run, use `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
+Core prepares an in-memory copy of the original workflow; it writes no `.prepare.yml` or preparation progress JSON file. Steps after the cutoff receive `core:skip_plugin_call: true`; existing enable/disable choices remain intact. Enabled steps through the cutoff run locally, including explicit context saves. Their resulting state is handed directly to staging. The remote copy restores that state and disables the completed prefix. For a separate local run, use `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
 
 With `debug_logs: true` in the HPC YAML, preparation logs its start, the local
 execution cutoff, and the start of staging. Discovery-only local runs keep their
@@ -142,13 +142,16 @@ being copied for each scene. Uploads under the common input directory remain bat
 
 `run_to_step_before_prepare` is the local plugin-call boundary. Preparation runs
 one workflow: steps through the named cutoff may call plugins, and later steps
-receive `core:skip_plugin_call: true` in the generated `.prepare.yml`. They remain
+receive `core:skip_plugin_call: true` in the in-memory preparation config. They remain
 in the dependency plan, but do not call plugins, compute overviews, or save
 processing results locally. `null` permits no local plugin calls. The alternate
 spelling `run_to_stop_before_prepare` is accepted; conflicting settings are rejected.
 
 The prepared constants and initialized `var` records are handed directly to
-staging and written to one relocated `prepared.json` control file. The remote
+staging and written to the file selected by `staged_context_file` under Generated files
+(default: `configs/{run_id}.context.json`, relative to the working directory).
+The run ID is substituted, and the resolved local path is recorded in the staged HPC YAML.
+The snapshot is uploaded as a remote `prepared.json` control file. The remote
 recipe restores that state and disables the locally completed prefix. Discovery
 is not repeated, even when the original recipe does not load a saved context.
 Explicit context files remain supported. Preparation retains intermediates needed

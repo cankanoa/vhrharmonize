@@ -82,8 +82,10 @@ def test_explicit_import_context_moves_without_raw_discovery_snapshot(tmp_path):
     assert (remote / "products/scene.txt").read_text() == "data"
 
 
+@pytest.mark.parametrize("context_template", [None, "snapshots/{run_id}.json"])
 @pytest.mark.parametrize("debug_logs", [False, True])
-def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later(tmp_path, capsys, debug_logs):
+def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later(tmp_path, capsys, debug_logs, monkeypatch, context_template):
+    monkeypatch.chdir(tmp_path)
     config, source = recipe(tmp_path)
     config["settings"].update({"core:log_to_console": True, "core:show_progress": True})
     context = tmp_path / "context/import.json"
@@ -100,6 +102,7 @@ def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later
         "workflow_config": str(workflow), "slurm_start_file": str(job), "ssh_host": "example.invalid", "ssh_user": "user",
         "run_id": "test", "remote_work_dir": str(tmp_path / "remote"), "remote_log_dir": str(tmp_path / "remote/logs"),
         "debug_logs": debug_logs,
+        **({"staged_context_file": context_template} if context_template else {}),
         "run_to_step_before_prepare": "import", "path_mappings": {"const:root": str(tmp_path / "remote")},
     }, sort_keys=False))
     plan = prepare_slurm_plan(str(hpc))
@@ -118,10 +121,13 @@ def test_prepare_cutoff_preserves_both_yaml_documents_and_does_not_process_later
     assert context.exists()
     assert not (tmp_path / "products/scene.txt").exists()
     assert workflow.read_text() == text
-    prepared = Path(plan["staged_workflow_file"]).with_suffix(".prepare.yml").read_text()
-    assert "# original recipe" in prepared and "# keep this comment" in prepared
-    assert yaml.safe_load(prepared)["copy"]["core:run"] is True
-    assert yaml.safe_load(prepared)["copy"]["core:skip_plugin_call"] is True
+    preparation_file = Path(plan["staged_workflow_file"]).with_suffix(".prepare.yml")
+    assert not preparation_file.exists()
+    assert not Path(str(preparation_file) + ".progress.json").exists()
+    snapshot = tmp_path / (context_template or "configs/{run_id}.context.json").format(run_id="test")
+    assert plan["staged_context_file"] == str(snapshot)
+    assert "const" in json.loads(snapshot.read_text())
+    assert str(snapshot) in plan["uploaded_input_paths"]
     staged = Path(plan["staged_workflow_file"]).read_text()
     assert "# original recipe" in staged and "# keep this comment" in staged
     assert yaml.safe_load(staged)["copy"]["core:run"] is True

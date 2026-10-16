@@ -10,6 +10,7 @@ slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 staged_workflow_file: configs/{run_id}.staged.worldview.yml # Generated rewritten workflow YAML
 staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch with {run_id} replaced
 staged_hpc_file: configs/{run_id}.staged.hpc.yml # Generated staged HPC YAML
+staged_context_file: configs/{run_id}.context.json # Prepared context snapshot uploaded for remote continuation
 debug_logs: true # Print debug logs
 show_progress: true # Grouped live upload dashboard; one final summary in redirected logs
 

@@ -221,7 +221,7 @@ file_source:
   param:output_path: var:current_image_paths # path; required. Replaces the current image when enabled.
   # Enabling this step automatically supplies the copied image to subsequent steps.
   # Alternative output path: expr:const.temp_dir & '/file_source/' & $split(var.file_path, '/')[-1]
-  # core:calculate_overviews: false # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
 
 # Optional online DEM. Otherwise set discover_inputs.const:dem_path for correction and both ortho steps.
 # The DEM should contain WGS84 ellipsoidal heights in meters:
@@ -302,7 +302,7 @@ atmospheric_correction:
   var:suffix: expr:var.suffix & '_py6s'
   var:current_image_paths: expr:const.temp_dir & '/atmospheric_correction/' & var.basename & var.suffix & '.tif'
   param:output_raster: var:current_image_paths # path; required. Suffix is user-defined.
-  # core:calculate_overviews: false # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
   param:atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter; default: midlatitude_summer.
   # param:aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric; default: maritime.
   param:aot550: >- # number; default: 0.2. Used when visibility_km is null.
@@ -421,7 +421,7 @@ orthorectify_mul:
   # param:output_dtype: int16 # raster dtype | null; default: shared.output_dtype (Python: source dtype).
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
-  # core:calculate_overviews: false # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
 
 # The same plugin runs again under a different, unique step name.
 
@@ -449,7 +449,7 @@ pansharpen:
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
-  # core:calculate_overviews: false # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
 
 # OmniCloudMask inference and application. Band indices here are one-based.
 cloud_mask:
@@ -491,7 +491,7 @@ cloud_mask:
   #   model_version: null # model version | null; default: null -> latest available. Examples: 1.0, 2.0, 3.0, 4.0.
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
-  core:calculate_overviews: true # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
 
 # Spatially match to an external image, LiDAR intensity raster or other reference dataset.
 # Band indices for registration are zero-based.
@@ -527,7 +527,7 @@ alignment:
   # param:delete_temp_dir: false # true | false; default: shared.delete_temp_dir (Python: true).
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
-  core:calculate_overviews: true # true | false; default: false.
+  # core:calculate_overviews: true # true | false; default: false.
 
 
 # Optional low-resolution test after alignment. Uncomment this block to resample every scene
@@ -634,7 +634,7 @@ global_regression:
   plugin: global_regression
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
-  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_global'
   var:current_image_paths: expr:const.temp_dir & '/global_regression/' & var.basename & var.suffix & '.tif'
@@ -679,7 +679,7 @@ local_block_adjustment:
   plugin: local_block_adjustment
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
-  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_local'
   var:current_image_paths: expr:const.temp_dir & '/local_block_adjustment/' & var.basename & var.suffix & '.tif'
@@ -800,7 +800,7 @@ mask_rasters:
   plugin: mask_rasters
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
-  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
   var:suffix: expr:var.suffix & '_masked'
   var:current_image_paths: expr:const.temp_dir & '/mask_rasters/' & var.basename & var.suffix & '.tif'
@@ -822,7 +822,7 @@ merge_rasters:
   plugin: merge_rasters
   core:run: true # true | false; default: false. Enable this step.
   core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
-  core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
+  # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Defines input files from a glob path, folder, or list of paths.
   const:mosaic_path: expr:const.output_dir & '/mosaic.tif'
   param:output_image_path: const:mosaic_path # string; required. One mosaic in the shared output directory; output_tiles=True uses a folder.

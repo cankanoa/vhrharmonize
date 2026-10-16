@@ -340,6 +340,7 @@ def test_directory_destination_expressions_are_resolved_before_remote_import(tmp
 
 
 def test_prepare_resolves_run_id_before_scene_expressions_and_preserves_yaml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     import yaml
     from vhrharmonize.slurm import prepare_slurm_plan
 
@@ -362,6 +363,6 @@ def test_prepare_resolves_run_id_before_scene_expressions_and_preserves_yaml(tmp
     assert Path(plan["staged_workflow_file"]).read_text().startswith("# original recipe\n")
     assert Path(plan["staged_hpc_file"]).read_text().startswith("# HPC settings\n")
     for source, target in plan["uploaded_input_paths"].items():
-        if "local-references" not in source and not source.endswith("prepared.json"):
+        if "local-references" not in source and source != plan["staged_context_file"]:
             assert target.startswith("~/inputs/R42/P")
     assert plan["path_mappings"]["var:current_image_paths"] == "expr:'~/inputs/R42/' & var.scene_id"

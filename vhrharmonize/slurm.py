@@ -34,6 +34,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "slurm_start_file",
     "staged_slurm_start_file",
     "staged_hpc_file",
+    "staged_context_file",
     "debug_logs",
     "show_progress",
     "enable_rsync_checksum",
@@ -225,6 +226,9 @@ def _validate_slurm_config(config: Mapping[str, Any]) -> None:
         not isinstance(staged_slurm_start_file, str) or not staged_slurm_start_file.strip()
     ):
         raise ValueError("staged_slurm_start_file must be a non-empty string when set.")
+    context_file = config.get("staged_context_file")
+    if context_file is not None and (not isinstance(context_file, str) or not context_file.strip()):
+        raise ValueError("staged_context_file must be a non-empty string when set.")
     configured_run_id = config.get("run_id")
     if configured_run_id is not None and (
         not isinstance(configured_run_id, str) or not configured_run_id.strip()
@@ -467,14 +471,17 @@ def prepare_slurm_plan(
     from vhrharmonize.workflow.engine import Workflow
 
     prepared = hpc_preparation_config(workflow_config_data, cutoff)
-    preparation_file = str(Path(staged_config).with_suffix(".prepare.yml"))
-    if os.path.abspath(preparation_file) == os.path.abspath(workflow_config):
-        raise ValueError("Preparation copy must not overwrite workflow_config")
-    write_yaml_copy(workflow_config, preparation_file, workflow_config_data, prepared)
+    staged_context_file = _resolve_local_template_path(_resolve_run_template(
+        slurm_config.get("staged_context_file") or "configs/{run_id}.context.json", resolved_run_id))
+    protected = (config, workflow_config, staged_config, staged_hpc_file,
+                 _require_config_value(slurm_config, "slurm_start_file"),
+                 _resolve_staged_slurm_start_file(slurm_config,
+                     slurm_start_file=slurm_config["slurm_start_file"], run_id=resolved_run_id))
+    if any(os.path.realpath(staged_context_file) == os.path.realpath(path) for path in protected):
+        raise ValueError("staged_context_file must not overwrite workflow, HPC, or sbatch files")
     _log(f"Running local steps | through={cutoff}", enabled=log_enabled, step="hpc:prepare")
     workflow = Workflow(prepared, config_dir=os.path.dirname(os.path.abspath(workflow_config)), preparing=True)
-    workflow.config_path = preparation_file
-    workflow.progress_path = preparation_file + ".progress.json"
+    workflow.config_path = os.path.abspath(workflow_config)
     workflow.run()
     mappings = {key: _resolve_run_template(value, resolved_run_id)
                 for key, value in slurm_config.get("path_mappings", {}).items()}
@@ -485,6 +492,7 @@ def prepare_slurm_plan(
         workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
         **staging_paths, path_mappings=mappings, workflow=workflow,
         context_staging_dir=staged_config + ".contexts",
+        prepared_context_file=staged_context_file,
         upload_groups=upload_groups,
     )
     reference_uploads = {}
@@ -527,6 +535,7 @@ def prepare_slurm_plan(
         "staged_workflow_file": staged_config_abs,
         "staged_slurm_start_file": staged_slurm_start_file,
         "staged_hpc_file": staged_hpc_file,
+        "staged_context_file": staged_context_file,
         "debug_logs": _parse_bool(slurm_config.get("debug_logs", False), key="debug_logs"),
         "show_progress": _parse_bool(slurm_config.get("show_progress", True), key="show_progress"),
         "enable_rsync_checksum": _parse_bool(

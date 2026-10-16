@@ -243,7 +243,9 @@ the originating step, the mapped path reference (or parameter/control label), an
 local upload paths. Each path occurs in only one group, independently of scene
 count. It labels the upload dashboard without changing transfer selection.
 The YAML may also contain `workflow_progress` using the snapshot
-structure above. A `.prepare.yml` copy records an optional named local cutoff.
+structure above. Preparation uses an in-memory config with the named local cutoff.
+`staged_context_file` selects the saved constants and scene-variable snapshot
+(default `configs/{run_id}.context.json`); no preparation YAML or progress JSON is generated.
 The generated `.sbatch` file is a shell script. Slurm logs are ordinary text,
 including the final static progress report. See [HPC commands](cli/hpc.md).
 

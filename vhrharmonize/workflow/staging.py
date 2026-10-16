@@ -31,7 +31,7 @@ def _cached_path_containment():
 
 def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=None,
                    remote_output_dir=None, remote_temp_dir=None, remote_reference_dir=None,
-                   context_staging_dir=None, upload_groups=None, workflow=None):
+                   context_staging_dir=None, prepared_context_file=None, upload_groups=None, workflow=None):
     """Map directory roots or flatten selected files, and transfer dependencies.
 
     Modern staging requires mapping coverage for workflow data and context files.
@@ -415,9 +415,12 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
             staged[name]["param:" + parameter] = assignment
             if isinstance(reference, str) and reference.startswith(("var:", "const:")):
                 staged[name][reference] = assignment
-        if context_staging_dir is None:
-            context_staging_dir = tempfile.mkdtemp(prefix="vhr-staged-context-")
-        snapshot_file = str(Path(context_staging_dir) / "prepared.json")
+        if prepared_context_file is None:
+            if context_staging_dir is None:
+                context_staging_dir = tempfile.mkdtemp(prefix="vhr-staged-context-")
+            snapshot_file = str(Path(context_staging_dir) / "prepared.json")
+        else:
+            snapshot_file = os.path.abspath(prepared_context_file)
         remote_snapshot = os.path.join(remote_reference_dir, "prepared.json")
         if remote_snapshot in destinations and destinations[remote_snapshot] != snapshot_file:
             raise ValueError(f"Prepared context collides with staged data: {remote_snapshot}")
