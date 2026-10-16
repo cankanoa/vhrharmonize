@@ -65,8 +65,8 @@ vhr workflow --config "$1"
 # SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
 # mkdir -p "$(dirname "${SCHEDULER_FILE}")"
 # rm -f "${SCHEDULER_FILE}"
-# srun --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
+# srun --overlap --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
 # sleep 10
-# srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
+# srun --overlap --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
 # sleep 10
 # vhr workflow --config "$1"
