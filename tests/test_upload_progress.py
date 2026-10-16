@@ -155,7 +155,7 @@ def test_upload_rendering_preserves_columns_colors_and_rightmost_bar(tmp_path, w
     colors = {style for style, value in display.render() if "▬" in value}
     assert f"fg:{upload.COLORS['done']}" in colors
     assert f"fg:{upload.COLORS['run']}" in colors
-    assert display.read_input is False
+    assert display.read_input is True
 
 
 @pytest.mark.parametrize("show_progress", [False, True])
@@ -232,7 +232,7 @@ def test_empty_transfer_finishes_and_legacy_maps_still_get_totals(tmp_path):
     assert legacy.snapshot()["rows"][0]["variable"] == "var:output_dir"
 
 
-def test_live_upload_leaves_terminal_input_available(tmp_path, monkeypatch):
+def test_live_upload_owns_input_for_forwarded_prompts(tmp_path, monkeypatch):
     from vhrharmonize.workflow import progress_terminal as terminal
     from test_progress_terminal import ScreenOutput
 
@@ -240,11 +240,12 @@ def test_live_upload_leaves_terminal_input_available(tmp_path, monkeypatch):
         def isatty(self):
             return True
 
-    def forbidden_input(**kwargs):
-        raise AssertionError("Upload dashboard must leave real terminal input to SSH")
+    from prompt_toolkit.input import create_pipe_input
+    pipe_context = create_pipe_input()
+    pipe = pipe_context.__enter__()
 
     output = ScreenOutput()
-    monkeypatch.setattr(terminal, "create_input", forbidden_input)
+    monkeypatch.setattr(terminal, "create_input", lambda **kwargs: pipe)
     monkeypatch.setattr(terminal, "create_output", lambda **kwargs: output)
     monkeypatch.setattr(terminal.sys, "stdin", TtyStream())
     monkeypatch.setenv("TERM", "xterm-256color")
@@ -259,6 +260,7 @@ def test_live_upload_leaves_terminal_input_available(tmp_path, monkeypatch):
     assert not display.thread.is_alive()
     assert not output.entered and not output.mouse_enabled
     assert output.cursor_visible
+    pipe_context.__exit__(None, None, None)
 
 
 @pytest.mark.skipif(shutil.which("rsync") is None, reason="local rsync is not installed")

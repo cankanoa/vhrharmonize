@@ -171,7 +171,73 @@ class TerminalUploadDisplay(TerminalProgressDisplay):
     title = "VHRHarmonize HPC Upload"
 
     def __init__(self, **kwargs):
-        super().__init__(read_input=False, **kwargs)
+        super().__init__(read_input=True, **kwargs)
+        self.command_text = ""
+        self.command_secret = True
+        self.command_writer = None
+        self.command_input = None
+
+    def begin_command(self, writer):
+        with self.lock:
+            self.command_writer = writer
+            self.command_text = ""
+            self.command_secret = True
+
+    def command_output(self, text, *, secret, replace=False):
+        # SSH uses /dev/tty, bypassing stdout; render even prompts without a newline.
+        text = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", text)
+        with self.lock:
+            self.command_text = (("" if replace else self.command_text) + text.replace("\r", ""))[-2000:]
+            self.command_secret = secret
+        if self.app is not None:
+            self.app.invalidate()
+
+    def end_command(self):
+        with self.lock:
+            self.command_writer = None
+            self.command_text = ""
+            self.command_secret = True
+        if self.app is not None and self.app.loop is not None:
+            self.app.loop.call_soon_threadsafe(self.command_input.buffer.reset)
+            self.app.invalidate()
+
+    def create_application(self, **kwargs):
+        from prompt_toolkit.filters import Condition
+        from prompt_toolkit.layout import HSplit, Layout, ConditionalContainer, Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+        from prompt_toolkit.widgets import TextArea
+        app = super().create_application(**kwargs)
+        body = app.layout.container
+
+        def submit(buffer):
+            with self.lock:
+                writer = self.command_writer
+                if writer is not None:
+                    writer((buffer.text + "\n").encode("utf-8"))
+                self.command_text = ""
+            buffer.reset()  # Do not retain passwords in input history.
+            return True
+
+        self.command_input = TextArea(height=1, multiline=False, wrap_lines=True,
+            prompt=lambda: self.command_text.split("\n")[-1],
+            password=Condition(lambda: self.command_secret), accept_handler=submit,
+            read_only=Condition(lambda: self.command_writer is None or not self.command_text))
+        app.layout = Layout(HSplit([
+            ConditionalContainer(HSplit([
+                Window(FormattedTextControl(lambda: "\n".join(self.command_text.split("\n")[:-1][-3:])),
+                       height=lambda: min(3, self.command_text.count("\n")), dont_extend_height=True),
+                self.command_input,
+            ]),
+                filter=Condition(lambda: self.command_writer is not None and bool(self.command_text))),
+            body,
+        ]), focused_element=self.command_input)
+
+        @app.key_bindings.add("c-d")
+        def eof(event):
+            if self.command_writer is not None:
+                self.command_writer(b"\x04")
+
+        return app
 
     def update(self, snapshot):
         with self.lock:

@@ -56,8 +56,11 @@ per second, including rsync's reconstruction of changed files, rather than measu
 SSH network traffic. ETA uses that rate and remaining bytes; it shows `TBD` until
 there is a rate. Unchanged files are credited when their batch succeeds. See
 [rsync's progress semantics](https://download.samba.org/pub/rsync/rsync.1#opt--progress).
-Ctrl-C cancels the transfer and restores the terminal; SSH can still read terminal
-input for authentication.
+SSH password, key-passphrase, host-confirmation, and other command prompts appear
+in an input row above the live upload display. Enter submits the response; password
+input is masked and cleared without adding it to history. Ctrl-D forwards EOF, and
+Ctrl-C cancels the command and restores the terminal. Redirected output and uploads
+without the live display retain normal command input behavior.
 
 New preparation records `upload_groups` in the staged HPC YAML for the step/root
 labels. Older staged files still upload with `inputs` / `controls` groups; run

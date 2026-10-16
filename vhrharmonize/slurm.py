@@ -615,6 +615,10 @@ def _run_local_command(
     stream_output: bool = False,
     output_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    from .workflow.command_terminal import current_display, run_command
+    display = current_display()
+    if display is not None:
+        return run_command(command, display, check=check, output_callback=output_callback)
     if stream_output or output_callback is not None:
         process = subprocess.Popen(  # nosec B603
             command,
@@ -898,7 +902,8 @@ def _upload_required_files(slurm_data: Mapping[str, Any], *, progress_callback=N
     callbacks = [callback for callback in (display.update if display else None, progress_callback) if callback is not None]
     progress = UploadProgress(upload_items, groups=slurm_data.get("upload_groups", ()),
                               path_mappings=slurm_data.get("path_mappings"), callbacks=callbacks)
-    with display if display is not None else nullcontext():
+    from .workflow.command_terminal import command_display
+    with display if display is not None else nullcontext(), command_display(display):
         progress.publish(force=True)
         try:
             for remote_root, grouped_items in grouped_uploads.items():
