@@ -6,6 +6,15 @@ import yaml
 from vhrharmonize.workflow.yaml_document import rewrite_yaml, preparation_config
 
 
+@pytest.mark.parametrize("value", ["hello\nworld\n", "hello\r\nworld\r\n"])
+def test_status_text_update_preserves_multiline_string(value):
+    source = 'raw_status_text: No submitted_job_id in staged HPC YAML.\nstatus: unknown\n'
+    original = yaml.safe_load(source)
+    updated = {**original, "raw_status_text": value, "status": "running"}
+    result = rewrite_yaml(source, original, updated)
+    assert yaml.safe_load(result) == updated
+
+
 def test_changed_block_scalar_keeps_header_comment_and_following_lines():
     source = "root: >- # root location\n  /local/project\n# next setting\nlabel: original\n"
     original = yaml.safe_load(source)

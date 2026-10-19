@@ -9,6 +9,28 @@ from vhrharmonize.workflow.config import load_config
 from vhrharmonize.workflow.engine import Workflow
 
 
+def test_hpc_status_cli_summarizes_uploads_without_dumping_paths(tmp_path, monkeypatch, capsys):
+    from vhrharmonize import slurm
+    from vhrharmonize.cli.functions import function_cli
+
+    filename = tmp_path / "hpc.yml"
+    config = {"upload_results": {
+        "/private/scene-a.tif": {"status": "synced"},
+        "/private/scene-b.tif": {"status": "synced"},
+        "/private/scene-c.tif": {"status": "failed"},
+    }}
+    filename.write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(slurm, "_fetch_status_text", lambda data: "JobState=FAILED")
+    monkeypatch.setattr(slurm, "_fetch_slurm_log_texts", lambda data: ({"error": "/remote/error"}, {"error": "vhr: command not found"}))
+    monkeypatch.setattr(slurm, "get_slurm_progress", lambda data: None)
+    function_cli(slurm.update_status_slurm_file, ["--config", str(filename)])
+    output = capsys.readouterr().out
+    assert "failed=1, synced=2" in output
+    assert "JobState=FAILED" in output and "vhr: command not found" in output
+    assert "/private/scene" not in output
+    assert yaml.safe_load(filename.read_text())["upload_results"] == config["upload_results"]
+
+
 def test_hpc_status_prints_saved_workflow_progress(tmp_path, monkeypatch, capsys):
     from vhrharmonize import slurm
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from contextlib import nullcontext
 import datetime as dt
 import hashlib
@@ -1093,10 +1093,17 @@ def update_status_slurm_file(config: str) -> Dict[str, Any]:
     progress = get_slurm_progress(slurm_data)
     slurm_data["workflow_progress"] = progress
     _write_staged_hpc_file(config, slurm_data)
+    counts = Counter(result.get("status", "unknown")
+                     for result in slurm_data.get("upload_results", {}).values())
+    print("Upload sync: " + (", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+                             if counts else "no recorded results"))
     _print_slurm_log_texts(log_paths, log_texts)
     _print_slurm_status_text(raw_status_text)
     _print_workflow_progress(progress)
     return slurm_data
+
+
+update_status_slurm_file.__cli_output__ = False
 
 
 def start_slurm_job(config: str) -> Dict[str, Any]:

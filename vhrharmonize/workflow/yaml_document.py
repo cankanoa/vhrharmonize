@@ -17,6 +17,8 @@ def rewrite_yaml(source, original, updated):
 
     def scalar(value, style=None, indent=0):
         if isinstance(value, str):
+            if "\n" in value or "\r" in value:
+                return json.dumps(value, ensure_ascii=False)
             if style == "'":
                 return "'" + value.replace("'", "''") + "'"
             if style == '"':
