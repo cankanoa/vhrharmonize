@@ -455,7 +455,7 @@ pansharpen:
 cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
-  core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
+  # core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:current_image_paths # path; required.
   var:cloudmask: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
@@ -498,7 +498,7 @@ cloud_mask:
 alignment:
   plugin: alignment
   core:run: true # true | false; default: false. Enable this step.
-  core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
+  # core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   param:moving_image_path: var:current_image_paths # path; required. Cached image can satisfy this dependency directly.
   param:fixed_image_path: const:reference_path # path; required when alignment runs.
   var:suffix: expr:var.suffix & '_aligned'
@@ -786,7 +786,7 @@ markov_triangles:
   # param:edge_variables_weights_gsds_bands: [["laplacian_difference", 1.0, ["native"], [1]], ["laplacian_magnitude", 0.25, [100], [1]]] # list; default: [["laplacian_difference", 1.0, ["native"], [1]], ["laplacian_magnitude", 0.25, [100], [1]]]. Terms [name_or_path, nonnegative weight, GSD selection, band selection]; use [value] for one value or {"average" | "largest" | "smallest": [values]} for two or more; GSDs are positive integers in CRS units or "
   # param:foreground_path: null # string | null; default: null. Optional polygon mask forbidding seams through protected interiors; infeasible coverage raises ValueError.
   # param:foreground_layer: null # string | null; default: null. Optional layer in foreground_path; None reads the default layer.
-  # param:mesh_spacing: 10 # number; default: 10. Positive mesh-cell width in CRS units, independent of cost GSDs; footprint boundaries constrain triangles; defaults to 10.
+  param:mesh_spacing: 500 # number; default: 10. Positive mesh-cell width in CRS units, independent of cost GSDs; footprint boundaries constrain triangles; defaults to 10.
   # param:quadtree_max_images_per_leaf: 16 # number; default: 16. Positive label-count target for quadtree leaves; defaults to 16.
   # param:quadtree_overlap: 0.1 # number; default: 0.1. Child-block overlap fraction in (0, 0.5); defaults to 0.1.
   # param:quadtree_max_depth: 8 # number; default: 8. Nonnegative quadtree subdivision limit; defaults to 8.

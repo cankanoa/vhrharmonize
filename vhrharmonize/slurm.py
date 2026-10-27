@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque
+from copy import deepcopy
 from contextlib import nullcontext
 import datetime as dt
 import hashlib
@@ -28,6 +29,7 @@ PATH_TEMPLATE_RUN_ID = "{run_id}"
 SLURM_PREPARE_CONFIG_KEYS = (
     "run_id",
     "workflow_config",
+    "remote_workflow_overrides",
     "run_to_step_before_prepare",
     "run_to_stop_before_prepare",
     "staged_workflow_file",
@@ -436,6 +438,51 @@ def _slurm_config_with_overrides(
     return config
 
 
+def _remote_workflow_overrides(workflow, overrides):
+    """Overlay remote execution settings using ordinary YAML step mappings.
+
+    Applied before path staging. Lists and nulls
+    replace values; mappings merge recursively. Graph/path changes belong in
+    the source recipe so preparation can plan their transfers.
+    """
+    if not isinstance(overrides, Mapping):
+        raise ValueError("remote_workflow_overrides must be a mapping of step names to settings")
+    result = deepcopy(workflow)
+
+    def merge(target, changes):
+        for key, value in changes.items():
+            if isinstance(value, Mapping) and isinstance(target.get(key), Mapping):
+                merge(target[key], value)
+            else:
+                target[key] = deepcopy(value)
+
+    for step, settings in overrides.items():
+        if step not in result:
+            raise ValueError(f"remote_workflow_overrides: unknown step {step!r}")
+        if not isinstance(settings, Mapping):
+            raise ValueError(f"remote_workflow_overrides.{step} must be a settings mapping")
+        # Execution controls do not change the dependency/transfer graph.
+        allowed = {"concurrent_processing_backend", "concurrent_processing",
+                   "tile_threads", "dask_scheduler", "image_threads", "io_threads",
+                   "log_to_console", "show_progress", "report_progress"}
+        for key in settings:
+            if not isinstance(key, str) or key.split(":", 1)[0] not in {"core", "param"} or key.split(":", 1)[-1] not in allowed:
+                raise ValueError(f"remote_workflow_overrides.{step}: {key!r} is not an execution setting; change graph/data settings in the workflow recipe")
+        merge(result[step], settings)
+    return result
+
+
+def _workflow_run_templates(value, run_id):
+    """Expand only the literal run placeholder, preserving expressions/braces."""
+    if isinstance(value, str):
+        return value.replace("{run_id}", str(run_id))
+    if isinstance(value, Mapping):
+        return {key: _workflow_run_templates(item, run_id) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_workflow_run_templates(item, run_id) for item in value]
+    return value
+
+
 def prepare_slurm_plan(
     config: str,
     *,
@@ -462,6 +509,9 @@ def prepare_slurm_plan(
     staged_hpc_file = _resolve_staged_hpc_file(slurm_config, config_path=config, run_id=resolved_run_id)
     workflow_config = _require_config_value(slurm_config, "workflow_config")
     workflow_config_data = load_config(workflow_config)
+    remote_overrides = slurm_config.get("remote_workflow_overrides", {})
+    # Validate before doing any local processing.
+    _remote_workflow_overrides(workflow_config_data, remote_overrides)
     from vhrharmonize.workflow.yaml_document import hpc_preparation_config, write_yaml_copy
 
     staged_config = _resolve_staged_workflow_file(
@@ -483,13 +533,15 @@ def prepare_slurm_plan(
     workflow = Workflow(prepared, config_dir=os.path.dirname(os.path.abspath(workflow_config)), preparing=True)
     workflow.config_path = os.path.abspath(workflow_config)
     workflow.run()
+    remote_workflow_config_data = _workflow_run_templates(
+        _remote_workflow_overrides(workflow_config_data, remote_overrides), resolved_run_id)
     mappings = {key: _resolve_run_template(value, resolved_run_id)
                 for key, value in slurm_config.get("path_mappings", {}).items()}
     staging_paths = {key: value for key, value in paths.items() if key != "remote_log_dir"}
     upload_groups = []
     _log("Staging workflow and planning transfers", enabled=log_enabled, step="hpc:prepare")
     staged_config_data, input_uploads, output_downloads = stage_workflow(
-        workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
+        remote_workflow_config_data, config_dir=os.path.dirname(os.path.abspath(workflow_config)),
         **staging_paths, path_mappings=mappings, workflow=workflow,
         context_staging_dir=staged_config + ".contexts",
         prepared_context_file=staged_context_file,

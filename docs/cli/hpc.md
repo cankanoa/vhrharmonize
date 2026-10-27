@@ -36,6 +36,28 @@ The source YAML is preserved. Preparation and remote copies change only selected
 
 ## Upload progress
 
+To keep local preparation on a process pool and use Dask remotely, set the local
+execution values in the workflow and add a normal nested mapping to the HPC YAML:
+
+```yaml
+remote_workflow_overrides:
+  shared:
+    core:concurrent_processing_backend: dask
+    core:concurrent_processing: 1
+    core:dask_scheduler: [file, "~/koa_scratch/run_{run_id}/scheduler.json"]
+```
+
+The outer key is the existing workflow step name, not a dotted path. Overrides
+apply only to the remote copy, before HPC path staging. `{run_id}` is expanded in
+string values throughout that copy (including override values); other braces and
+expressions are preserved. The source recipe and local preparation are unchanged.
+Lists and null replace values; nested mappings merge. Unknown steps and unsupported
+settings fail before local processing. Supported `core:`/`param:` execution keys are
+`concurrent_processing_backend`, `concurrent_processing`, `tile_threads`,
+`dask_scheduler`, `image_threads`, `io_threads`, `log_to_console`, `show_progress`,
+and `report_progress`. Keep dependency, path, and step-enablement changes in the
+source recipe so local preparation can plan their transfers correctly.
+
 `hpc-upload` uses the same terminal display as workflow progress, with a total row
 and one row per step and mapped variable (for example, `alignment` / `var:relative_output_dir`).
 Each row shows completed/total files, processed/total bytes, speed, status, ETA, and

@@ -6,6 +6,13 @@ workflow_config: configs/example.worldview.yml # Original workflow YAML; staged 
 run_to_step_before_prepare: discover_inputs # Workflow step name, independent of its plugin; null skips local preparation.
 slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 
+# Remote execution settings only; local preparation uses the workflow recipe. Nest settings under the existing step name, exactly as in the workflow YAML.
+# remote_workflow_overrides:
+#   shared:
+#     core:concurrent_processing_backend: dask
+#     core:concurrent_processing: 1
+#     core:dask_scheduler: [file, "~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json"]
+
 # Generated files
 staged_workflow_file: configs/{run_id}.staged.worldview.yml # Generated rewritten workflow YAML
 staged_slurm_start_file: configs/{run_id}.staged.slurm.sbatch # Generated sbatch with {run_id} replaced

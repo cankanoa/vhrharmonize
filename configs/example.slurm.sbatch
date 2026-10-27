@@ -4,8 +4,8 @@
 
 # Node settings
 #SBATCH --account=uh
-#SBATCH --partition=shared
-#SBATCH --time=48:00:00
+#SBATCH --partition=exclusive-long,shared-long
+#SBATCH --time=7-00:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
 #SBATCH --job-name=vhr-workflow
@@ -13,7 +13,7 @@
 #SBATCH --error=../run_{run_id}/logs/slurm-%j.err
 
 # When dask is enabled
-# #SBATCH --nodes=2
+# #SBATCH --nodes=6
 # #SBATCH --ntasks-per-node=1
 
 # Setup conda
@@ -24,9 +24,9 @@ eval "$(conda shell.bash hook)"
 
 # Setup conda environment
 ENV_NAME="vhrharmonize"
-if [ ! -d "$(conda info --base)/envs/${ENV_NAME}" ]; then
-    conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge gdal sixs pytorch torchvision cpuonly imageio python=3.11
-fi
+# if ! conda activate "${ENV_NAME}"; then
+#     conda create -y -n "${ENV_NAME}" -c pytorch -c conda-forge gdal sixs pytorch torchvision cpuonly imageio python=3.11
+# fi
 conda activate "${ENV_NAME}"
 export PYTHONUNBUFFERED=1
 
@@ -54,19 +54,13 @@ python -m pip install --upgrade "vhrharmonize[defaults,dask]"
 # jsonata-python is installed by the package dependency above.
 vhr workflow --config "$1"
 
-# When Dask is enabled, set shared.core:concurrent_processing_backend: dask
-# and shared.core:concurrent_processing: 1 in the recipe; comment the command above out.
-# SpectralMatch aggregate functions inherit ordinary parameters from shared:
-# param:concurrent_processing_backend: dask
-# param:image_threads: null
-# param:dask_scheduler: [file, /remote/path/to/the/scheduler.json]
-# Use the same scheduler file below; core settings are not passed as function parameters.
+# When Dask is enabled, set shared.core:concurrent_processing_backend: dask and shared.core:concurrent_processing: 1 in the recipe; comment the command above out. Use the same scheduler file below; core settings are not passed as function parameters.
 # SCHEDULER_FILE="${HOME}/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json"
 # SCHEDULER_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
 # mkdir -p "$(dirname "${SCHEDULER_FILE}")"
 # rm -f "${SCHEDULER_FILE}"
-# srun --overlap --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" dask-scheduler --scheduler-file "${SCHEDULER_FILE}" &
+# srun --overlap --nodes=1 --ntasks=1 -w "${SCHEDULER_HOST}" python -m distributed.cli.dask_scheduler --scheduler-file "${SCHEDULER_FILE}" &
 # sleep 10
-# srun --overlap --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" dask-worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
+# srun --overlap --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" python -m distributed.cli.dask_worker --scheduler-file "${SCHEDULER_FILE}" --nthreads "${SLURM_CPUS_PER_TASK}" --local-directory "${SLURM_TMPDIR:-/tmp}" &
 # sleep 10
 # vhr workflow --config "$1"

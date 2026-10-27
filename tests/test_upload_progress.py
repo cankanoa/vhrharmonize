@@ -221,6 +221,52 @@ def test_prepare_records_control_group_and_progress_default(tmp_path):
     assert "show_progress" in slurm.SLURM_PREPARE_CONFIG_KEYS
 
 
+def test_prepare_remote_execution_overrides_before_staging(tmp_path, monkeypatch):
+    config, _ = recipe(tmp_path)
+    config["settings"]["core:concurrent_processing_backend"] = "process_pool"
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_text(yaml.safe_dump(config, sort_keys=False))
+    original = workflow.read_text()
+    job = tmp_path / "job.sbatch"
+    job.write_text("#!/bin/sh\n")
+    hpc = tmp_path / "hpc.yml"
+    hpc.write_text(yaml.safe_dump(dict(
+        workflow_config=str(workflow), slurm_start_file=str(job),
+        run_to_step_before_prepare="import", run_id="bulk",
+        ssh_user="user", ssh_host="example.invalid", remote_work_dir="/remote",
+        remote_log_dir="/remote/logs", path_mappings={"const:root": "/remote"},
+        remote_workflow_overrides={"settings": {
+            "core:concurrent_processing_backend": "dask",
+            "core:dask_scheduler": ["file", "/remote/{run_id}/scheduler.json"],
+        }})))
+    from vhrharmonize.workflow import staging
+    actual = staging.stage_workflow
+
+    def capture(config, **kwargs):
+        assert config["settings"]["core:concurrent_processing_backend"] == "dask"
+        assert config["settings"]["core:dask_scheduler"] == ["file", "/remote/bulk/scheduler.json"]
+        assert kwargs["workflow"].controls["concurrent_processing_backend"] == "process_pool"
+        return actual(config, **kwargs)
+
+    monkeypatch.setattr(staging, "stage_workflow", capture)
+    result = slurm.prepare_slurm_plan(str(hpc))
+    staged = yaml.safe_load(Path(result["staged_workflow_file"]).read_text())
+    assert staged["settings"]["core:concurrent_processing_backend"] == "dask"
+    assert workflow.read_text() == original
+
+
+def test_remote_overrides_validate_and_preserve_source():
+    original = {"shared": {"core:dask_scheduler": ["file", "old"]}}
+    updated = slurm._remote_workflow_overrides(original, {"shared": {"core:dask_scheduler": None}})
+    assert updated["shared"]["core:dask_scheduler"] is None
+    assert original["shared"]["core:dask_scheduler"] == ["file", "old"]
+    for overrides in ([], {"typo": {}}, {"shared": []}, {"shared": {"core:run": False}}):
+        with pytest.raises(ValueError, match="remote_workflow_overrides"):
+            slurm._remote_workflow_overrides(original, overrides)
+    assert slurm._workflow_run_templates({"x": ["{run_id}", "expr:{'a': 1}"]}, "7") == {
+        "x": ["7", "expr:{'a': 1}"]}
+
+
 def test_empty_transfer_finishes_and_legacy_maps_still_get_totals(tmp_path):
     progress = upload.UploadProgress([])
     progress.finish()
