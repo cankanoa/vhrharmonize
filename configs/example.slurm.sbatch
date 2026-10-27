@@ -4,16 +4,16 @@
 
 # Node settings
 #SBATCH --account=uh
-#SBATCH --partition=exclusive-long,shared-long
+#SBATCH --partition=exclusive-long
 #SBATCH --time=7-00:00:00
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=200G
+#SBATCH --mem=100G
 #SBATCH --job-name=vhr-workflow
 #SBATCH --output=../run_{run_id}/logs/slurm-%j.out
 #SBATCH --error=../run_{run_id}/logs/slurm-%j.err
 
 # When dask is enabled
-# #SBATCH --nodes=6
+# #SBATCH --nodes=20
 # #SBATCH --ntasks-per-node=1
 
 # Setup conda
