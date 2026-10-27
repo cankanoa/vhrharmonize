@@ -267,3 +267,12 @@ def test_disabled_plugin_call_is_shown_in_active_column():
     text = "\n".join(to_plain_text(line) for line in display.table(data, width=180))
     assert 'disabled' in text
     assert data['rows'][0]['active'] == 1  # Rendering leaves numeric snapshot counts intact.
+
+
+def test_planning_only_step_is_distinct_from_disabled():
+    data = snapshot()
+    data['rows'][0]['execution_mode'] = 'only_planning'
+    display = terminal.TerminalProgressDisplay(stream=StringIO())
+    text = "\n".join(to_plain_text(line) for line in display.table(data, width=180))
+    assert 'only_planning' in text
+    assert 'disabled' not in text

@@ -25,7 +25,7 @@ UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _ma
 
 STEP_CONTROLS = {
     "run",
-    "skip_plugin_call",
+    "execution_mode",
     "scope",
     "reuse",
     "check_validity",
@@ -61,7 +61,6 @@ BOOLEANS = {
     "protect_source_files",
     "delete_final_json_first",
     "run",
-    "skip_plugin_call",
     "reuse",
     "check_validity",
     "calculate_overviews",
@@ -96,6 +95,8 @@ def _validate_settings(settings, *, shared=False, context_only=False):
         if context_only and (kind == "param" or _uses_returned(value)):
             raise ValueError("Steps without a plugin cannot use param: or returned: values")
         if kind == "core":
+            if name == "execution_mode" and value not in ("run", "only_planning", "disabled"):
+                raise ValueError("core:execution_mode must be run, only_planning, or disabled")
             if name == "tile_threads" and not (
                 value is None or value in ("cpu", "num_cpu")
                 or isinstance(value, int) and not isinstance(value, bool) and value > 0

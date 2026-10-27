@@ -97,7 +97,12 @@ data independently of the display using
 run_to_step_before_prepare: discover_inputs # null prevents local plugin calls
 ```
 
-Core prepares an in-memory copy of the original workflow; it writes no `.prepare.yml` or preparation progress JSON file. Steps after the cutoff receive `core:skip_plugin_call: true`; existing enable/disable choices remain intact. Enabled steps through the cutoff run locally, including explicit context saves. Their resulting state is handed directly to staging. The remote copy restores that state and disables the completed prefix. For a separate local run, use `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
+Core prepares an in-memory copy of the original workflow; it writes no `.prepare.yml` or preparation progress JSON file. Steps after the cutoff receive `core:execution_mode: only_planning` by default; existing enable/disable choices remain intact. These steps participate in the dependency plan, so a remote consumer can request missing local inputs without forcing unrelated earlier work. Required steps through the cutoff run locally, including explicit context saves. Their resulting state is handed directly to staging. The remote copy restores that state and disables the completed prefix. For a separate local run, use `vhr workflow --config workflow.yml --run-to-step discover_inputs`.
+
+`steps_after_prepare: only_planning` is the default HPC setting. Set it to
+`disabled` to defer building the remote suffix until local preparation finishes,
+matching the previous behavior. Neither mode executes steps after the cutoff
+locally. Neither forces the cutoff step on or changes `core:require_outputs`.
 
 With `debug_logs: true` in the HPC YAML, preparation logs its start, the local
 execution cutoff, and the start of staging. Discovery-only local runs keep their
@@ -167,7 +172,7 @@ being copied for each scene. Uploads under the common input directory remain bat
 
 `run_to_step_before_prepare` is the local plugin-call boundary. Preparation runs
 one workflow: steps through the named cutoff may call plugins, and later steps
-receive `core:skip_plugin_call: true` in the in-memory preparation config. They remain
+receive `core:execution_mode: only_planning` in the in-memory preparation config. They remain
 in the dependency plan, but do not call plugins, compute overviews, or save
 processing results locally. `null` permits no local plugin calls. The alternate
 spelling `run_to_stop_before_prepare` is accepted; conflicting settings are rejected.

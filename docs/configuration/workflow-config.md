@@ -381,7 +381,7 @@ Declare a shared temporary path once, for example `const:scratch: path:sys`, the
 
 Migrating older recipes: rename `core:process_for_paths` to `core:require_outputs`, keeping its value unchanged. Explicitly request desired products, including the final processing step. Moving a file outside temporary storage no longer requests it. Use `path:` or explicit expressions for destinations that previously depended on a registered output root.
 
-Per-step controls are `core:skip_plugin_call`, `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:require_outputs`, `core:requires` and `core:processing_direction`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
+Per-step controls are `core:execution_mode`, `core:run`, `core:scope`, `core:reuse`, `core:check_validity`, `core:calculate_overviews`, `core:require_outputs`, `core:requires` and `core:processing_direction`. Scope defaults to the adapter's declaration. Seamline metadata and SpectralMatch declare `aggregate`; their names receive no special execution branch in the core.
 
 Shared runner controls are:
 
@@ -600,8 +600,12 @@ unknown step names and input/non-file parameter targets are rejected. Imported
 products must pass the configured reuse checks. Without `core:satisfies`, imports
 provide ordinary variables consumed through explicit parameter references.
 
-`core:skip_plugin_call: true` keeps a step in the dependency plan without invoking
-its function. Skipped calls form a suffix; returned values remain pending rather
-than being replaced with fabricated results. HPC preparation injects this control
-after its local cutoff. `core:scope: var` selects per-record execution. Without initialized records, default-scope functions can run
+`core:execution_mode` replaces the former `core:skip_plugin_call` boolean. Its
+values are `run` (normal default), `only_planning` (include dependencies without
+executing), and `disabled` (defer the suffix graph during local preparation).
+Nonexecuting steps form a suffix; returned values remain pending rather than
+being replaced with fabricated results. HPC preparation injects `only_planning`
+after its local cutoff by default, controlled by `steps_after_prepare` in the HPC
+YAML. `core:run: false` still fully disables a step and its assignments.
+`core:scope: var` selects per-record execution. Without initialized records, default-scope functions can run
 once with constants, while explicit `var` scope and `var:` access are rejected.

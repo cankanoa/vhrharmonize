@@ -59,6 +59,7 @@ class StepProgress:
     done: int = 0
     pending: bool = False
     disabled: bool = False
+    execution_mode: str = "run"
     peak_active: int = 0
     unused: int = 0
     worker_progress: bool = True
@@ -242,7 +243,8 @@ class WorkflowProgress:
                     reused=sum(w for n, w in zip(nodes, weights) if n.loaded and n.status != "processing"),
                     unused=sum(w for n, w in zip(nodes, weights) if not n.needed),
                     worker_progress=self.supports_worker_progress(step),
-                    disabled=step.get("skip_plugin_call", False),
+                    disabled=step.get("execution_mode", "run") == "disabled",
+                    execution_mode=step.get("execution_mode", "run"),
                     pending=pending, history=history.get(key, (0.0, 0)), workers=workers,
                 )
                 if step.get("calculate_overviews") and nodes:
@@ -255,7 +257,8 @@ class WorkflowProgress:
                             reused=sum(c for n, c in zip(nodes, counts) if n.loaded and n.status != "processing"),
                             unused=sum(c for n, c in zip(nodes, counts) if not n.needed),
                             worker_progress=False, parent=name,
-                            disabled=step.get("skip_plugin_call", False),
+                            disabled=step.get("execution_mode", "run") == "disabled",
+                            execution_mode=step.get("execution_mode", "run"),
                             history=history.get((label, *key[1:]), (0.0, 0)), workers=1,
                         )
             # Runtime scene discovery can add overview rows after later steps.
@@ -406,6 +409,8 @@ class WorkflowProgress:
         eta = None
         if failed:
             status = "failed"
+        elif row.execution_mode == "only_planning":
+            status = "only_planning"
         elif row.pending:
             status = "waiting"
         elif row.done >= row.run:
@@ -429,6 +434,7 @@ class WorkflowProgress:
             "active": self.state.active(None if total else row.name),
             "pending": row.pending, "worker_progress": row.worker_progress,
             "disabled": row.disabled,
+            "execution_mode": row.execution_mode,
             "status": status, "eta_seconds": eta,
         }
 

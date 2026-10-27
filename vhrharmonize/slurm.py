@@ -31,6 +31,7 @@ SLURM_PREPARE_CONFIG_KEYS = (
     "workflow_config",
     "remote_workflow_overrides",
     "run_to_step_before_prepare",
+    "steps_after_prepare",
     "run_to_stop_before_prepare",
     "staged_workflow_file",
     "slurm_start_file",
@@ -207,6 +208,8 @@ def _validate_slurm_config(config: Mapping[str, Any]) -> None:
 
     validate_path_mappings(config.get("path_mappings", {}))
     cutoff = config.get("run_to_step_before_prepare")
+    if config.get("steps_after_prepare", "only_planning") not in ("only_planning", "disabled"):
+        raise ValueError("steps_after_prepare must be only_planning or disabled")
     if cutoff is not None and (not isinstance(cutoff, str) or not cutoff.strip()):
         raise ValueError("run_to_step_before_prepare must be a named step or null")
     _require_config_value(config, "slurm_start_file")
@@ -520,7 +523,10 @@ def prepare_slurm_plan(
     cutoff = slurm_config.get("run_to_step_before_prepare")
     from vhrharmonize.workflow.engine import Workflow
 
-    prepared = hpc_preparation_config(workflow_config_data, cutoff)
+    prepared = hpc_preparation_config(
+        workflow_config_data, cutoff,
+        steps_after_prepare=slurm_config.get("steps_after_prepare", "only_planning"),
+    )
     staged_context_file = _resolve_local_template_path(_resolve_run_template(
         slurm_config.get("staged_context_file") or "configs/{run_id}.context.json", resolved_run_id))
     protected = (config, workflow_config, staged_config, staged_hpc_file,
@@ -583,6 +589,7 @@ def prepare_slurm_plan(
         "run_id": resolved_run_id,
         "workflow_config": workflow_config,
         "run_to_step_before_prepare": cutoff,
+        "steps_after_prepare": slurm_config.get("steps_after_prepare", "only_planning"),
         "slurm_start_file": slurm_start_file,
         "staged_workflow_file": staged_config_abs,
         "staged_slurm_start_file": staged_slurm_start_file,

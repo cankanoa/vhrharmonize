@@ -208,8 +208,8 @@ def test_preparation_cutoff_preserves_recipe_controls():
     local = hpc_preparation_config(config, 'cutoff')
     assert local['cutoff']['core:run'] is False
     assert 'core:require_outputs' not in local['cutoff']
-    assert local['later']['core:skip_plugin_call'] is True
-    assert 'core:skip_plugin_call' not in config['later']
+    assert local['later']['core:execution_mode'] == 'only_planning'
+    assert 'core:execution_mode' not in config['later']
 
 
 def test_preparation_does_not_run_unused_return_only_step(monkeypatch, tmp_path):
@@ -333,7 +333,8 @@ def test_discovery_cutoff_keeps_existing_graph_and_validation(monkeypatch, tmp_p
     workflow.run()
     assert all(before is after for before, after in zip(nodes, workflow.nodes))
     row = next(row for row in workflow.get_progress()['rows'] if row['name'] == 'copy')
-    assert row['disabled'] is True
+    assert row['disabled'] is False
+    assert row['execution_mode'] == 'only_planning'
     assert row['active'] == 0
 
 
@@ -341,11 +342,72 @@ def test_remote_suffix_is_not_built_before_local_return(monkeypatch, tmp_path):
     install_function(monkeypatch, 'choose', lambda: {'name': 'chosen'})
     install_function(monkeypatch, 'create', lambda output_path: None, output_paths=('output_path',))
     config = {'settings': shared(**{'const:root': str(tmp_path)}),
-              'choose': {'plugin': 'choose', 'core:run': True, 'const:name': 'returned:name'},
+              'choose': {'plugin': 'choose', 'core:run': True, 'core:require_outputs': True,
+                         'const:name': 'returned:name'},
               'create': {'plugin': 'create', 'core:run': True, 'core:require_outputs': True,
                          'param:output_path': "expr:const.root & '/' & const.name & '.txt'"}}
-    workflow = Workflow(hpc_preparation_config(config, 'choose'), config_dir=tmp_path, preparing=True)
+    workflow = Workflow(hpc_preparation_config(config, 'choose', steps_after_prepare='disabled'),
+                        config_dir=tmp_path, preparing=True)
     assert [node.step['name'] for node in workflow.nodes] == ['choose']
     workflow.run()
     assert [node.step['name'] for node in workflow.nodes] == ['create']
     assert workflow.nodes[0].params['output_path'] == str(tmp_path / 'chosen.txt')
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_planning_only_suffix_requests_local_dependencies_without_explicit_targets(tmp_path, cached):
+    raw = tmp_path / 'raw.txt'
+    raw.write_text('raw')
+    masked = tmp_path / 'masked.txt'
+    masked.write_text('masked')
+    aligned = tmp_path / 'aligned.txt'
+    if cached:
+        aligned.write_text('cached')
+    config = {'settings': shared(**{'const:root': str(tmp_path)}),
+              'upstream': {'plugin': 'file_source', 'core:run': True,
+                           'param:input_path': str(raw), 'param:output_path': str(masked)},
+              'alignment': {'plugin': 'file_source', 'core:run': True,
+                            'param:input_path': str(masked), 'param:output_path': str(aligned)},
+              'remote': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
+                         'param:input_path': str(aligned), 'param:output_path': str(tmp_path / 'result.txt')}}
+    workflow = Workflow(hpc_preparation_config(config, 'alignment'), config_dir=tmp_path, preparing=True)
+    workflow.plan()
+    by_name = {node.step['name']: node for node in workflow.nodes}
+    assert by_name['alignment'].needed
+    assert by_name['alignment'].status == ('loaded' if cached else 'processing')
+    assert by_name['upstream'].status != 'processing'
+    workflow.run()
+    assert aligned.read_text() == ('cached' if cached else 'masked')
+    assert not (tmp_path / 'result.txt').exists()
+    staged, uploads, _ = stage(config, workflow, tmp_path)
+    assert str(aligned) in uploads
+    assert str(raw) not in uploads
+    transfer(uploads)
+    Workflow(staged, config_dir=tmp_path).run()
+    assert (tmp_path / 'remote/result.txt').read_text() == ('cached' if cached else 'masked')
+
+
+def test_disabled_suffix_defers_dependencies_and_planning_only_is_default(tmp_path):
+    config = {'settings': shared(),
+              'local': {'plugin': 'file_source', 'core:run': True,
+                        'param:input_path': str(tmp_path / 'raw.txt'),
+                        'param:output_path': str(tmp_path / 'local.txt')},
+              'remote': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
+                         'param:input_path': str(tmp_path / 'local.txt'),
+                         'param:output_path': str(tmp_path / 'result.txt')}}
+    default = hpc_preparation_config(config, 'local')
+    assert default['remote']['core:execution_mode'] == 'only_planning'
+    workflow = Workflow(hpc_preparation_config(config, 'local', steps_after_prepare='disabled'),
+                        config_dir=tmp_path, preparing=True)
+    workflow.plan()
+    assert [node.step['name'] for node in workflow.nodes] == ['local']
+    assert not workflow.nodes[0].needed
+
+
+@pytest.mark.parametrize('mode', [True, None, 'typo'])
+def test_invalid_execution_modes_are_rejected(mode):
+    from vhrharmonize.workflow.config import validate_config
+    with pytest.raises(ValueError, match='core:execution_mode'):
+        validate_config({'step': {'core:run': True, 'core:execution_mode': mode}})
+    with pytest.raises(ValueError, match='steps_after_prepare'):
+        hpc_preparation_config({'step': {'core:run': True}}, 'step', steps_after_prepare=mode)

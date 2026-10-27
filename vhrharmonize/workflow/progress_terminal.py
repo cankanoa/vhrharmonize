@@ -188,7 +188,12 @@ class TerminalProgressDisplay:
                 else "done" if r["status"] == "completed" else r["status"] for r in rows]
         gap = 1 if width < 100 else 2
         number_widths = [max(len(name), *(len(c[i]) for c in counts)) for i, (name, _) in enumerate(COUNT_COLUMNS)]
-        active_width = max(6, *(len("disabled" if r.get("disabled") else str(r["active"])) for r in rows))
+        def active_label(row):
+            if row.get("execution_mode") == "only_planning":
+                return "only_planning"
+            return "disabled" if row.get("disabled") else str(row["active"])
+
+        active_width = max(6, *(len(active_label(r)) for r in rows))
         eta_width = max(3, *map(len, etas))
         available = width - sum(number_widths) - active_width - eta_width - gap * 8
         def row_label(row):
@@ -207,7 +212,7 @@ class TerminalProgressDisplay:
             suffix = " (no cb)" if not row["worker_progress"] else ""
             name = to_plain_text(_fit([("", row_label(row))], max(0, step_width - len(suffix)))).rstrip()
             label = [("", name + suffix)]
-            cells = [label, *[[("", n)] for n in numbers], [("", "disabled" if row.get("disabled") else str(row["active"]))], [("", eta)],
+            cells = [label, *[[("", n)] for n in numbers], [("", active_label(row))], [("", eta)],
                      _bar(row, bar_width, ascii_only=self.ascii_only)]
             line = _line(cells, widths, right=(1, 2, 3, 4, 5, 6, 7), gap=gap)
             if row.get("_depth"):

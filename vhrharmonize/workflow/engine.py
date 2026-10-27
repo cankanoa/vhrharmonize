@@ -269,14 +269,14 @@ class Workflow:
         self.preparing = preparing
         self.preparation_state = None
         self.preparation_index = None
-        self.has_skipped_calls = any(step.get("skip_plugin_call", False) for step in self.steps)
+        self.has_nonexecuting_steps = any(step.get("execution_mode", "run") != "run" for step in self.steps)
         skipping = False
         for step in self.steps:
             if not step["run"]:
                 continue
-            if skipping and not step.get("skip_plugin_call", False):
-                raise ValueError("Skipped plugin calls must form a suffix of the workflow")
-            skipping |= step.get("skip_plugin_call", False)
+            if skipping and step.get("execution_mode", "run") == "run":
+                raise ValueError("Nonexecuting steps must form a suffix of the workflow")
+            skipping |= step.get("execution_mode", "run") != "run"
         if selected_step is not None:
             matching = [i for i, step in enumerate(self.steps) if step["name"] == selected_step]
             if not matching:
@@ -392,7 +392,7 @@ class Workflow:
                     self.initial_context["const"] = deepcopy(constants)
                 else:
                     self.initial_context = self._evaluate(step["settings"], self.initial_context, path_scope=(step["name"], None))[2]
-                if not step.get("skip_plugin_call", False):
+                if step.get("execution_mode", "run") == "run":
                     self.context_files.save(step, self.initial_context["const"], self.records)
                 self.preflight_steps.add(index)
                 self.start_index = index + 1
@@ -436,7 +436,7 @@ class Workflow:
                 self.preflight_steps.add(index)
                 self.start_index = index + 1
                 continue
-            if step.get("skip_plugin_call", False):
+            if step.get("execution_mode", "run") != "run":
                 break
             if file_parameter_names(features, "output"):
                 break  # File-producing scene functions use normal planning below.
@@ -687,8 +687,8 @@ class Workflow:
         self.step_names = [step["name"] for step in self.steps]
         for step_index in range(start_index, len(self.steps)):
             step = self.steps[step_index]
-            if self.preparing and step.get("skip_plugin_call", False) and any(
-                not node.step.get("skip_plugin_call", False) for node in self.nodes
+            if self.preparing and step.get("execution_mode", "run") == "disabled" and any(
+                node.step.get("execution_mode", "run") == "run" for node in self.nodes
             ):
                 # Build the remote suffix only after actual local results exist.
                 self.preparation_build_index = step_index
@@ -1086,7 +1086,7 @@ class Workflow:
             values_ready = not plugin.var_records_return and all(self._known(node.context, name) for name in node.demanded_values)
             unresolved = any(contains_pending(node.params.get(name)) for name in file_parameter_names(node.file_features, "output"))
             unresolved |= node.requirements_pending
-            unresolved |= self.has_skipped_calls and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
+            unresolved |= self.has_nonexecuting_steps and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
             ready = not unresolved and (
                 values_ready and bool(node.demanded_values) and not node.demanded_paths
                 or self._valid(node, node.demanded_paths)
@@ -1123,9 +1123,9 @@ class Workflow:
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
                 or load_plugin(node.step["plugin"]).var_records_return
-                or node.step.get("skip_plugin_call", False) and (contains_pending(node.params) or node.requirements_pending)
+                or node.step.get("execution_mode", "run") != "run" and (contains_pending(node.params) or node.requirements_pending)
             ):
-                local_returns = node.dynamic_names if self.preparing and not node.step.get("skip_plugin_call", False) else ()
+                local_returns = node.dynamic_names if self.preparing and node.step.get("execution_mode", "run") == "run" else ()
                 require(node, targets or None, local_returns)
         self._planned = True
         self._discover_ready_var_records()
@@ -1426,7 +1426,7 @@ class Workflow:
         if self.barrier_index is None:
             return
         node = next(n for n in self.nodes if n.step_index == self.barrier_index)
-        if node.step.get("skip_plugin_call", False):
+        if node.step.get("execution_mode", "run") != "run":
             return
         # Advancing replaces the current graph. Preserve independent unfinished work too.
         if not node.needed or any(
@@ -1627,7 +1627,7 @@ class Workflow:
 
     def _can_run_vertical(self, step_index):
         step = self.steps[step_index]
-        if step.get("skip_plugin_call", False):
+        if step.get("execution_mode", "run") != "run":
             return False
         if not step["run"] or step.get("processing_direction", self.controls["processing_direction"]) != "vertical":
             return False
@@ -1835,7 +1835,7 @@ class Workflow:
                 if snapshot is not None:
                     for row in snapshot["rows"]:
                         self._emit_timing("step_summary", row["name"], time_ns(), 0,
-                                          status=row["status"] if row["status"] != "running" else "incomplete",
+                                          status={"running": "incomplete", "only_planning": "skipped"}.get(row["status"], row["status"]),
                                           attributes={"vhr." + key: row[key] for key in
                                                       ("done", "run", "all", "unused", "reused")})
                 self._emit_timing("workflow", "workflow", self._run_started_ns,
@@ -1912,7 +1912,9 @@ class Workflow:
         for record, values in zip(self.records, records):
             record["context"] = {"const": deepcopy(context["const"]), "var": deepcopy(values["var"])}
         self.initial_records = deepcopy(self.records)
-        if self.preparation_build_index is not None:
+        if self.preparation_build_index is not None or any(
+            node.step_index < step_index for node in self.nodes
+        ):
             self.nodes = []
             self._planned = False
             self._build(step_index)
@@ -1952,10 +1954,10 @@ class Workflow:
             raise ValueError("concurrent_processing_backend must be process_pool or dask")
         step_index = self.start_index
         while step_index < len(self.steps):
-            if self.steps[step_index].get("skip_plugin_call", False):
-                if any(step["run"] and not step.get("skip_plugin_call", False)
+            if self.steps[step_index].get("execution_mode", "run") != "run":
+                if any(step["run"] and step.get("execution_mode", "run") == "run"
                        for step in self.steps[step_index:]):
-                    raise ValueError("Skipped plugin calls must form a suffix of the workflow")
+                    raise ValueError("Nonexecuting steps must form a suffix of the workflow")
                 self._prepare_remaining(step_index)
                 return self.records
             if self._can_run_vertical(step_index):

@@ -14,6 +14,7 @@ PROGRESS_VERSION = 2
 
 class _RowExtras(TypedDict, total=False):
     disabled: bool
+    execution_mode: str
     children: list[ProgressRow]
     id: str
     unit: str

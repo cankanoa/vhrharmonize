@@ -4,6 +4,7 @@ run_id: "1" # Unique ID for this run or set to previous ID to use previous files
 # Editable files
 workflow_config: configs/example.worldview.yml # Original workflow YAML; staged copies preserve comments/expressions.
 run_to_step_before_prepare: discover_inputs # Workflow step name, independent of its plugin; null skips local preparation.
+# steps_after_prepare: only_planning # only_planning | disabled; default: only_planning. Plan remote dependencies without executing them locally.
 slurm_start_file: configs/example.slurm.sbatch # Local sbatch template to stage
 
 # Remote execution settings only; local preparation uses the workflow recipe. Nest settings under the existing step name, exactly as in the workflow YAML.

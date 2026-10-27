@@ -152,16 +152,19 @@ def preparation_config(config, target):
     return result
 
 
-def hpc_preparation_config(config, target):
+def hpc_preparation_config(config, target, *, steps_after_prepare="only_planning"):
     """Keep the full graph, but permit plugin calls only through the local cutoff."""
     if target is not None and (target not in config or config[target].get("plugin") == "shared"):
         raise ValueError(f"Unknown preparation step: {target}")
+    if steps_after_prepare not in ("only_planning", "disabled"):
+        raise ValueError("steps_after_prepare must be only_planning or disabled")
     result = deepcopy(config)
     skip = target is None
     for name, settings in result.items():
         if settings.get("plugin") == "shared":
             continue
-        settings["core:skip_plugin_call"] = skip or settings.get("core:skip_plugin_call", False)
+        if skip:
+            settings["core:execution_mode"] = steps_after_prepare
         if name == target:
             skip = True
     return result
