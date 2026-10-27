@@ -192,11 +192,57 @@ def test_local_prefix_collects_return_values_even_without_file_targets(monkeypat
     install_function(monkeypatch, 'first', lambda: calls.append('first') or 3)
     install_function(monkeypatch, 'second', lambda: calls.append('second') or 4)
     config = {'settings': shared(),
-              'first': {'plugin': 'first', 'core:run': True, 'const:first': 'returned:$'},
-              'second': {'plugin': 'second', 'core:run': True, 'const:second': 'returned:$'}}
+              'first': {'plugin': 'first', 'core:run': True, 'core:require_outputs': True,
+                        'const:first': 'returned:$'},
+              'second': {'plugin': 'second', 'core:run': True, 'core:require_outputs': True,
+                         'const:second': 'returned:$'}}
     workflow = prepare(config, tmp_path, 'second')
     assert calls == ['first', 'second']
     assert workflow.preparation_state['const'] == {'first': 3, 'second': 4}
+
+
+def test_preparation_cutoff_preserves_recipe_controls():
+    config = {'settings': shared(),
+              'cutoff': {'plugin': 'file_source', 'core:run': False},
+              'later': {'plugin': 'file_source', 'core:run': True}}
+    local = hpc_preparation_config(config, 'cutoff')
+    assert local['cutoff']['core:run'] is False
+    assert 'core:require_outputs' not in local['cutoff']
+    assert local['later']['core:skip_plugin_call'] is True
+    assert 'core:skip_plugin_call' not in config['later']
+
+
+def test_preparation_does_not_run_unused_return_only_step(monkeypatch, tmp_path):
+    calls = []
+    install_function(monkeypatch, 'unused', lambda: calls.append('unused') or 3)
+    config = {'settings': shared(),
+              'unused': {'plugin': 'unused', 'core:run': True, 'const:value': 'returned:$'}}
+    workflow = prepare(config, tmp_path, 'unused')
+    assert calls == []
+    assert workflow.preparation_state == {'const': {}}
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_preparation_uses_only_configured_targets_and_dependencies(tmp_path, cached):
+    raw = tmp_path / 'raw.txt'
+    raw.write_text('raw')
+    intermediate = tmp_path / 'intermediate.txt'
+    aligned = tmp_path / 'aligned.txt'
+    if cached:
+        aligned.write_text('cached')
+    config = {'settings': shared(),
+              'unused': {'plugin': 'file_source', 'core:run': True,
+                         'param:input_path': str(raw), 'param:output_path': str(tmp_path / 'unused.txt')},
+              'earlier': {'plugin': 'file_source', 'core:run': True,
+                          'param:input_path': str(raw), 'param:output_path': str(intermediate)},
+              'alignment': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
+                            'param:input_path': str(intermediate), 'param:output_path': str(aligned)},
+              'later': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
+                        'param:input_path': str(aligned), 'param:output_path': str(tmp_path / 'later.txt')}}
+    prepare(config, tmp_path, 'alignment')
+    assert aligned.read_text() == ('cached' if cached else 'raw')
+    assert not (tmp_path / 'unused.txt').exists()
+    assert not (tmp_path / 'later.txt').exists()
 
 
 def test_null_cutoff_can_restore_explicit_var_context_without_import(monkeypatch, tmp_path):

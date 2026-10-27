@@ -1122,7 +1122,6 @@ class Workflow:
                 or node.step.get("require_outputs") is True
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
-                or self.preparing and not node.step.get("skip_plugin_call", False)
                 or load_plugin(node.step["plugin"]).var_records_return
                 or node.step.get("skip_plugin_call", False) and (contains_pending(node.params) or node.requirements_pending)
             ):
@@ -1894,6 +1893,10 @@ class Workflow:
         else:
             context = _materialize(self.context, {"const": self.constant_values})
             records = self._record_values()
+        # Unneeded steps may have unavailable returned fields. Save only actual
+        # local results, as ordinary workflow completion does.
+        context = available_context(context)
+        records = [available_context(values) for values in records]
         self.preparation_state = {"const": deepcopy(context["const"])}
         if "var" in self.initial_context:
             self.preparation_state["scenes"] = {

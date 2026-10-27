@@ -163,7 +163,5 @@ def hpc_preparation_config(config, target):
             continue
         settings["core:skip_plugin_call"] = skip or settings.get("core:skip_plugin_call", False)
         if name == target:
-            settings["core:run"] = True
-            settings["core:require_outputs"] = True
             skip = True
     return result
