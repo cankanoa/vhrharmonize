@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait
+from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 import geopandas as gpd
@@ -279,6 +280,41 @@ def _write_seamline_metadata_record(datasource, output_layer, record, geometry):
         raise
 
 
+def _seamline_image_identifier(image_path, metadata, image_field_name):
+    """Keep explicit path columns as paths; matching fields use stable IDs."""
+    if image_field_name == "image_path":
+        return image_path
+    scene_id = metadata.get("scene_id")
+    return str(scene_id) if scene_id is not None and str(scene_id) else Path(image_path).stem
+
+
+def _update_seamline_identifiers(output_path, layer, image_field_name, updates):
+    """Upgrade cached identifiers without recomputing or changing geometry."""
+    datasource = ogr.Open(output_path, update=1)
+    output_layer = datasource.GetLayerByName(layer) if datasource is not None else None
+    if output_layer is None:
+        raise RuntimeError(f"Cannot update seamline metadata: {output_path}:{layer}")
+    if datasource.StartTransaction() != ogr.OGRERR_NONE:
+        raise RuntimeError("Cannot start seamline identifier transaction.")
+    try:
+        for feature in output_layer:
+            basename = feature.GetField("image_basename")
+            if basename not in updates:
+                continue
+            feature.SetField(image_field_name, updates[basename])
+            if output_layer.SetFeature(feature) != ogr.OGRERR_NONE:
+                raise RuntimeError(f"Cannot update footprint identifier: {basename}")
+        feature = None
+        if datasource.CommitTransaction() != ogr.OGRERR_NONE:
+            raise RuntimeError("Cannot commit seamline identifier transaction.")
+        datasource.FlushCache()
+    except BaseException:
+        datasource.RollbackTransaction()
+        raise
+    finally:
+        output_layer = datasource = None
+
+
 @reports_progress(worker_progress=True)
 def write_seamline_metadata_gpkg(
     image_paths: List[str],
@@ -302,6 +338,10 @@ def write_seamline_metadata_gpkg(
 
     Matching image_basename values are already processed and never submitted.
     Completed records remain available for reuse if another worker fails.
+    image_field_name stores metadata scene_id (or the image stem when absent),
+    so later processing suffixes do not break raster/footprint matching. The
+    explicit image_path field retains full paths. Reuse upgrades legacy path
+    values in matching fields without recalculating existing footprints.
 
     executor: Optional caller-owned image executor. The workflow supplies this
         from core:concurrent_processing; standalone calls can still use the
@@ -324,6 +364,7 @@ def write_seamline_metadata_gpkg(
         raise ValueError(f"Unsupported seamline metadata footprint source: {footprint_source}")
 
     existing_image_basenames = set()
+    existing_identifiers = {}
     append = reuse and os.path.exists(output_path)
     if append:
         existing_gdf = gpd.read_file(output_path, layer=layer)
@@ -334,6 +375,8 @@ def write_seamline_metadata_gpkg(
         if existing_gdf.crs is None or existing_gdf.crs.to_epsg() != epsg:
             raise ValueError("Existing seamline metadata CRS does not match epsg.")
         existing_image_basenames.update(existing_gdf["image_basename"].dropna())
+        if image_field_name != "image_path":
+            existing_identifiers = dict(zip(existing_gdf["image_basename"], existing_gdf[image_field_name]))
         del existing_gdf
 
     if len(image_paths) != len(metadata_records):
@@ -345,6 +388,14 @@ def write_seamline_metadata_gpkg(
     if len(images) != len(set(image_paths)):
         raise ValueError("Seamline images need unique basenames")
     processed_image_basenames = existing_image_basenames.intersection(images)
+    identifier_updates = {}
+    for basename, (path, metadata) in images.items():
+        if basename in existing_identifiers:
+            identifier = _seamline_image_identifier(path, metadata, image_field_name)
+            if existing_identifiers[basename] != identifier:
+                identifier_updates[basename] = identifier
+    if identifier_updates:
+        _update_seamline_identifiers(output_path, layer, image_field_name, identifier_updates)
     total = scene_total if scene_total is not None else len(images)
     records: Dict[str, Dict[str, Any]] = {}
     tasks = []
@@ -358,7 +409,7 @@ def write_seamline_metadata_gpkg(
         }
         record.update(
             {
-                image_field_name: image_path,
+                image_field_name: _seamline_image_identifier(image_path, metadata, image_field_name),
                 "image_basename": image_basename,
                 "scene_basename": metadata.get("scene_id", image_basename),
             }

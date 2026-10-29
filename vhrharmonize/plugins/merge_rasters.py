@@ -24,6 +24,13 @@ merge_rasters.__parameter_sources__ = (_upstream,)
 
 
 class MergeRasters(SpectralMatchPlugin):
+    def runtime_parameters(self, *, tile_threads):
+        values = super().runtime_parameters(tile_threads=tile_threads)
+        # Single-file merges require None; tiled merges resolve it to their
+        # native default and still borrow the workflow's executor.
+        values["concurrent_processing_backend"] = None
+        return values
+
     executor_parameter = "executor"
     tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.merge_rasters:merge_rasters"

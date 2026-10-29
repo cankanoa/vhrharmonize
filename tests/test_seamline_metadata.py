@@ -55,6 +55,61 @@ class SeamlineMetadataTests(unittest.TestCase):
     def read(self):
         return gpd.read_file(self.output_path, layer="footprints")
 
+    def test_matching_field_uses_scene_id_before_processing_suffixes(self):
+        scene_id = "17MAY17212856-M1BS-200011964314_01_P001"
+        state = self.state(f"/old/{scene_id}_aligned_coreg.tif")
+        state.scene.primary_basename = scene_id
+        self.kwargs["image_field_name"] = "image"
+        with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
+            self.write([state])
+        result = self.read().iloc[0]
+        self.assertEqual(result["image"], scene_id)
+        self.assertEqual(result["scene_id"], scene_id)
+        self.assertEqual(result["image_basename"], f"{scene_id}_aligned_coreg.tif")
+
+    def test_reuse_updates_legacy_identifiers_without_recomputing_footprints(self):
+        self.kwargs["image_field_name"] = "image"
+        states = [self.state("/old/a_coreg.tif"), self.state("/old/extra_coreg.tif")]
+        for state in states:
+            state.scene.primary_basename = state.scene.primary_basename.removesuffix("_coreg")
+        with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
+            self.write(states)
+        existing = self.read()
+        existing["image"] = [state.current_files[0] for state in states]
+        existing.to_file(self.output_path, layer="footprints", driver="GPKG")
+        gpd.GeoDataFrame({"name": ["keep"]}, geometry=[box(0, 0, 2, 2)], crs=6635).to_file(
+            self.output_path, layer="other", driver="GPKG",
+        )
+        before = self.read()
+        updated = self.state("/new/a_coreg.tif")
+        updated.scene.primary_basename = "a"
+        with patch.object(seamline_metadata, "_iter_seamline_metadata_results") as calculate:
+            self.write([updated])
+        calculate.assert_not_called()
+        result = self.read()
+        self.assertEqual(list(result["image"]), ["a", "/old/extra_coreg.tif"])
+        self.assertTrue(result.drop(columns="image").equals(before.drop(columns="image")))
+        self.assertEqual(list(gpd.read_file(self.output_path, layer="other").name), ["keep"])
+
+    def test_scene_id_field_is_not_overwritten_by_image_path(self):
+        self.kwargs["image_field_name"] = "scene_id"
+        state = self.state("/old/a_coreg.tif")
+        state.scene.primary_basename = "a"
+        with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
+            self.write([state])
+        self.assertEqual(self.read().scene_id.iloc[0], "a")
+
+    def test_missing_scene_id_falls_back_to_stem_and_explicit_path_field_keeps_path(self):
+        for field, expected in (("image", "a_coreg"), ("image_path", "/old/a_coreg.tif")):
+            with self.subTest(field=field), patch.object(
+                seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1),
+            ):
+                seamline_metadata.write_seamline_metadata_gpkg(
+                    ["/old/a_coreg.tif"], self.output_path, metadata_records=[{}],
+                    **{**self.kwargs, "image_field_name": field, "reuse": False},
+                )
+            self.assertEqual(self.read()[field].iloc[0], expected)
+
     def test_add_missing_and_preserve_existing_records_and_other_layers(self):
         with patch.object(seamline_metadata, "_valid_data_polygon_from_image", return_value=box(0, 0, 1, 1)):
             self.write([self.state("/old/a.tif"), self.state("/old/extra.tif")])
