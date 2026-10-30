@@ -6,7 +6,39 @@ import os
 import re
 from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from multiprocessing import get_context
+
+
+@dataclass
+class ImageWorkerFailure:
+    exception: Exception
+    image_ids: tuple[str, ...]
+
+
+class ImageTrackingExecutor:
+    """Retain job identities in the parent without changing futures or errors."""
+
+    def __init__(self, executor, identify, failures):
+        self._executor = executor
+        self._identify = identify
+        self._failures = failures
+
+    def __getattr__(self, name):
+        return getattr(self._executor, name)
+
+    def submit(self, function, /, *args, **kwargs):
+        image_ids = self._identify(function, args, kwargs)
+        future = self._executor.submit(function, *args, **kwargs)
+
+        def completed(job):
+            if not job.cancelled():
+                exc = job.exception()
+                if isinstance(exc, Exception):
+                    self._failures.append(ImageWorkerFailure(exc, image_ids))
+
+        future.add_done_callback(completed)
+        return future
 
 
 class DaskExecutor:

@@ -55,6 +55,7 @@ DEFAULT_SHARED = {
     "tile_threads": 1,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
+    "worker_error_case": "error",
 }
 SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler"}
 BOOLEANS = {
@@ -148,6 +149,8 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError("core:scope must be var or aggregate")
             if name == "processing_direction" and value not in ("horizontal", "vertical"):
                 raise ValueError("core:processing_direction must be horizontal or vertical")
+            if name == "worker_error_case" and value not in ("error", "remove_instence", "remove_and_restart"):
+                raise ValueError("core:worker_error_case must be error, remove_instence, or remove_and_restart")
             if name == "validity_check_grid_size" and (
                 not isinstance(value, int) or isinstance(value, bool) or value < 0
             ):

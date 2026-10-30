@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from .concurrency import _make_dask_client, image_executor
+from .concurrency import _make_dask_client, image_executor, ImageTrackingExecutor
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 import json
@@ -14,6 +14,7 @@ from multiprocessing import get_context
 from pathlib import Path
 from time import monotonic, time_ns
 from threading import RLock
+import traceback
 from uuid import uuid4
 import warnings
 
@@ -194,6 +195,7 @@ class Node:
     directory_locations: dict = field(default_factory=dict)
     runtime_directory_context: dict | None = None
     requirements_pending: bool = False
+    attempt: int = 0
 
     def file_arguments(self, *features):
         return _selected(self.params, set().union(*(self.file_features[f] for f in features)))
@@ -309,6 +311,12 @@ class Workflow:
         self._executing = False
         self._progress = None
         self._last_progress_snapshot = None
+        self.errors = []
+        self._removed_records = set()
+        self._removed_scene_ids = set()
+        self._removed_output_paths = set()
+        self._restart_step = None
+        self._aggregate_attempts = {}
         self.records = []
         self.initial_context = deepcopy(self.shared_context)
         self.preflight_steps = set()
@@ -610,6 +618,8 @@ class Workflow:
                 return lookup(item, selector) if selector else default
 
             scene_id = str(field(plugin.var_id_return, index))
+            if scene_id in self._removed_scene_ids:
+                continue
             if scene_id in seen:
                 raise ValueError("Scene identifiers must be unique")
             seen.add(scene_id)
@@ -944,6 +954,7 @@ class Workflow:
                     parameter_overrides=overrides,
                     value_dependencies=value_dependencies,
                     requirements_pending=requirements_pending,
+                    attempt=self._aggregate_attempts.get(step_index, 0),
                 )
                 node.collection_snapshot = deepcopy(step_records)
                 self.nodes.append(node)
@@ -1216,6 +1227,14 @@ class Workflow:
         self._restored_nodes.add(node.index)
 
     def _payload(self, node):
+        for index in node.dependencies:
+            parent = self.nodes[index]
+            if parent.status in {"failed", "removed"}:
+                scene = self.records[parent.record]["id"] if parent.record is not None else "all scenes"
+                raise RuntimeError(
+                    f"Dependency {parent.step['name']} for image {scene} "
+                    "was removed after a worker error"
+                )
         base = self._runtime_context(node)
         node.runtime_base = deepcopy(base)
         params, _, context, _ = self._evaluate(
@@ -1297,6 +1316,8 @@ class Workflow:
                         f"{node.step['name']} output aliases a protected input: {filename}"
                     )
         for filename in [*node.paths("input_existence_check_paths"), *node.requirements]:
+            if os.path.realpath(filename) in self._removed_output_paths:
+                raise RuntimeError(f"{node.step['name']} input belongs to a removed image: {filename}")
             if not os.path.exists(filename):
                 raise FileNotFoundError(f"{node.step['name']} input does not exist: {filename}")
         failures = self._failures(
@@ -1327,10 +1348,6 @@ class Workflow:
         )
         values = {k: updates[k] for k in node.dynamic_names}
         values = json.loads(json.dumps(values, allow_nan=False))
-        self._publish_values(node, values)
-        source = load_plugin(node.step["plugin"]).var_records_return
-        if source:
-            self._var_result = (node, returned)
         overview_paths = node.paths("output_overview_calculation_paths")
         if node.step.get("calculate_overviews", False) and overview_paths:
             from vhrharmonize.io.geospatial import calculate_raster_overviews
@@ -1349,6 +1366,10 @@ class Workflow:
             raise RuntimeError(
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
             )
+        self._publish_values(node, values)
+        source = load_plugin(node.step["plugin"]).var_records_return
+        if source:
+            self._var_result = (node, returned)
         if not load_plugin(node.step["plugin"]).var_records_return:
             self._save_node_context(node)
         node.status = "completed"
@@ -1565,6 +1586,144 @@ class Workflow:
             scene_basename=self.records[node.record]["id"] if node.record is not None else None,
         )
 
+    def _aggregate_job_images(self, node, plugin):
+        """Resolve adapter-declared job paths to the current workflow scene IDs."""
+        by_path = {}
+
+        def key(filename):
+            try:
+                return os.path.realpath(os.path.join(self.config_dir, os.path.expanduser(filename)))
+            except (OSError, ValueError):
+                return None  # Scene metadata can also contain arbitrary text.
+
+        for record, context in zip(self.records, self._record_values(node)):
+            for filename in [*_paths(context.get("var", {})), *record["source_paths"]]:
+                identity = key(filename)
+                if identity is not None:
+                    by_path.setdefault(identity, set()).add(record["id"])
+
+        def identify(function, args, kwargs):
+            sources = plugin.worker_image_paths(function, args, kwargs)
+            if isinstance(sources, (str, os.PathLike)):
+                sources = [sources]
+            if not sources:
+                return ()
+            identities = set()
+            for source in sources:
+                if not isinstance(source, (str, os.PathLike)):
+                    return ()
+                matches = by_path.get(key(os.fspath(source)))
+                if not matches:
+                    return ()
+                identities.update(matches)
+            return tuple(sorted(identities))
+
+        return identify
+
+    def _remove_record(self, index):
+        self._removed_records.add(index)
+        self._removed_scene_ids.add(self.records[index]["id"])
+        for other in self.nodes:
+            if other.record == index:
+                self._removed_output_paths.update(os.path.realpath(p) for p in other.paths(*OUTPUT_PATH_FEATURES))
+                if other.status in {"processing", "loaded", "unused"}:
+                    other.status = "removed"
+
+    def _record_error(self, node, exc, image_ids=()):
+        error = {
+            "step": node.step["name"],
+            "image_id": image_ids[0] if len(image_ids) == 1 else None,
+            "error_type": type(exc).__name__, "error": str(exc),
+            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        }
+        if len(image_ids) > 1:
+            error["image_ids"] = list(image_ids)
+        self.errors.append(error)
+
+    @contextmanager
+    def _worker_error_case(self, node, *, worker_failures=()):
+        """Handle invocation failures in the parent, preserving remote tracebacks."""
+        try:
+            yield
+        except Exception as exc:
+            chain, cause = set(), exc
+            while cause is not None and id(cause) not in chain:
+                chain.add(id(cause))
+                cause = cause.__cause__ or cause.__context__
+            # A coordinator error unrelated to any failed future is not an
+            # attributable worker failure, even if another job happened to fail.
+            failures = worker_failures if any(id(f.exception) in chain for f in worker_failures) else ()
+            if failures:
+                for failure in failures:
+                    self._record_error(node, failure.exception, failure.image_ids)
+            else:
+                image_ids = (self.records[node.record]["id"],) if node.record is not None else ()
+                self._record_error(node, exc, image_ids)
+            node.status = "failed"
+            if self._progress:
+                self._progress.fail(node, exc)
+            policy = self.controls["worker_error_case"]
+            if policy == "error":
+                raise
+            if node.record is not None:
+                self._remove_record(node.record)
+            elif policy == "remove_and_restart" and failures and all(len(f.image_ids) == 1 for f in failures):
+                failed_ids = {f.image_ids[0] for f in failures}
+                for index, record in enumerate(self.records):
+                    if record["id"] in failed_ids:
+                        self._remove_record(index)
+                self._restart_step = node.step_index
+                self._aggregate_attempts[node.step_index] = node.attempt + 1
+            else:
+                raise
+
+    def _remove_failed_records(self, next_step):
+        """Compact scenes at a synchronization point and replan later collections."""
+        if not self._removed_records:
+            return
+        first = next((node for node in self.nodes if node.step_index >= next_step), None)
+        context = _materialize(first.pre_context if first else self.context,
+                               {"const": self.constant_values})
+        bindings = self.constant_steps.get(first.step_index) if first else None
+        if bindings is not None:
+            context["const"] = _materialize(bindings.before, {"const": self.constant_values})["const"]
+        contexts = self._record_values(first)
+        counts = self.counts()
+        self.completed_counts.update({
+            self.step_names[index]: counts[self.step_names[index]]
+            for index in {node.step_index for node in self.nodes if node.step_index < next_step}
+        })
+        self._retained_protected_paths.update(self.protected_paths)
+        self.records = [
+            {**record, "context": available_context(current)}
+            for index, (record, current) in enumerate(zip(self.records, contexts))
+            if index not in self._removed_records
+        ]
+        self.initial_context = {"const": available_context(context)["const"], "var": {}}
+        self.initial_records = deepcopy(self.records)
+        self._removed_records.clear()
+        self.nodes = []
+        self._planned = False
+        self._protected_keys = None
+        # With no images left, there is no aggregate image work to dispatch.
+        self._build(next_step if self.records else len(self.steps))
+        self.plan()
+        if self._progress:
+            self._progress.sync(reset_from=next_step)
+
+    def _print_error_report(self):
+        if not self.errors:
+            return
+        count = len(self.errors)
+        print(f"\n[workflow] Worker error report ({count} {'error' if count == 1 else 'errors'})")
+        for index, error in enumerate(self.errors, start=1):
+            scene = error["image_id"] if error["image_id"] is not None else "all scenes (aggregate)"
+            if error.get("image_ids"):
+                scene = ", ".join(error["image_ids"]) + " (ambiguous worker job)"
+            print(f"\n{index}. Step: {error['step']} | Image ID: {scene}")
+            print(f"Error: {error['error_type']}: {error['error']}")
+            print(error["traceback"], end="" if error["traceback"].endswith("\n") else "\n")
+
     def _run_horizontal_step(self, step_index, workers, backend):
         self._prepare_constants(step_index)
         nodes = [node for node in self.nodes if node.step_index == step_index and node.needed]
@@ -1576,7 +1735,12 @@ class Workflow:
         if not pending:
             self._advance_var_records(step_index)
             return
-        payloads = [(node, self._payload(node)) for node in pending]
+        payloads = []
+        for node in pending:
+            with self._worker_error_case(node):
+                payloads.append((node, self._payload(node)))
+        if not payloads:
+            return
         total = sum(node.step_index == step_index for node in self.nodes)
 
         def dispatches(*, remote=False):
@@ -1587,9 +1751,14 @@ class Workflow:
         plugin = load_plugin(pending[0].step["plugin"])
         accepts_executor = getattr(plugin, "executor_parameter", None) is not None
         if pending[0].record is None and accepts_executor:
-            with image_executor(workers, backend, self.controls.get("dask_scheduler")) as executor:
-                for node, payload in dispatches():
-                    self._finish(node, _execute(payload, executor=executor))
+            for node, payload in dispatches():
+                failures = []
+                with self._worker_error_case(node, worker_failures=failures):
+                    with image_executor(workers, backend, self.controls.get("dask_scheduler")) as executor:
+                        tracked = ImageTrackingExecutor(executor, self._aggregate_job_images(node, plugin), failures)
+                        self._finish(node, _execute(payload, executor=tracked))
+                if node.status == "failed":
+                    return  # Rebuild this aggregate before advancing to later steps.
         elif backend == "dask" and pending[0].record is not None:
             from dask.distributed import as_completed as dask_completed
 
@@ -1602,7 +1771,8 @@ class Workflow:
                 }
                 try:
                     for future in dask_completed(futures):
-                        self._finish(futures[future], future.result())
+                        with self._worker_error_case(futures[future]):
+                            self._finish(futures[future], future.result())
                 finally:
                     client.cancel(list(futures))
         elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
@@ -1615,13 +1785,15 @@ class Workflow:
                 }
                 try:
                     for future in as_completed(futures):
-                        self._finish(futures[future], future.result())
+                        with self._worker_error_case(futures[future]):
+                            self._finish(futures[future], future.result())
                 finally:
                     for future in futures:
                         future.cancel()
         else:
             for node, payload in dispatches():
-                self._finish(node, _execute(payload))
+                with self._worker_error_case(node):
+                    self._finish(node, _execute(payload))
         self._cleanup()
         self._advance_var_records(step_index)
 
@@ -1667,11 +1839,14 @@ class Workflow:
 
         def finish(node, result):
             self._finish(node, result)
-            completed.add(node.index)
             self._cleanup()
 
         def schedule(submit=None, next_completed=None, limit=1, remote=False):
             while waiting or running:
+                for index, node in list(waiting.items()):
+                    if node.status == "removed":
+                        del waiting[index]
+                        completed.add(index)
                 ready = sorted(
                     (n for n in waiting.values() if dependencies[n.index] <= completed),
                     key=lambda n: (-n.step_index, n.record),
@@ -1691,18 +1866,21 @@ class Workflow:
                         completed.add(node.index)
                         self._cleanup()
                     else:
-                        payload = self._payload(node)
-                        started[node.step_index] += 1
-                        self._log_node_start(
-                            node, started[node.step_index], totals[node.step_index],
-                            all_totals[node.step_index],
-                        )
-                        if self._progress:
-                            payload = self._progress.payload(node, payload, remote=remote)
-                        if submit is None:
-                            finish(node, _execute(payload))
-                        else:
-                            running[submit(node, payload)] = node
+                        with self._worker_error_case(node):
+                            payload = self._payload(node)
+                            started[node.step_index] += 1
+                            self._log_node_start(
+                                node, started[node.step_index], totals[node.step_index],
+                                all_totals[node.step_index],
+                            )
+                            if self._progress:
+                                payload = self._progress.payload(node, payload, remote=remote)
+                            if submit is None:
+                                finish(node, _execute(payload))
+                            else:
+                                running[submit(node, payload)] = node
+                        if submit is None or node.status == "failed":
+                            completed.add(node.index)
                     # Reconsider downstream nodes immediately instead of filling
                     # the queue with every scene's upstream work first.
                     break
@@ -1710,7 +1888,10 @@ class Workflow:
                     continue
                 if running:
                     future = next_completed(running)
-                    finish(running.pop(future), future.result())
+                    node = running.pop(future)
+                    with self._worker_error_case(node):
+                        finish(node, future.result())
+                    completed.add(node.index)
                 elif waiting:
                     raise RuntimeError("Vertical processing cannot satisfy the remaining scene dependencies")
 
@@ -1800,6 +1981,7 @@ class Workflow:
         for name, callback in (("progress_callback", progress_callback), ("event_callback", event_callback)):
             if callback is not None and not callable(callback):
                 raise TypeError(f"{name} must be callable")
+        self.errors.clear()
         if self._timing_finished:
             self._run_id = uuid4().hex
             self._run_started_ns, self._run_started = time_ns(), monotonic()
@@ -1831,6 +2013,9 @@ class Workflow:
                 outcome, attributes = "failed", {"error.type": type(exc).__name__}
                 raise
             finally:
+                if self.errors:
+                    outcome = "failed"
+                    attributes["vhr.worker_error_count"] = len(self.errors)
                 snapshot = self.get_progress()
                 if snapshot is not None:
                     for row in snapshot["rows"]:
@@ -1842,6 +2027,7 @@ class Workflow:
                                   monotonic() - self._run_started, status=outcome, attributes=attributes)
                 self._timing_callbacks = None
                 self._timing_finished = True
+                self._print_error_report()
 
     def _run_with_progress(self, *, progress_callback=None, progress_path=None):
         """Execute the workflow, optionally publishing snapshots to a parent callback.
@@ -1971,6 +2157,12 @@ class Workflow:
             else:
                 self._run_horizontal_step(step_index, workers, backend)
                 step_index += 1
+            if self._restart_step is not None:
+                step_index, self._restart_step = self._restart_step, None
+            if self._removed_records:
+                self._remove_failed_records(step_index)
+                if not self.records:
+                    break
         if self.preparing:
             self._prepare_remaining(len(self.steps))
             return self.records

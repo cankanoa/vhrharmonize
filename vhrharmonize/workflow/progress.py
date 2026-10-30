@@ -217,10 +217,14 @@ class WorkflowProgress:
         self._last_publish = 0
         self.sync()
 
-    def sync(self):
+    def sync(self, *, reset_from=None):
         """Add newly discovered steps without resetting finished step counters."""
         workflow = self.workflow
         with self.state.lock:
+            if reset_from is not None:
+                for step in workflow.steps[reset_from:]:
+                    self.state.rows.pop(step["name"], None)
+                    self.state.rows.pop(self.overview_name(step), None)
             for index, step in enumerate(workflow.steps):
                 if not step["run"] or index in workflow.preflight_steps:
                     continue
@@ -301,7 +305,8 @@ class WorkflowProgress:
 
     @staticmethod
     def identity(node):
-        return f"{node.step_index}:{node.record}"
+        identity = f"{node.step_index}:{node.record}"
+        return f"{identity}:attempt:{node.attempt}" if node.attempt else identity
 
     def reporter(self, node, *, remote=False, overview=None):
         identity = self.identity(node)
@@ -324,6 +329,13 @@ class WorkflowProgress:
         if identity in self.state.tasks:
             self.state.complete(identity)
             self.queue.put({"kind": "accepted", "task": identity})
+
+    def fail(self, node, exc):
+        """Include parent-side validation and dispatch errors in progress."""
+        identity = self.identity(node)
+        if identity not in self.state.tasks:
+            self.reporter(node)
+        self.queue.put({"kind": "failed", "task": identity, "error_type": type(exc).__name__})
 
     @contextmanager
     def overview(self, node, filename):

@@ -73,6 +73,7 @@ shared:
   # VHR calculates overviews after the selected steps. Leave native build_overviews unset.
 
   # core:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
+  # core:worker_error_case: error # error | remove_instence | remove_and_restart; default: error. Remove failed images; remove_and_restart also retries attributable aggregate failures. Reuse settings still apply.
   core:tile_threads: 1 # positive integer | cpu | null; default: 1. Threads within each image.
   core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent scene/image jobs; must be 1 for Dask.
   # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.

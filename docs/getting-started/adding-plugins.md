@@ -61,6 +61,25 @@ inside workflow workers and receive `None` for the declared executor argument.
 local CPU count, and `None` passes through. Undeclared arguments keep their normal
 shared, explicit, and function-default behavior.
 
+An aggregate adapter can identify the image inputs of each submitted worker job
+by overriding `worker_image_paths(function, args, kwargs)`. Return a source path
+or sequence of source paths for that job, or `()` when unknown. For example, if
+the first positional argument to `process_image` is its input filename:
+
+```python
+def worker_image_paths(self, function, args, kwargs):
+    return args[0] if function is process_image and args else ()
+```
+
+With `core:worker_error_case: remove_and_restart`, core maps these paths to scene
+IDs, removes an unambiguously identified failed image, and replans the failed
+aggregate with the surviving records. Declare job inputs only; do not return a
+shared list of every image or reference file. Jobs involving different scene IDs
+remain ambiguous and stop. The function must propagate the worker exception
+(directly or through its exception chain) and finish/cancel outstanding jobs
+before exiting. Reuse remains controlled by the existing core and function
+settings; core does not change those options when restarting.
+
 Adapters may override `runtime_parameters(*, tile_threads)`, starting with
 `super().runtime_parameters(tile_threads=tile_threads)`, to return additional
 library-specific argument overrides that disable internal worker pools. These

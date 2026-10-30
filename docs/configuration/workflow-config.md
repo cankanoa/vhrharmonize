@@ -477,6 +477,48 @@ Core synchronizes automatically at `collect:` reads, aggregate calls, scene-sett
 
 ## Aggregates and concurrency
 
+Set `core:worker_error_case` in an enabled shared block to choose how worker
+failures are handled:
+
+```yaml
+shared:
+  plugin: shared
+  core:run: true
+  core:worker_error_case: remove_and_restart # error (default) | remove_instence | remove_and_restart
+```
+
+`error` stops the workflow and raises the original exception. `remove_instence`
+removes the failing image from the run and continues processing the surviving
+images. Its later scene steps, collection inputs, returned records and final
+metadata exclude the removed image. The policy applies to serial, process-pool
+and Dask scene calls, including input preparation and declared-output validation.
+Images that require a removed image's outputs also fail through the same policy.
+If every image fails, the run returns an empty list without invoking later image
+aggregates. With `remove_instence`, an aggregate failure still raises.
+
+`remove_and_restart` uses the same removal behavior for scene steps. When an
+aggregate's worker job fails and core can map its source paths to exactly one
+image ID, core removes that image, rebuilds the aggregate's inputs, and restarts
+the failed aggregate with the remaining images. Completed upstream steps are
+retained. Normal core and function reuse settings continue to apply: restarting
+does not force reuse on or off, delete completed products, or override native
+options such as `resume_from_outputs` or `reuse`. Reuse remains optional under
+the existing controls. If further images fail, removal and restart repeat until
+the aggregate succeeds or no images remain.
+
+The SpectralMatch and `seamline_metadata` adapters identify their submitted image
+jobs. Custom aggregate adapters can implement `worker_image_paths()` to opt in.
+An ambiguous pair/mosaic job, a job with unknown source paths, or a coordinator
+error without an attributable worker still raises rather than guessing which
+image to remove. Configuration/planning errors and user interrupts stop the run.
+
+When errors occur, core prints one report after the progress display closes,
+including the step name, image ID, exception type/message and full traceback for
+each failure. This also happens with console logging disabled or when `error`
+stops the run. Python callers can inspect the same entries in `Workflow.errors`.
+Progress snapshots retain a failed status when a worker failed, even if surviving
+images complete successfully. Removing a scene does not delete its source files.
+
 An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, explicit context operations and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
 
 Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file when work must run. Horizontal processing completes each step before the next begins; vertical processing advances scenes independently between synchronization points. SpectralMatch aggregate functions and `seamline_metadata` coordinate in the parent and submit image/pair jobs to a workflow-owned executor using the same core worker count and backend. The executor is never sent to a worker or stored in YAML. `core:tile_threads` controls threads within each image (positive integer, `cpu`/`num_cpu`, or `null`; default `1`). Only plugins declaring `tile_threads_parameter` receive this setting. Executor injection likewise requires `executor_parameter`; argument names alone do not opt in. See [adding plugins](../getting-started/adding-plugins.md) for the mapping contract. Standalone Python APIs retain their native worker parameters; the SpectralMatch and seamline adapters override their legacy parameters during workflow execution, so omit `param:image_threads`, `param:tile_threads`, `param:concurrent_processing`, `param:concurrent_processing_backend`, and `param:dask_scheduler` from these workflow recipes. Image-level executor support requires the updated SpectralMatch checkout.

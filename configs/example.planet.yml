@@ -7,6 +7,7 @@ shared:
   core:output_metadata_path: expr:var.relative_output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
   # core:delete_final_json_first: true # true | false; default: true. Replace old JSON on the first write to each resolved path; append subsequent completions.
   # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
+  # core:worker_error_case: error # error | remove_instence | remove_and_restart; default: error. Remove failed images; remove_and_restart also retries attributable aggregate failures. Reuse settings still apply.
   # core:run_from_existing: true # true | false; default: true.
   # core:check_validity: true # true | false; default: true.
   param:custom_nodata_value: 0

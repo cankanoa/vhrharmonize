@@ -78,6 +78,14 @@ class FunctionPlugin:
     output_hpc_staging_paths = frozenset()
     output_hpc_download_paths = frozenset()
 
+    def worker_image_paths(self, function, args, kwargs):
+        """Identify a submitted aggregate job's source images, or return ().
+
+        Paths must identify the job itself, rather than shared reference files.
+        Core restarts only failures mapping unambiguously to one scene.
+        """
+        return ()
+
     def runtime_parameters(self, *, tile_threads):
         """Map workflow controls to explicitly declared function arguments.
 

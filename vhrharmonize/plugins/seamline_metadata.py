@@ -480,6 +480,11 @@ __all__ = [
 class SeamlineMetadata(FunctionPlugin):
     executor_parameter = "executor"
 
+    def worker_image_paths(self, function, args, kwargs):
+        if function is _metadata_job and args:
+            return args[0][0]
+        return ()
+
     def runtime_parameters(self, *, tile_threads):
         return {**super().runtime_parameters(tile_threads=tile_threads),
                 "concurrent_processing": 1, "concurrent_processing_backend": "process_pool",
