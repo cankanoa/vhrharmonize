@@ -307,6 +307,23 @@ def test_reused_segment_and_eta_exclude_cached_work():
     assert any(style == f"fg:{COLORS['done']}" and len(text) == 3 for style, text in bar)
 
 
+def test_recovery_keeps_other_failures_and_ignores_late_failed_events():
+    state = ProgressState()
+    state.rows["step"] = StepProgress("step", run=2, all=2)
+    for identity in ("removed", "fatal"):
+        state.tasks[identity] = TaskProgress("step", identity)
+        state.handle({"task": identity, "kind": "failed"})
+    recovery = {"task": "removed", "kind": "recovered"}
+    state.handle(recovery)
+    state.handle(recovery)
+    assert state.failed  # Recovery of one task must not clear another failure.
+    state.handle({"task": "fatal", "kind": "recovered"})
+    assert not state.failed
+    state.handle({"task": "removed", "kind": "failed", "duration": 1})
+    assert not state.failed  # A delayed worker event cannot undo recovery.
+    assert state.tasks["removed"].failed  # Failure history remains available.
+
+
 def test_opaque_operation_elapsed_time_keeps_updating(tmp_path, monkeypatch):
     dashboard = WorkflowProgress(Workflow(recipe(tmp_path)))
     monkeypatch.setattr("vhrharmonize.workflow.progress.monotonic", lambda: 100)

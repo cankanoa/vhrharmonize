@@ -164,7 +164,7 @@ def test_failures_at_different_steps_preserve_surviving_context(monkeypatch, dir
     assert calls[-1] == ("gather", ["good processed finished"])
     assert [(e["step"], e["image_id"]) for e in workflow.errors] == [("first", "bad"), ("second", "other")]
     outcome = next(e for e in events if e["kind"] == "workflow")
-    assert outcome["status"] == "failed"
+    assert outcome["status"] == "completed"
     assert outcome["attributes"]["vhr.worker_error_count"] == 2
 
 
@@ -233,9 +233,12 @@ def test_parent_output_validation_removes_image_and_progress_closes(monkeypatch,
     records = workflow.run(progress_callback=snapshots.append)
     assert [r["id"] for r in records] == ["good", "other"]
     assert "did not produce valid declared outputs" in workflow.errors[0]["error"]
-    assert snapshots[-1]["status"] == "failed"
+    assert snapshots[-1]["status"] == snapshots[-1]["total"]["status"] == "completed"
     assert snapshots[-1]["active"] == []
     rows = {row["name"]: row for row in snapshots[-1]["rows"]}
+    assert rows["first"]["status"] == "completed"
+    assert rows["first"]["done"] == rows["first"]["run"] == 2
+    assert rows["first"]["unused"] == 1
     assert rows["gather"]["done"] == rows["gather"]["run"] == 2
 
 
@@ -317,7 +320,26 @@ def test_real_workers_preserve_traceback_and_omit_failed_metadata(tmp_path, caps
     assert "copy_file" in workflow.errors[0]["traceback"]
     assert "IsADirectoryError" in capsys.readouterr().out
     assert snapshots[-1]["active"] == []
-    assert snapshots[-1]["status"] == "failed"
+    assert snapshots[-1]["status"] == snapshots[-1]["total"]["status"] == "completed"
+
+
+@pytest.mark.parametrize("policy,failed,exit_code", [
+    ("error", (), 0),
+    ("remove_and_restart", ("bad",), 0),
+    ("error", ("bad",), 1),
+])
+def test_done_logs_exit_code_for_success_recovery_and_failure(monkeypatch, capsys, policy, failed, exit_code):
+    recipe, _ = pipeline(monkeypatch, policy=policy, failed=failed)
+    recipe["shared"]["core:log_to_console"] = True
+    workflow = Workflow(recipe)
+    if exit_code:
+        with pytest.raises(ValueError, match="cannot process bad"):
+            workflow.run()
+    else:
+        workflow.run()
+    output = capsys.readouterr().out
+    assert output.splitlines()[-1] == f"[core:done] Exit code: {exit_code}"
+    assert output.count("[core:done]") == 1
 
 
 @pytest.mark.parametrize("value", [None, True, [], {}, "continue", "remove_instance"])

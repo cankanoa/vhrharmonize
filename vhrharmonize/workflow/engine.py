@@ -1621,6 +1621,8 @@ class Workflow:
         return identify
 
     def _remove_record(self, index):
+        if self._progress and index not in self._removed_records:
+            self._progress.remove_record(index)
         self._removed_records.add(index)
         self._removed_scene_ids.add(self.records[index]["id"])
         for other in self.nodes:
@@ -1676,6 +1678,8 @@ class Workflow:
                 self._aggregate_attempts[node.step_index] = node.attempt + 1
             else:
                 raise
+            if self._progress:
+                self._progress.recover(node)
 
     def _remove_failed_records(self, next_step):
         """Compact scenes at a synchronization point and replan later collections."""
@@ -2014,13 +2018,13 @@ class Workflow:
                 raise
             finally:
                 if self.errors:
-                    outcome = "failed"
                     attributes["vhr.worker_error_count"] = len(self.errors)
                 snapshot = self.get_progress()
                 if snapshot is not None:
                     for row in snapshot["rows"]:
                         self._emit_timing("step_summary", row["name"], time_ns(), 0,
-                                          status={"running": "incomplete", "only_planning": "skipped"}.get(row["status"], row["status"]),
+                                          status={"running": "incomplete", "only_planning": "skipped",
+                                                  "restarted": "completed"}.get(row["status"], row["status"]),
                                           attributes={"vhr." + key: row[key] for key in
                                                       ("done", "run", "all", "unused", "reused")})
                 self._emit_timing("workflow", "workflow", self._run_started_ns,
@@ -2028,6 +2032,8 @@ class Workflow:
                 self._timing_callbacks = None
                 self._timing_finished = True
                 self._print_error_report()
+                if self.controls["log_to_console"]:
+                    print(f"[core:done] Exit code: {0 if outcome == 'completed' else 1}")
 
     def _run_with_progress(self, *, progress_callback=None, progress_path=None):
         """Execute the workflow, optionally publishing snapshots to a parent callback.

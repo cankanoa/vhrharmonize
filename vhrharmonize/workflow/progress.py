@@ -78,6 +78,8 @@ class TaskProgress:
     duration: float | None = None
     done: bool = False
     failed: bool = False
+    recovered: bool = False
+    attempt: int = 0
     computed: bool = False
     stats: dict = field(default_factory=dict)
     stats_updated: float | None = None
@@ -90,7 +92,7 @@ class TaskProgress:
 
     @property
     def active(self):
-        return self.started is not None and not (self.done or self.failed or self.computed)
+        return self.started is not None and not (self.done or self.failed or self.recovered or self.computed)
 
 
 class MessageHistory(deque):
@@ -136,11 +138,14 @@ class ProgressState:
                 task.computed = True
             elif kind == "failed":
                 task.failed = True
-                self.failed = True
+                self.failed = any(t.failed and not t.recovered for t in self.tasks.values())
                 task.worker_failed = "duration" in event
                 task.error_type = event.get("error_type")
                 if task.worker_failed:
                     task.duration = max(0.0, event["duration"])
+            elif kind == "recovered":
+                task.recovered = True
+                self.failed = any(t.failed and not t.recovered for t in self.tasks.values())
             elif not (task.done or task.failed or task.computed):
                 if kind == "start":
                     task.started = task.started or monotonic()
@@ -318,7 +323,8 @@ class WorkflowProgress:
             name = self.overview_name(node.step)
             scene, weight = Path(overview).name, 1
         with self.state.lock:
-            self.state.tasks[identity] = TaskProgress(name, scene, weight, plugin=node.step["plugin"] or "")
+            self.state.tasks[identity] = TaskProgress(name, scene, weight, plugin=node.step["plugin"] or "",
+                                                      attempt=node.attempt)
         return EventReporter(_DaskEvents(self.dask_topic) if remote else self.queue, identity)
 
     def payload(self, node, payload, *, remote=False):
@@ -336,6 +342,31 @@ class WorkflowProgress:
         if identity not in self.state.tasks:
             self.reporter(node)
         self.queue.put({"kind": "failed", "task": identity, "error_type": type(exc).__name__})
+
+    def recover(self, node):
+        """Keep the failed attempt for timings without failing the recovered run."""
+        self.queue.put({"kind": "recovered", "task": self.identity(node)})
+
+    def remove_record(self, index):
+        """Exclude unfinished work for a removed scene, including later steps."""
+        with self.state.lock:
+            for node in self.workflow.nodes:
+                if node.record != index or node.status not in {"processing", "failed"}:
+                    continue
+                identity = self.identity(node)
+                task = self.state.tasks.get(identity)
+                unfinished = 0 if task is not None and task.done else self.weight(node)
+                row = self.state.rows.get(node.step["name"])
+                if row is not None:
+                    row.run -= unfinished
+                    row.unused += unfinished
+                row = self.state.rows.get(self.overview_name(node.step))
+                if row is not None:
+                    done = sum(t.done for key, t in self.state.tasks.items()
+                               if key.startswith(identity + ":overview:"))
+                    unfinished = len(self.overview_paths(node)) - done
+                    row.run -= unfinished
+                    row.unused += unfinished
 
     @contextmanager
     def overview(self, node, filename):
@@ -417,7 +448,8 @@ class WorkflowProgress:
         self.workflow._emit_timing("task", name, started, duration, status=status, attributes=attributes)
 
     def _row_snapshot(self, row, *, total=False):
-        failed = self.state.failed if total else any(t.failed for t in self.state.tasks.values() if t.step == row.name)
+        failed = self.state.failed if total else any(
+            t.failed and not t.recovered for t in self.state.tasks.values() if t.step == row.name)
         eta = None
         if failed:
             status = "failed"
@@ -426,7 +458,8 @@ class WorkflowProgress:
         elif row.pending:
             status = "waiting"
         elif row.done >= row.run:
-            status = "completed" if row.run else "reused" if row.reused else "skipped"
+            restarted = any(t.attempt > 0 for t in self.state.tasks.values() if total or t.step == row.name)
+            status = "restarted" if restarted else "completed" if row.run else "reused" if row.reused else "skipped"
             eta = 0.0
         else:
             status = "running"
@@ -477,7 +510,7 @@ class WorkflowProgress:
             rows = []
             for row in self.state.rows.values():
                 value = self._row_snapshot(row)
-                nested = [child for task in self.state.tasks.values() if task.step == row.name
+                nested = [child for task in self.state.tasks.values() if task.step == row.name and not task.recovered
                           for child in task.substeps.rows(finished=task.done or task.failed, failed=task.failed)]
                 if nested:
                     value["children"] = nested

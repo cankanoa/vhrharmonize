@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.formatted_text import to_plain_text
 
+from vhrharmonize.progress import render_progress, validate_progress_snapshot
 from vhrharmonize.workflow.engine import Workflow
 from workflow_helpers import install_function
 
@@ -94,8 +96,17 @@ def test_restart_rebuilds_inputs_and_keeps_native_reuse_optional(monkeypatch, tm
     assert sorted(event["status"] for event in task_events) == ["completed", "failed"]
     assert len({event["attributes"]["vhr.task_id"] for event in task_events}) == 2
     assert snapshots[-1]["active"] == []
+    assert snapshots[-1]["status"] == "completed"
+    assert snapshots[-1]["total"]["status"] == "restarted"
     row = next(row for row in snapshots[-1]["rows"] if row["name"] == "aggregate")
+    assert row["status"] == "restarted"
     assert row["done"] == row["run"] == 2
+    assert "restarted" in to_plain_text(render_progress(validate_progress_snapshot(snapshots[-1])))
+    outcome = next(event for event in events if event["kind"] == "workflow")
+    assert outcome["status"] == "completed"
+    assert outcome["attributes"]["vhr.worker_error_count"] == 1
+    summary = next(event for event in events if event["kind"] == "step_summary" and event["name"] == "aggregate")
+    assert summary["status"] == "completed"
 
 
 @pytest.mark.parametrize("core_reuse", [True, False])
@@ -277,7 +288,14 @@ def test_seamline_metadata_restarts_with_normal_record_reuse(monkeypatch, tmp_pa
                        "param:output_path": str(tmp_path / "footprints.gpkg"), "param:reuse": True},
     }
     workflow = Workflow(config, config_dir=tmp_path)
-    assert [record["id"] for record in workflow.run(progress_callback=lambda snapshot: None)] == ["good"]
+    snapshots = []
+    assert [record["id"] for record in workflow.run(progress_callback=snapshots.append)] == ["good"]
     assert workflow.errors[0]["image_id"] == "bad"
     frame = gpd.read_file(tmp_path / "footprints.gpkg")
     assert list(frame["image_basename"]) == ["good.tif"]
+    final = snapshots[-1]
+    assert final["status"] == "completed"
+    assert final["total"]["status"] == "restarted"
+    row = next(row for row in final["rows"] if row["name"] == "footprints")
+    assert row["status"] == "restarted"
+    assert all(child["status"] not in {"failed", "stopped"} for child in row.get("children", []))
