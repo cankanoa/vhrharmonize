@@ -54,6 +54,53 @@ def test_run_column_shows_remaining_scenes_for_steps_and_total():
                for line in display.table(data, width=140)[1:])
 
 
+@pytest.mark.parametrize("max_rows", [None, 3])
+def test_completed_substeps_disappear_without_changing_snapshots_or_top_level_rows(max_rows):
+    display = terminal.TerminalProgressDisplay(stream=StringIO())
+    data = snapshot()
+    parent = data["rows"][0]
+    def child(name, status):
+        return {**parent, "name": name, "status": status,
+                "active": int(status == "running"), "children": []}
+    complete = child("Overlap statistics", "completed")
+    complete["children"] = [child("Finished masking", "completed")]
+    parent["children"] = [complete, child("Flood samples", "running"),
+                           child("Failed phase", "failed")]
+    data["rows"].append(child("Finished workflow step", "completed"))
+    original = deepcopy(data)
+    display.update(data)
+    text = "\n".join(to_plain_text(line) for line in display.table(width=220, max_rows=max_rows))
+    assert "Overlap statistics" not in text
+    assert "Finished masking" not in text
+    if max_rows is None:
+        assert "Finished workflow step" in text
+        assert "Failed phase" in text
+    assert "Flood samples" in text
+    assert "alignment" in text
+    assert data == original
+    assert display.snapshot["rows"][0]["children"][0]["status"] == "completed"
+
+
+def test_substep_hides_on_completion_and_does_not_hide_unfinished_descendants():
+    display = terminal.TerminalProgressDisplay(stream=StringIO())
+    data = snapshot()
+    parent = data["rows"][0]
+    substep = {**parent, "name": "Overlap phase"}
+    parent["children"] = [substep]
+    display.update(data)
+    text = lambda: "\n".join(to_plain_text(line) for line in display.table(width=180))
+    assert "Overlap phase" in text()
+    substep.update(status="completed", active=0)
+    substep["children"] = [{**parent, "name": "Unfinished child", "children": [], "status": "running"}]
+    display.update(data)
+    assert "Overlap phase" not in text()
+    assert "Unfinished child" in text()
+    substep["children"][0].update(status="completed", active=0)
+    display.update(data)
+    assert "Unfinished child" not in text()
+    assert "alignment" in text()
+
+
 class ScreenOutput(DummyOutput):
     size = Size(rows=24, columns=120)
 

@@ -12,7 +12,10 @@ def _upstream():
 
 @reports_progress
 def joint_coregistration(*args, **kwargs):
-    """Call SpectralMatch's joint_coregistration with its native parameters."""
+    """Call native joint registration, including Elastix matching and fixed_images.
+
+    Both global and local corrections remain owned by SpectralMatch.
+    """
 
     for name in ("dask_scheduler", "resolution", "window_scales"):
         if isinstance(kwargs.get(name), list):
@@ -28,7 +31,7 @@ class JointCoregistration(SpectralMatchPlugin):
     tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.joint_coregistration:joint_coregistration"
     scope = "aggregate"
-    input_dependency_paths = frozenset(["input_images", "tie_load_path"])
+    input_dependency_paths = frozenset(["input_images", "fixed_images", "tie_load_path"])
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths

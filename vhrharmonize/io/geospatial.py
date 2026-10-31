@@ -58,6 +58,8 @@ def get_image_percentile_value(
     percentile: float = 50.0,
     mask: Optional[BaseGeometry] = None,
     mask_crs: object = 4326,
+    *,
+    crop: bool = False,
     ) -> float:
     """Compute a raster percentile value.
     Args:
@@ -65,6 +67,7 @@ def get_image_percentile_value(
         percentile: Requested percentile in the inclusive range 0 to 100.
         mask: Optional Shapely geometry used to limit sampled pixels.
         mask_crs: CRS of the mask geometry; defaults to EPSG:4326.
+        crop: Read only the mask bounds when True; default False preserves existing callers.
     Returns:
         Percentile value from valid raster pixels.
     """
@@ -85,7 +88,7 @@ def get_image_percentile_value(
 
         for i in progress(range(1, src.count + 1), desc="Sampling raster", unit="bands"):
             if geometries:
-                band_array, _ = rasterio.mask.mask(src, geometries, indexes=i, filled=False)
+                band_array, _ = rasterio.mask.mask(src, geometries, indexes=i, filled=False, crop=crop)
             else:
                 band_array = src.read(i, masked=True)
 

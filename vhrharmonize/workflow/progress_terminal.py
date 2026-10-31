@@ -169,6 +169,10 @@ class TerminalProgressDisplay:
         rows = []
         def flatten(items, depth=0, ancestors=()):
             for item in items:
+                if depth and item["status"] == "completed":
+                    # Hide finished substeps, retaining any unfinished descendants.
+                    flatten(item.get("children", []), depth, ancestors)
+                    continue
                 index = len(rows)
                 rows.append({**item, "_depth": depth, "_ancestors": ancestors})
                 flatten(item.get("children", []), depth + 1, (*ancestors, index))

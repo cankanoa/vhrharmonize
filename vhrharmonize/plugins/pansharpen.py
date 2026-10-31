@@ -6,7 +6,6 @@ import rasterio
 
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
-from vhrharmonize.io.progress import raster_windows
 
 
 @_logged_operation(
@@ -28,7 +27,8 @@ def pansharpen_image(
         input_low_resolution_path: Input multispectral raster path.
         input_high_resolution_path: Input panchromatic raster path.
         output_image_path: Output pansharpened raster path.
-        custom_nodata_value: Optional nodata value to apply after pansharpening.
+        custom_nodata_value: NoData value written during pansharpening;
+            None uses Orthority's dtype-specific default.
         log_to_console: Whether to emit console logs.
         scene_basename: Optional scene basename for log prefixes.
     Returns:
@@ -40,66 +40,44 @@ def pansharpen_image(
     import orthority as oty
 
     pan_sharp = oty.PanSharpen(input_high_resolution_path, input_low_resolution_path)
-    pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
+    if custom_nodata_value is None:
+        pan_sharp.process(output_image_path, write_mask=False, overwrite=True)
+    else:
+        from orthority.common import create_profile
 
-    if custom_nodata_value is not None:
-        _change_nodata_value(
-            output_image_path,
-            custom_nodata_value,
-            -32768,
-            log_to_console=log_to_console,
-            scene_basename=scene_basename,
+        # Reuse Orthority's calculated intersection grid and output defaults.
+        # An open writer keeps its profile when passed to PanSharpen.process().
+        grid = pan_sharp._profiles["pan_to_pan"]
+        with rasterio.open(input_low_resolution_path) as src:
+            dtype = np.dtype(src.dtypes[0])
+            count = sum(color != rasterio.enums.ColorInterp.alpha for color in src.colorinterp)
+        nodata = float(custom_nodata_value)
+        if dtype.kind in "iu":
+            limits = np.iinfo(dtype)
+            valid_nodata = (
+                np.isfinite(nodata) and nodata.is_integer()
+                and float(limits.min) <= nodata <= float(limits.max)
+            )
+        else:
+            limits = np.finfo(dtype)
+            valid_nodata = np.isnan(nodata) or (
+                np.isfinite(nodata) and float(limits.min) <= nodata <= float(limits.max)
+            )
+        if not valid_nodata:
+            raise ValueError(f"custom_nodata_value is not representable in {dtype.name}.")
+        profile, _ = create_profile(
+            driver="gtiff", shape=(count, grid["height"], grid["width"]),
+            dtype=dtype.name, write_mask=False,
         )
+        profile.update(crs=grid["crs"], transform=grid["transform"], nodata=nodata)
+        with rasterio.open(output_image_path, "w", **profile) as dst:
+            pan_sharp.process(dst, write_mask=False, overwrite=True)
     _log(
         f"Wrote output {os.path.basename(output_image_path)}",
         enabled=log_to_console,
         step="pansharpen",
         scene_basename=scene_basename,
     )
-
-
-def _change_nodata_value(
-    input_image_path: str,
-    new_nodata_value: float,
-    old_nodata: float,
-    *,
-    log_to_console: bool = False,
-    scene_basename: str | None = None,
-) -> None:
-    """Replace nodata values in-place.
-    Args:
-        input_image_path: Raster path to update in-place.
-        new_nodata_value: New nodata value to assign.
-        old_nodata: Old nodata value to replace.
-        log_to_console: Whether to emit console logs.
-        scene_basename: Optional scene basename for log prefixes.
-    Returns:
-        None.
-    """
-    replaced_any = False
-    with rasterio.open(input_image_path, "r+") as src:
-        for band_idx in range(1, src.count + 1):
-            for _, window in raster_windows(src, band_idx, desc=f"Updating nodata in band {band_idx}"):
-                band_data = src.read(band_idx, window=window)
-                if np.issubdtype(band_data.dtype, np.floating):
-                    mask = np.isclose(band_data, old_nodata)
-                else:
-                    mask = band_data == old_nodata
-                if np.any(mask):
-                    band_data[mask] = new_nodata_value
-                    src.write(band_data, band_idx, window=window)
-                    replaced_any = True
-
-        # GTiff stores a single dataset nodata (TIFFTAG_GDAL_NODATA).
-        src.nodata = new_nodata_value
-
-    if replaced_any:
-        _log(
-            "Updated nodata values",
-            enabled=log_to_console,
-            step="pansharpen",
-            scene_basename=scene_basename,
-        )
 
 
 class Pansharpen(FunctionPlugin):

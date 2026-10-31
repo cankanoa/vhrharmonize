@@ -123,29 +123,34 @@ discover_inputs:
 
   # Sensor constants shared by all imported images.
   const:band_order: [BAND_C, BAND_B, BAND_G, BAND_Y, BAND_R, BAND_RE, BAND_N, BAND_N2]
-  const:band_wavelengths_um: [0.4273, 0.4779, 0.5462, 0.6086, 0.6588, 0.7237, 0.8313, 0.9080]
+  # Original 1 nm spectral responses; columns follow const:band_order.
+  # Select exactly one spectral parameter in atmospheric_correction; CSV format/sources: docs/cli/workflow.md.
+  const:spectral_response_csv:
+    WV02: path:./example.worldview2.response.csv
+    WV03: path:./example.worldview3.response.csv
   # 2018v0 gain/offset adjustments. Edit or replace these values per product.
   const:calibration:
     WV02:
-      BAND_C: [0.977, -5.552]
-      BAND_B: [0.987, -4.443]
-      BAND_G: [0.987, -2.523]
-      BAND_Y: [0.987, -4.929]
-      BAND_R: [0.987, -3.914]
-      BAND_RE: [0.987, -5.675]
-      BAND_N: [0.987, -1.546]
-      BAND_N2: [0.987, -3.564]
+      BAND_C: [1.203, -11.839]
+      BAND_B: [1.002, -9.835]
+      BAND_G: [0.953, -7.218]
+      BAND_Y: [0.946, -5.675]
+      BAND_R: [0.955, -5.046]
+      BAND_RE: [0.980, -6.114]
+      BAND_N: [0.966, -5.096]
+      BAND_N2: [1.010, -4.059]
     WV03:
-      BAND_C: [0.905, -8.604]
-      BAND_B: [0.940, -5.809]
-      BAND_G: [0.938, -4.996]
-      BAND_Y: [0.962, -3.649]
-      BAND_R: [0.964, -3.021]
-      BAND_RE: [1.000, -4.521]
-      BAND_N: [0.961, -5.522]
-      BAND_N2: [0.978, -2.992]
+      BAND_C: [0.938, -13.099]
+      BAND_B: [0.946, -9.409]
+      BAND_G: [0.958, -7.771]
+      BAND_Y: [0.979, -5.489]
+      BAND_R: [0.969, -4.579]
+      BAND_RE: [1.027, -5.552]
+      BAND_N: [0.977, -6.508]
+      BAND_N2: [1.007, -3.699]
 
   param:search_glob: /path/to/worldview/**/MUL/*-M1BS-*.TIF
+
   param:scene_id: literal:expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # string/reference/expression; default: var:file_path. Filename stem; later imports merge on this ID.
   # Extended-glob alternative for selecting named primary MUL products:
   # param:search_glob: "/path/to/worldview/**/MUL/@(\
@@ -173,6 +178,7 @@ discover_inputs:
   var:suffix: "" # Naming state; enabled processing steps append their suffixes in YAML.
   var:pan: expr:$replace($replace(var.mul, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-')
   var:sensor_id: var:metadata.IMAGE_1.satId
+  var:wavelengths_response_csv: expr:$lookup(const.spectral_response_csv, var.sensor_id)
   var:acquisition_datetime_utc: expr:var.metadata.IMAGE_1.firstLineTime ?? var.metadata.IMAGE_1.TLCTime
   var:day_utc: expr:$substring(var.acquisition_datetime_utc, 0, 10)
   var:day: expr:$number($substring(var.acquisition_datetime_utc, 8, 2))
@@ -329,7 +335,9 @@ atmospheric_correction:
   param:view_azimuth: var:view_azimuth # degrees; required unless supplied in an explicit variables object.
   param:day: var:day # 1..31; required unless supplied in an explicit variables object.
   param:month: var:month # 1..12; required unless supplied in an explicit variables object.
-  param:band_wavelengths_um: const:band_wavelengths_um # number list; required unless supplied in an explicit variables object.
+  param:wavelengths_response_csv: var:wavelengths_response_csv # CSV path; original wavelength_nm samples, response columns in raster band order.
+  # param:wavelengths_center_um: [0.4273, 0.4779, 0.5462, 0.6086, 0.6588, 0.7237, 0.8313, 0.9080] # Alternative to CSV: micrometers, one center per band.
+  # param:wavelengths_bounds_um: [[0.40, 0.45], [0.45, 0.51], [0.51, 0.58], [0.585, 0.625], [0.63, 0.69], [0.705, 0.745], [0.77, 0.895], [0.86, 1.04]] # Alternative: uniform-response bounds in micrometers.
   param:dn_to_radiance_factors: var:dn_to_radiance_factors # number list | null; default: null. Explicit per-band radiance calibration.
   param:dn_to_radiance_offsets: var:dn_to_radiance_offsets # number list | null; default: null. Explicit per-band radiance calibration.
   # To disable IMD calibration or gain/offset adjustment, change the metadata mapping above;
@@ -494,42 +502,28 @@ cloud_mask:
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
   # core:calculate_overviews: true # true | false; default: false.
 
-# Spatially match to an external image, LiDAR intensity raster or other reference dataset.
-# Band indices for registration are zero-based.
-alignment:
-  plugin: alignment
-  core:run: true # true | false; default: false. Enable this step.
-  # core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
-  param:moving_image_path: var:current_image_paths # path; required. Cached image can satisfy this dependency directly.
-  param:fixed_image_path: const:reference_path # path; required when alignment runs.
-  var:suffix: expr:var.suffix & '_aligned'
-  var:current_image_paths: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
-  param:output_image_path: var:current_image_paths # path; required.
-  # param:band_index: 0 # zero-based integer; default: 0. Registration metric band when per-image overrides are null.
-  param:moving_band_index: 0 # zero-based integer | null; default: null -> band_index.
-  param:fixed_band_index: 0 # zero-based integer | null; default: null -> band_index.
-  # param:moving_nodata: null # number | null; default: null -> raster metadata.
-  # param:fixed_nodata: null # number | null; default: null -> raster metadata.
-  # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
-  # param:min_valid_fraction: 0.01 # (0,1]; default: 0.01. Required valid overlap fraction in registration ROI.
-  param:warn_and_skip_non_overlap_images: true # true | false; default: false. Warn and copy the unchanged moving raster to the requested output when valid overlap is insufficient.
-  # param:use_edge_proxies: true # true | false; default: true. Use edge imagery for registration.
-  # param:split_factor: 0 # integer >= 0; default: 0. 0 disables chunking; k > 0 splits solve/apply domains into 2^k chunks.
-  param:clip_fixed_to_moving: true # true | false; default: false. Clip the fixed domain to the moving footprint.
-  # param:output_on_moving_grid: false # true | false; default: false.
-  param:trim_edge_invalid: true # true | false; default: false. Trim alignment artifacts along irregular exterior boundaries.
-  param:edge_trim_depth: 8 # positive pixels; default: 8.
-  param:edge_trim_detection_band_index: 0 # zero-based integer; default: 0. Band used to detect edge artifacts.
-  param:edge_trim_invalid_below: -3000 # number | null; default: null. Values <= threshold are invalid; example: -3000.
-  # param:edge_trim_invalid_above: null # number | null; default: null. Values >= threshold are invalid; example: 65535.
-  param:enforce_mutual_valid_mask: true # true | false; default: false. Require pixels valid in both registration images.
-  # param:solve_resolution: null # positive CRS units | null; default: null. Optional solve pixel size; example: 2.0.
-  param:temp_dir: const:temp_dir # path | null; default: null -> system temp. Explicitly use the workflow temp directory.
-  # param:delete_temp_dir: false # true | false; default: shared.delete_temp_dir (Python: true).
-  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
-  # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
-  # core:calculate_overviews: true # true | false; default: false.
-
+# Independently anchor each image to LiDAR before group registration.
+# Install the updated SpectralMatch checkout with its elastix extra first.
+# lidar_joint_coregistration:
+#   plugin: joint_coregistration
+#   core:run: true # Anchor images to the configured reference_path.
+#   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
+#   core:scope: var # One image + one LiDAR reference per scene; workflow workers run pairs concurrently.
+#   const:lidar_reference: const:reference_path
+#   param:input_images: var:current_image_paths
+#   param:fixed_images: expr:[const.lidar_reference]
+#   param:input_images_bands: [1] # One-based; multiple bands are averaged into grayscale.
+#   param:fixed_images_bands: [1] # One-based reference matching bands.
+#   param:fixed_tie_method: elastix
+#   param:tie_grid_spacing: 500
+#   param:tie_search_radius: 128px
+#   param:tie_maximum_displacement: 100 # CRS units; set for the expected initial error.
+#   param:global_model: translation
+#   param:local_model: piecewise_affine # Set bilinear or piecewise_affine for spatially varying correction.
+#   var:suffix: _alignlidar
+#   var:current_image_paths: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'
+#   param:output_images: var:current_image_paths # Outputs correspond only to moving inputs.
+#   param:tie_save_path: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '_ties.json'
 
 # Optional low-resolution test after alignment. Uncomment this block to resample every scene
 # to 30 m and use those copies for all subsequent image steps. Inputs must use a projected CRS
@@ -573,10 +567,15 @@ joint_coregistration:
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
-  var:suffix: expr:var.suffix & '_coreg'
+  var:suffix: _coreg
   var:current_image_paths: expr:const.temp_dir & '/joint_coregistration/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Folder (writes '$_Coregistered.tif'), '$' basename template, or list[str] matching input order and length; output paths must be unique and differ from inputs.
-  # param:tie_feature_method: "orb" # orb; default: "orb". 'orb', currently the only supported tie-point detector.
+  # param:moving_tie_method: "orb" # orb | elastix; default: orb. Matcher between moving images.
+  # param:fixed_tie_method: "elastix" # orb | elastix; default: elastix. Matcher against fixed_images; unused without references.
+  # Disable lidar_joint_coregistration above when using this combined LiDAR + image-to-image solve.
+  # param:fixed_images: expr:[const.reference_path] # Uncomment to anchor this joint solve to LiDAR; reference stays read-only.
+  # param:input_images_bands: [1] # One-based matching bands; multiple bands are averaged into grayscale.
+  # param:fixed_images_bands: [1] # One-based reference matching bands; multiple bands are averaged into grayscale.
   # param:tie_grid_spacing: 500.0 # number; default: 500.0. Positive CRS-unit distance between search-window centers in each pair's overlap; default 500.0; independent of local_model and local_grid_spacing.
   # param:tie_search_radius: "128px" # string; default: "128px". Window half-width; positive number followed by px or crs
   # param:tie_orb_max_features: 100 # number; default: 100. Per image per search window
@@ -843,4 +842,3 @@ merge_rasters:
   # param:custom_tiles_csv: null # string | null; default: null. Tile mode only; filename inside each output level Example: tiles.csv.
   # param:create_vrts: "MergedImage.vrt" # string; default: "MergedImage.vrt". Filename of the full-resolution VRT in the output folder, default "MergedImage.vrt".
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". "no" overwrites outputs (omits -resume); "yes" skips existing files (-resume); "validate" checks existing tiles with the raster validation helper, removes invalid tiles, then uses -resume. Inherits shared.param:resume_from_outputs when set.
-  

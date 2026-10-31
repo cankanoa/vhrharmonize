@@ -52,5 +52,6 @@ path_mappings:
   const:output_dir: ~/koa_scratch/vhrharmonize/output
   var:relative_output_dir: ~/koa_scratch/vhrharmonize/output
   const:temp_dir: ~/koa_scratch/vhrharmonize/temp
+  var:wavelengths_response_csv: ~/koa_scratch/vhrharmonize/references # Upload the selected sensor-response CSV when correction runs remotely.
   const:dem_path: ~/koa_scratch/vhrharmonize/references
   const:reference_path: ~/koa_scratch/vhrharmonize/references

@@ -74,7 +74,7 @@ chosen; `import_files` creates no directory defaults. Select cleanup roots with
 `shared.core:output_metadata_path` optionally appends final const/var snapshots to a
 YAML-selected JSON file; `core:delete_final_json_first` defaults to true and clears
 each destination only on its first write during the run.
-Values such as `var:mul` and `const:band_wavelengths_um` read the context, `returned:bytes` selects a function result,
+Values such as `var:mul` and `const:wavelengths_center_um` read the context, `returned:bytes` selects a function result,
 and `expr:var.suffix & '_aligned'` computes a value. JSONata sees one object with `const` and `var` namespaces. Context fields reach function arguments only through explicit `param:` references. Argument precedence is per-plugin `param:`, then shared `param:`, then the function default. Disabled steps do nothing.
 
 ```bash

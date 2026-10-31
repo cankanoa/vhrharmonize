@@ -24,6 +24,6 @@ dependencies:
   - pip:
       - envipyengine==1.0.9
       - orthority==0.5.1
-      - spectralmatch
+      - spectralmatch[elastix]
       - coregix
       - earthengine-api

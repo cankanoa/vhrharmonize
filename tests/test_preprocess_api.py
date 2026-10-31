@@ -49,7 +49,7 @@ def _metadata():
         line_of_sight_zenith=158.0,
         day=5,
         month=7,
-        band_wavelengths_um=[0.5, 0.8],
+        wavelengths_center_um=[0.5, 0.8],
         dn_to_radiance_factors=[1.0, 3.0],
         dn_to_radiance_offsets=[-1.0, -2.0],
     )
@@ -358,16 +358,26 @@ def test_pansharpen(monkeypatch, tmp_path: Path) -> None:
     class _PanSharpen:
         def __init__(self, pan, mul):
             self.pan, self.mul = pan, mul
+            with rasterio.open(pan) as src:
+                self._profiles = {"pan_to_pan": src.profile.copy()}
 
         def process(self, output_image_path, write_mask=False, overwrite=True):
             with rasterio.open(self.mul) as src:
                 profile = src.profile.copy()
                 data = src.read()
-            with rasterio.open(output_image_path, "w", **profile) as dst:
-                dst.write(data)
+            if isinstance(output_image_path, rasterio.io.DatasetWriter):
+                output_image_path.write(data)
+            else:
+                with rasterio.open(output_image_path, "w", **profile) as dst:
+                    dst.write(data)
 
     fake_orthority = ModuleType("orthority")
     fake_orthority.PanSharpen = _PanSharpen
+    fake_common = ModuleType("orthority.common")
+    fake_common.create_profile = lambda *, driver, shape, dtype, write_mask: (
+        dict(driver=driver, count=shape[0], height=shape[1], width=shape[2], dtype=dtype), False
+    )
+    monkeypatch.setitem(sys.modules, "orthority.common", fake_common)
     monkeypatch.setitem(sys.modules, "orthority", fake_orthority)
     pansharpen_mod = importlib.import_module("vhrharmonize.plugins.pansharpen")
     mul = tmp_path / "mul.tif"
@@ -401,7 +411,9 @@ def test_pansharpen(monkeypatch, tmp_path: Path) -> None:
         dst.write(data)
     out = tmp_path / "ps.tif"
     pansharpen_mod.pansharpen_image(str(mul), str(pan), str(out), custom_nodata_value=0)
-    assert out.exists()
+    with rasterio.open(out) as dst:
+        assert dst.nodata == 0
+        np.testing.assert_array_equal(dst.read(), data)
 
 
 
@@ -773,7 +785,8 @@ def test_py6s_samples_dem_using_mapped_geometry(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(atmos_mod.Py6SCorrector, "run", lambda self, **kwargs: calls.append(kwargs))
 
-    def sample(path, percentile, mask):
+    def sample(path, percentile, mask, crop):
+        assert crop is True
         assert path == "dem.tif"
         assert percentile == 60
         assert mask.equals(box(0, 0, 1, 1))

@@ -17,7 +17,7 @@ shared:
   const:temp_dir: path:./temp
   core:cleanup_dirs: [const:temp_dir]
   const:reference_path: /data/reference.tif
-  const:band_wavelengths_um: [0.4273, 0.4779, 0.5462]
+  const:wavelengths_center_um: [0.4273, 0.4779, 0.5462]
   # core:run_from_existing: true
 
 discover_inputs:
@@ -82,7 +82,7 @@ Prefixes apply to complete strings; there is no embedded `${name}` interpolation
 The engine maintains a JSON context for resolving each plugin’s YAML settings:
 
 ```json
-{"const": {"band_wavelengths_um": [0.4273, 0.4779]}, "var": {"basename": "scene_01"}}
+{"const": {"wavelengths_center_um": [0.4273, 0.4779]}, "var": {"basename": "scene_01"}}
 ```
 
 `const` holds values shared across all scenes: calibration tables, wavelengths, common paths and aggregate results. `var` holds image paths, acquisition geometry, per-image calibration factors, returned values and naming state. Names can exist in both scopes without colliding. `const` describes scope, not immutability: a later enabled step can update an earlier constant.
@@ -141,7 +141,7 @@ Function argument precedence is **explicit plugin `param:` > shared `param:` > f
 
 ```yaml
 param:solar_zenith: var:solar_zenith
-param:band_wavelengths_um: const:band_wavelengths_um
+param:wavelengths_center_um: const:wavelengths_center_um
 ```
 
 Shared `param:` settings are offered to every processing adapter; `FunctionPlugin` forwards only accepted arguments, applying adapter aliases when necessary. Unsupported shared settings are ignored, while unsupported explicit plugin parameters are errors. A missing required argument raises an error even if a matching field exists in the context.
