@@ -25,6 +25,10 @@ vhr workflow --config configs/example.worldview.yml
 vhr workflow --config configs/example.planet.yml
 ```
 
+Press **Ctrl+C** to cancel a workflow while the progress display is active.
+Cancellation interrupts waits for worker results, stops the workflow's local
+process workers, and restores the terminal before returning to the shell.
+
 `--dry-run` prints existing output counts and actual pending work without running ordinary processing steps or cleanup. Scene-setting functions run to discover their records; their own import metadata saves may occur. Final processing JSON is only written by a real run. All step options live in the YAML. See [workflow configuration](../configuration/workflow-config.md) for paths, metadata mapping, plugin registration and resume behavior.
 
 The former `vhr-worldview` command and flat configurations are not supported in version 3.
@@ -61,6 +65,20 @@ For one combined reference and image-to-image solve, disable
 uses reference ties only at valid reference pixels; moving-to-moving ties
 still connect the network. Disconnected moving components may align without
 a reference, while a solve with no usable ties errors.
+
+## Atmospheric correction plugins
+
+`plugin: py6s_atmospheric_correction` runs Py6S; `plugin: flaash_atmospheric_correction`
+runs ENVI FLAASH. Each has its own parameters and module. The former
+`plugin: atmospheric_correction` and `param:method` selector are replaced by
+these explicit plugins. The public Python functions `run_py6s` and `run_flaash`
+remain available from `vhrharmonize`.
+
+The WorldView example enables the Py6S step and includes a separate commented
+FLAASH step immediately below it. To switch algorithms, set the Py6S step's
+`core:run` to `false` and uncomment the FLAASH step. Configure its ENVI engine
+path and required output as needed. Both steps use the preceding enabled
+step's image path.
 
 ## Py6S spectral bands and output validity
 
@@ -150,3 +168,43 @@ when the output dtype can represent them.
 
 Coefficient precision remains limited by the installed 6S executable's printed
 output; this plugin does not modify or recompile 6S.
+
+## Atmosphere lookup warnings
+
+Both `fetch_atmosphere` sources (`nasa_power` and `modis_gee`) return and save
+`warnings`, `lookup_attempts`, and `defaults_used` in the configured atmosphere
+JSON. With `param:log_to_console: true`, every warning is also printed with
+`WARNING |` and the same message. JSON diagnostics are retained even when
+console logging is disabled.
+
+Warnings identify missing NASA POWER values at each point/date, missing MODIS
+images/bands/valid regional values, alternate MODIS bands or collections, and
+use of values from another UTC date. POWER also warns before trying each
+alternate date. Its lookup order remains acquisition day, following day,
+previous day (and further offsets when `search_days` is increased); another
+date is tried only when the preceding date supplied no atmospheric values.
+MODIS still selects the closest valid Terra/Aqua match within `hours_window`;
+water-vapor and aerosol dates are reported separately.
+
+Configure missing-value substitutions explicitly for either source:
+
+```yaml
+param:fallback_values:
+  aot550: 0.2
+  water_vapor: 2.5  # g/cm^2
+  ozone_cm_atm: 0.3 # cm-atm
+```
+
+Each substitution generates a warning naming the parameter and value and is
+listed in `defaults_used`. Omit this mapping to retain nulls, with explicit
+unavailable-parameter warnings. Both sources expose `aot550`, `water_vapor`,
+and `ozone_cm_atm` for the following correction step. MODIS also retains its
+original raw/scaled fields; it does not retrieve ozone, so ozone needs a
+configured default when using these Py6S examples. `lookup_attempts` preserves
+the actual retrieved samples even when effective values contain defaults.
+
+The examples apply defaults in `fetch_atmosphere`, rather than in later YAML
+expressions, so the saved JSON describes the actual inputs passed to Py6S.
+Request/authentication errors remain errors: the adapter saves their lookup
+diagnostics with `status: error`, then re-raises the original exception. They
+do not trigger an automatic provider switch or default substitution.

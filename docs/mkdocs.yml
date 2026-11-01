@@ -28,7 +28,8 @@ nav:
       - io.geospatial: api/io-geospatial.md
       - io.workflow_utils: api/io-workflow-utils.md
       - plugins.alignment: api/plugins-alignment.md
-      - plugins.atmospheric_correction: api/plugins-atmospheric-correction.md
+      - plugins.py6s_atmospheric_correction: api/plugins-py6s-atmospheric-correction.md
+      - plugins.flaash_atmospheric_correction: api/plugins-flaash-atmospheric-correction.md
       - plugins.cloud_mask: api/plugins-cloud-mask.md
       - io.logging: api/io-logging.md
       - plugins.orthorectification: api/plugins-orthorectification.md

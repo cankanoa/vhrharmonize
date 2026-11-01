@@ -11,19 +11,19 @@ import rasterio
 from shapely.geometry import box
 import yaml
 
-import vhrharmonize.plugins.atmospheric_correction as atmos_mod
+import vhrharmonize.plugins.py6s_atmospheric_correction as py6s_mod
+import vhrharmonize.plugins.flaash_atmospheric_correction as flaash_mod
 from vhrharmonize.plugins.fetch_dem import download_opentopography_dem_for_bbox
 import vhrharmonize.plugins.fetch_atmosphere as fetch_mod
 from vhrharmonize.plugins.alignment import align_image_pair
-from vhrharmonize.plugins.atmospheric_correction import (
-    atmospheric_correction,
+from vhrharmonize.plugins.py6s_atmospheric_correction import run_py6s
+from vhrharmonize.plugins.flaash_atmospheric_correction import (
     _build_flaash_kwargs_from_variables,
     _convert_flaash_params_paths_for_windows,
     _init_envi_engine,
     parallel_flaash,
     run_flaash,
     _run_flaash_wrapper,
-    run_py6s,
     _validate_flaash_params,
     _wsl_path_to_windows_for_envi,
 )
@@ -142,7 +142,7 @@ def test_align_image_pair_cli_rejects_removed_flag(flag, capsys) -> None:
 
 def test_py6s_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
     calls = []
-    monkeypatch.setattr(atmos_mod.Py6SCorrector, "run", lambda self, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(py6s_mod.Py6SCorrector, "run", lambda self, **kwargs: calls.append(kwargs))
     result = run_py6s(
         "in.tif", str(tmp_path / "out.tif"), variables=_metadata(), ground_elevation_km=1.0
     )
@@ -151,11 +151,11 @@ def test_py6s_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
     assert calls[0]["ground_elevation_km"] == 1.0
 
 
-def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
+def test_flaash_helpers_and_run(monkeypatch, tmp_path: Path) -> None:
     fake_geospatial = ModuleType("vhrharmonize.io.geospatial")
     fake_geospatial.get_image_percentile_value = lambda *args, **kwargs: 100.0
     monkeypatch.setattr(
-        atmos_mod, "get_image_percentile_value", fake_geospatial.get_image_percentile_value
+        flaash_mod, "get_image_percentile_value", fake_geospatial.get_image_percentile_value
     )
     kwargs = _build_flaash_kwargs_from_variables(
         "in.tif",
@@ -189,11 +189,11 @@ def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setitem(sys.modules, "envipyengine", fake_envipyengine)
     monkeypatch.setitem(sys.modules, "envipyengine.config", fake_envipyengine_config)
     assert _init_envi_engine("engine").tasks() is None
-    monkeypatch.setattr(atmos_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(flaash_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
     assert (
         _run_flaash_wrapper(({"OUTPUT_RASTER_URI": "out.tif"}, "params.txt", object())) == "out.tif"
     )
-    monkeypatch.setattr(atmos_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(flaash_mod, "_execute_flaash_task", lambda *args, **kwargs: None)
     result = run_flaash(
         "in.tif",
         str(tmp_path / "out.tif"),
@@ -204,7 +204,7 @@ def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
         envi_engine=object(),
     )
     assert result.output_raster.endswith("out.tif")
-    monkeypatch.setattr(atmos_mod, "_run_flaash_wrapper", lambda task: task[0]["OUTPUT_RASTER_URI"])
+    monkeypatch.setattr(flaash_mod, "_run_flaash_wrapper", lambda task: task[0]["OUTPUT_RASTER_URI"])
 
     class _Future:
         def __init__(self, value):
@@ -226,30 +226,10 @@ def test_flaash_helpers_and_dispatch(monkeypatch, tmp_path: Path) -> None:
         def submit(self, fn, task):
             return _Future(fn(task))
 
-    monkeypatch.setattr(atmos_mod, "ProcessPoolExecutor", _Executor)
-    monkeypatch.setattr(atmos_mod, "as_completed", lambda futures: futures)
-    monkeypatch.setattr(atmos_mod, "progress", lambda it, **kwargs: it)
+    monkeypatch.setattr(flaash_mod, "ProcessPoolExecutor", _Executor)
+    monkeypatch.setattr(flaash_mod, "as_completed", lambda futures: futures)
+    monkeypatch.setattr(flaash_mod, "progress", lambda it, **kwargs: it)
     assert parallel_flaash([({"OUTPUT_RASTER_URI": "a.tif"}, "p.txt")], object()) == ["a.tif"]
-    monkeypatch.setattr(
-        atmos_mod.Py6SCorrector,
-        "run",
-        lambda self, input_raster, output_raster, **kw: output_raster,
-    )
-    assert (
-        atmospheric_correction(
-            "in.tif",
-            "out.tif",
-            method="py6s",
-            solar_zenith=1,
-            solar_azimuth=1,
-            view_zenith=1,
-            view_azimuth=1,
-            day=1,
-            month=1,
-        )
-        == "out.tif"
-    )
-
 
 def test_cloudmask_functions(monkeypatch, tmp_path: Path, make_test_raster) -> None:
     input_path = make_test_raster(
@@ -783,7 +763,7 @@ def test_py6s_samples_dem_using_mapped_geometry(monkeypatch, tmp_path):
     from shapely.geometry import mapping
 
     calls = []
-    monkeypatch.setattr(atmos_mod.Py6SCorrector, "run", lambda self, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(py6s_mod.Py6SCorrector, "run", lambda self, **kwargs: calls.append(kwargs))
 
     def sample(path, percentile, mask, crop):
         assert crop is True
@@ -792,7 +772,7 @@ def test_py6s_samples_dem_using_mapped_geometry(monkeypatch, tmp_path):
         assert mask.equals(box(0, 0, 1, 1))
         return 500
 
-    monkeypatch.setattr(atmos_mod, "get_image_percentile_value", sample)
+    monkeypatch.setattr(py6s_mod, "get_image_percentile_value", sample)
     run_py6s(
         "in.tif",
         str(tmp_path / "out.tif"),

@@ -15,7 +15,7 @@ from vhrharmonize.io.geospatial import get_image_percentile_value
 from vhrharmonize.workflow.engine import Workflow
 from workflow_helpers import import_settings
 
-atmos = importlib.import_module('vhrharmonize.plugins.atmospheric_correction')
+atmos = importlib.import_module('vhrharmonize.plugins.py6s_atmospheric_correction')
 
 
 @pytest.fixture
@@ -260,7 +260,7 @@ def test_example_selects_original_sensor_csv_in_raster_band_order(tmp_path,make_
     discover['var:wavelengths_response_csv']=recipe['discover_inputs']['var:wavelengths_response_csv']
     discover['var:current_image_paths']='returned:file_path'
     workflow=Workflow({'shared':{'plugin':'shared','core:run':True,'core:save_statistics_path':None},
-        'discover':discover,'correct':{'plugin':'atmospheric_correction','core:run':True,
+        'discover':discover,'correct':{'plugin':'py6s_atmospheric_correction','core:run':True,
             'core:require_outputs':'param:output_raster','param:input_raster':'var:current_image_paths',
             'param:output_raster':str(tmp_path/'corrected.tif'),
             'param:wavelengths_response_csv':'var:wavelengths_response_csv'}},config_dir=config_dir)
@@ -298,7 +298,7 @@ def test_hpc_stages_and_remaps_response_csv_as_a_required_input(tmp_path,model):
     discover['var:wavelengths_response_csv']='path:./response.csv'
     recipe={'shared':{'plugin':'shared','core:run':True,'core:save_statistics_path':None,
                       'core:load_statistics_path':None,'const:root':str(tmp_path)},
-        'discover':discover,'correct':{'plugin':'atmospheric_correction','core:run':True,
+        'discover':discover,'correct':{'plugin':'py6s_atmospheric_correction','core:run':True,
         'core:require_outputs':'param:output_raster','param:input_raster':'var:mul',
         'param:output_raster':"expr:const.root & '/' & var.basename & '_out.tif'",
         'param:wavelengths_response_csv':'var:wavelengths_response_csv',

@@ -78,7 +78,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     counts = workflow.counts()
     for step in [
         "fetch_atmosphere",
-        "atmospheric_correction",
+        "py6s_atmospheric_correction",
         "orthorectify_mul",
         "orthorectify_pan",
         "pansharpen",

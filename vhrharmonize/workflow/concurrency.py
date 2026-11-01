@@ -8,6 +8,41 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing import get_context
+from time import monotonic
+
+
+@contextmanager
+def interruptible_pool(executor):
+    """Stop owned local workers on Ctrl+C instead of waiting for their jobs."""
+    def stop_workers():
+        # Python < 3.14 has no public API to terminate running pool workers.
+        # Snapshot them before shutdown releases the executor's process map.
+        processes = list((executor._processes or {}).values())
+        executor.shutdown(wait=False, cancel_futures=True)
+        for process in processes:
+            process.terminate()
+        deadline = monotonic() + 1
+        for process in processes:
+            process.join(max(0, deadline - monotonic()))
+        for process in processes:
+            if process.is_alive():
+                process.kill()
+                process.join()
+
+    interrupted = False
+    try:
+        yield executor
+    except KeyboardInterrupt:
+        interrupted = True
+        stop_workers()
+        raise
+    finally:
+        if not interrupted:
+            try:
+                executor.shutdown(wait=True)
+            except KeyboardInterrupt:
+                stop_workers()
+                raise
 
 
 @dataclass
@@ -78,7 +113,7 @@ def image_executor(workers, backend, scheduler=None):
             finally:
                 client.cancel(executor._jobs)
     else:
-        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
+        with interruptible_pool(ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))) as executor:
             yield executor
 
 

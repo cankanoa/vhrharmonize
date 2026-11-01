@@ -338,8 +338,16 @@ class TerminalProgressDisplay:
 
         @keys.add("c-c")
         def interrupt(event):
-            from _thread import interrupt_main
-            interrupt_main()  # Preserve Ctrl-C processing cancellation on the calling main thread.
+            # A pending Python exception alone does not wake a main thread
+            # blocked waiting for worker results. Deliver SIGINT to that thread.
+            import signal
+            from threading import main_thread
+
+            if hasattr(signal, "pthread_kill"):
+                signal.pthread_kill(main_thread().ident, signal.SIGINT)
+            else:
+                from _thread import interrupt_main
+                interrupt_main()
 
         body = Window(FormattedTextControl(lambda: self._pinned), height=lambda: self._pinned_height,
                       dont_extend_height=True, always_hide_cursor=True)

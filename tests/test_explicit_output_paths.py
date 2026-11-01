@@ -20,8 +20,8 @@ from workflow_helpers import import_settings, copy_step
             {"moving_image_path": "input.tif", "fixed_image_path": "ref.tif"},
             "output_image_path",
         ),
-        ("atmospheric_correction", "run_py6s", {"input_raster": "input.tif"}, "output_raster"),
-        ("atmospheric_correction", "run_flaash", {"input_raster": "input.tif"}, "output_raster"),
+        ("py6s_atmospheric_correction", "run_py6s", {"input_raster": "input.tif"}, "output_raster"),
+        ("flaash_atmospheric_correction", "run_flaash", {"input_raster": "input.tif"}, "output_raster"),
         (
             "orthorectification",
             "gcp_refined_rpc_orthorectification",

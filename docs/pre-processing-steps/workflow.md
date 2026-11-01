@@ -1,6 +1,6 @@
 # Plugin processing
 
-Top-level step declaration order and prefixed settings define execution and connections. Each unique step name selects an implementation with `plugin:`; pluginless steps can prepare constants and variables. Core provides `plugin: shared` for defaults. Processing plugins include `import_files`, `file_source`, `fetch_atmosphere`, `fetch_dem`, `atmospheric_correction`, `orthorectification`, `pansharpen`, `cloud_mask`, `alignment`, `seamline_metadata`, and the [individual SpectralMatch functions](../api/plugins-spectralmatch.md).
+Top-level step declaration order and prefixed settings define execution and connections. Each unique step name selects an implementation with `plugin:`; pluginless steps can prepare constants and variables. Core provides `plugin: shared` for defaults. Processing plugins include `import_files`, `file_source`, `fetch_atmosphere`, `fetch_dem`, `py6s_atmospheric_correction`, `flaash_atmospheric_correction`, `orthorectification`, `pansharpen`, `cloud_mask`, `alignment`, `seamline_metadata`, and the [individual SpectralMatch functions](../api/plugins-spectralmatch.md).
 
 The WorldView recipe imports primary MUL rasters, maps IMD data to JSON, derives PAN paths, and explicitly connects correction, two orthorectification branches, pansharpening, cloud masking and alignment. The Planet example begins with already orthorectified reflectance. Both use the same runner and plugins.
 

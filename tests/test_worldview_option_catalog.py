@@ -41,7 +41,8 @@ def documented_plugin_keys():
             "fetch_atmosphere",
             ["fetch_power_atmosphere_for_bbox", "fetch_modis_water_vapor_for_bbox"],
         ),
-        ("atmospheric_correction", ["run_py6s", "run_flaash"]),
+        ("py6s_atmospheric_correction", ["run_py6s"]),
+        ("flaash_atmospheric_correction", ["run_flaash"]),
         ("orthorectification", ["gcp_refined_rpc_orthorectification"]),
         ("pansharpen", ["pansharpen_image"]),
         ("cloud_mask", ["cloudmask_raster"]),
@@ -59,11 +60,11 @@ def test_worldview_documents_every_public_plugin_parameter(plugin, functions):
 
 
 def test_worldview_retains_all_supported_flaash_task_parameters():
-    from vhrharmonize.plugins.atmospheric_correction import FLAASH_ALLOWED_PARAMS
+    from vhrharmonize.plugins.flaash_atmospheric_correction import FLAASH_ALLOWED_PARAMS
 
-    text = "\n".join(plugin_sections()["atmospheric_correction"])
+    text = "\n".join(plugin_sections()["flaash_atmospheric_correction"])
     assert FLAASH_ALLOWED_PARAMS <= set(
-        re.findall(r"^\s+#\s+([A-Z][A-Z_0-9]+):", text, re.MULTILINE)
+        re.findall(r"^\s+(?:#\s+)?([A-Z][A-Z_0-9]+):", text, re.MULTILINE)
     )
 
 

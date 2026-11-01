@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import json
+import math
 from pathlib import Path
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,76 @@ import requests
 from .base import FunctionPlugin
 from vhrharmonize.io.logging import _log, _logged_operation
 from vhrharmonize.io.progress import progress
+
+
+_ATMOSPHERE_PARAMETERS = ("aot550", "water_vapor", "ozone_cm_atm")
+
+
+class _AtmosphereDiagnostics:
+    """Keep the same warning records in console logs and retrieval JSON."""
+
+    def __init__(self, source, log_to_console, scene_basename):
+        self.source = source
+        self.log_to_console = log_to_console
+        self.scene_basename = scene_basename
+        self.warnings = []
+        self.lookup_attempts = []
+
+    def warn(self, code, message, **details):
+        self.warnings.append(dict(code=code, message=message, source=self.source, **details))
+        _log("WARNING | " + message, enabled=self.log_to_console,
+             step="fetch_atmosphere", scene_basename=self.scene_basename)
+
+    def metadata(self):
+        return dict(warnings=self.warnings, lookup_attempts=self.lookup_attempts)
+
+    def call(self, function, *args, lookup, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Exception as error:
+            description = f"{type(error).__name__}: {error}"
+            self.lookup_attempts.append(dict(**lookup, status="error", error=description))
+            self.warn("lookup_error", f"{self.source} lookup failed: {description}. No automatic source switch or default substitution was performed.", **lookup)
+            # Preserve the original exception and its behavior; the adapter saves
+            # these diagnostics before re-raising it.
+            error.atmosphere_diagnostics = self.metadata()
+            raise
+
+
+def _validate_fallback_values(values):
+    values = {} if values is None else dict(values)
+    unknown = set(values) - set(_ATMOSPHERE_PARAMETERS)
+    if unknown:
+        raise ValueError(f"Unsupported atmospheric fallback parameters: {sorted(unknown)}")
+    result = {}
+    for name, value in values.items():
+        if isinstance(value, bool):
+            raise ValueError(f"fallback_values.{name} must be a finite nonnegative number.")
+        value = float(value)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"fallback_values.{name} must be a finite nonnegative number.")
+        result[name] = value
+    return result
+
+
+def _apply_atmosphere_defaults(values, fallbacks, diagnostics):
+    """Substitute only explicitly configured defaults, retaining an audit trail."""
+    values = dict(values)
+    used = {}
+    units = {"aot550": "", "water_vapor": " g/cm^2", "ozone_cm_atm": " cm-atm"}
+    for name in _ATMOSPHERE_PARAMETERS:
+        if values[name] is not None:
+            continue
+        if name in fallbacks:
+            values[name] = used[name] = fallbacks[name]
+            diagnostics.warn("default_used",
+                f"{diagnostics.source} supplied no {name}; using configured default {fallbacks[name]}{units[name]}.",
+                parameter=name, value=fallbacks[name])
+        else:
+            diagnostics.warn("parameter_unavailable",
+                f"{diagnostics.source} supplied no {name}; no fallback is configured and the value remains null.",
+                parameter=name)
+    return values, used
 
 
 @dataclass
@@ -26,6 +97,10 @@ class AtmosphereEstimate:
     source: str
     sample_count: int
     date_used: str
+    date_requested: Optional[str] = None
+    warnings: List[Dict[str, Any]] = field(default_factory=list)
+    lookup_attempts: List[Dict[str, Any]] = field(default_factory=list)
+    defaults_used: Dict[str, float] = field(default_factory=dict)
 
 
 def _linspace(min_v: float, max_v: float, n: int) -> List[float]:
@@ -138,74 +213,80 @@ def fetch_power_atmosphere_for_bbox(
     search_days: int = 1,
     endpoint: str = "https://power.larc.nasa.gov/api/temporal/daily/point",
     timeout_s: float = 30.0,
+    fallback_values: dict[str, float] | None = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> AtmosphereEstimate:
-    """Fetch AOT550, water vapor, and ozone for a bbox via NASA POWER daily API."""
+    """Fetch AOT550, water vapor, and ozone with logged/persisted diagnostics.
 
+    Args:
+        day_utc: Requested acquisition date in UTC.
+        min_lon: Bounding-box west longitude.
+        min_lat: Bounding-box south latitude.
+        max_lon: Bounding-box east longitude.
+        max_lat: Bounding-box north latitude.
+        grid_size: Number of sample points per bounding-box side.
+        search_days: Search this many days before and after acquisition.
+        endpoint: NASA POWER daily point API URL.
+        timeout_s: Timeout per point request in seconds.
+        fallback_values: Explicit defaults for missing aot550, water_vapor (g/cm^2), and ozone_cm_atm (cm-atm). None leaves missing values null.
+        log_to_console: Print lookup and fallback warnings.
+        scene_basename: Optional scene label in console logs.
+    """
     if min_lon > max_lon or min_lat > max_lat:
         raise ValueError("Invalid bbox bounds.")
     if grid_size < 1:
         raise ValueError("grid_size must be >= 1")
     if search_days < 0:
         raise ValueError("search_days must be >= 0")
-
+    fallbacks = _validate_fallback_values(fallback_values)
+    diagnostics = _AtmosphereDiagnostics("nasa_power", log_to_console, scene_basename)
     points = _grid_points_from_bbox_wgs84(min_lon, min_lat, max_lon, max_lat, grid_size)
-
     offsets = [0]
     for i in range(1, search_days + 1):
         offsets.extend([i, -i])
 
+    values = dict.fromkeys(_ATMOSPHERE_PARAMETERS)
+    date_used = day_utc
     for delta in offsets:
         query_day = day_utc + timedelta(days=delta)
-        aod_vals: List[float] = []
-        wv_vals: List[float] = []
-        oz_vals: List[float] = []
+        if delta:
+            diagnostics.warn("alternate_date_lookup",
+                f"No atmospheric values found on earlier NASA POWER lookup dates; trying {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
+                requested_date=day_utc.isoformat(), query_date=query_day.isoformat(), offset_days=delta)
+        samples = {name: [] for name in _ATMOSPHERE_PARAMETERS}
         for lon, lat in progress(points, desc=f"Fetching atmosphere for {query_day}", unit="points"):
-            item = _fetch_power_daily_point(
-                query_day,
-                lon,
-                lat,
-                endpoint=endpoint,
-                timeout_s=timeout_s,
-            )
-            if item["aot550"] is not None:
-                aod_vals.append(float(item["aot550"]))
-            if item["water_vapor"] is not None:
-                wv_vals.append(float(item["water_vapor"]))
-            if item["ozone_cm_atm"] is not None:
-                oz_vals.append(float(item["ozone_cm_atm"]))
-
-        if aod_vals or wv_vals or oz_vals:
-            _log(
-                f"Using NASA POWER values from {query_day.isoformat()}",
-                enabled=log_to_console,
-                step="fetch_atmosphere",
-                scene_basename=scene_basename,
-            )
-            return AtmosphereEstimate(
-                aot550=(sum(aod_vals) / len(aod_vals)) if aod_vals else None,
-                water_vapor=(sum(wv_vals) / len(wv_vals)) if wv_vals else None,
-                ozone_cm_atm=(sum(oz_vals) / len(oz_vals)) if oz_vals else None,
-                source="nasa_power_daily_point_grid",
-                sample_count=len(points),
-                date_used=query_day.isoformat(),
-            )
-
-    _log(
-        "No external atmosphere values found",
-        enabled=log_to_console,
-        step="fetch_atmosphere",
-        scene_basename=scene_basename,
-    )
-    return AtmosphereEstimate(
-        aot550=None,
-        water_vapor=None,
-        ozone_cm_atm=None,
-        source="nasa_power_daily_point_grid",
-        sample_count=len(points),
-        date_used=day_utc.isoformat(),
-    )
+            lookup = dict(query_date=query_day.isoformat(), longitude=lon, latitude=lat)
+            item = diagnostics.call(_fetch_power_daily_point, query_day, lon, lat,
+                endpoint=endpoint, timeout_s=timeout_s, lookup=lookup)
+            missing = [name for name in _ATMOSPHERE_PARAMETERS if item[name] is None]
+            diagnostics.lookup_attempts.append(dict(**lookup, values=dict(item), missing_parameters=missing,
+                status="missing" if len(missing) == 3 else "partial" if missing else "ok"))
+            if missing:
+                diagnostics.warn("lookup_missing_values",
+                    f"NASA POWER lookup on {query_day.isoformat()} at ({lon:g}, {lat:g}) returned no {', '.join(missing)}.",
+                    **lookup, parameters=missing)
+            for name in _ATMOSPHERE_PARAMETERS:
+                if item[name] is not None:
+                    samples[name].append(float(item[name]))
+        if any(samples.values()):
+            values = {name: sum(items) / len(items) if items else None for name, items in samples.items()}
+            date_used = query_day
+            if delta:
+                diagnostics.warn("alternate_date_used",
+                    f"Using NASA POWER values from {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
+                    requested_date=day_utc.isoformat(), date_used=query_day.isoformat(),
+                    parameters=[name for name, value in values.items() if value is not None])
+            _log(f"Using NASA POWER values from {query_day.isoformat()}", enabled=log_to_console,
+                 step="fetch_atmosphere", scene_basename=scene_basename)
+            break
+    else:
+        diagnostics.warn("no_atmosphere_match", "No external atmosphere values found from NASA POWER on any searched date.",
+            dates_attempted=[(day_utc + timedelta(days=delta)).isoformat() for delta in offsets])
+    values, used = _apply_atmosphere_defaults(values, fallbacks, diagnostics)
+    return AtmosphereEstimate(**values, source="nasa_power_daily_point_grid", sample_count=len(points),
+        date_used=date_used.isoformat(), date_requested=day_utc.isoformat(), defaults_used=used,
+        **diagnostics.metadata())
 
 
 # ---------------------------------------------------------------------------
@@ -229,8 +310,15 @@ class ModisWaterVaporEstimate:
     image_time_utc: Optional[str]
     abs_time_diff_hours: Optional[float]
     error: Optional[str] = None
+    aot550: Optional[float] = None
+    water_vapor: Optional[float] = None
+    ozone_cm_atm: Optional[float] = None
+    scene_datetime_utc: Optional[str] = None
+    warnings: List[Dict[str, Any]] = field(default_factory=list)
+    lookup_attempts: List[Dict[str, Any]] = field(default_factory=list)
+    defaults_used: Dict[str, float] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Optional[float] | Optional[str]]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert the MODIS estimate to a dictionary.
         Args:
             self: MODIS estimate instance.
@@ -543,6 +631,60 @@ def _visibility_from_aod(aod: float) -> float:
     return 5.0
 
 
+def _record_modis_lookup(diagnostics, candidate, details):
+    """Describe missing images, missing bands, and unusable regional samples."""
+    requested = details["bands_requested"]
+    if candidate is None:
+        diagnostics.lookup_attempts.append(dict(**details, status="no_images"))
+        diagnostics.warn("lookup_no_images",
+            f"MODIS lookup found no images in {details['collection']} for {details['parameter']} within +/-{details['hours_window']} hours of {details['scene_datetime_utc']}.", **details)
+        return
+    selected = candidate.get("selected_band") or (requested[0] if candidate.get("band_found") else None)
+    if "bands" in candidate:
+        for band in requested:
+            if band in candidate["bands"]:
+                break
+            diagnostics.warn("band_not_found", f"MODIS band {band} not found in {details['collection']}.",
+                **details, band=band)
+    if not candidate.get("band_found"):
+        status = "band_not_found"
+    elif candidate.get("raw_value") is None:
+        status = "no_valid_pixels"
+    elif candidate.get("abs_time_diff_hours") is None:
+        status = "missing_timestamp"
+    else:
+        status = "ok"
+    diagnostics.lookup_attempts.append(dict(**details, status=status, selected_band=selected,
+        raw_value=candidate.get("raw_value"), image_time_utc=candidate.get("image_time_utc"),
+        abs_time_diff_hours=candidate.get("abs_time_diff_hours")))
+    if status != "ok":
+        diagnostics.warn("lookup_missing_values",
+            f"MODIS lookup in {details['collection']} supplied no usable {details['parameter']} ({status}).", **details, reason=status)
+    if status == "ok" and selected in requested and requested.index(selected) > 0:
+        diagnostics.warn("alternate_band_used",
+            f"Using alternate MODIS band {selected} in {details['collection']} for {details['parameter']}.",
+            **details, selected_band=selected)
+
+
+def _record_modis_selection(diagnostics, best, terra, aqua, parameter, scene_datetime):
+    if best is aqua and _choose_best_candidate([terra]) is None:
+        diagnostics.warn("alternate_collection_used",
+            f"Using MODIS collection {best['collection']} for {parameter} because the Terra lookup was unavailable.",
+            parameter=parameter, collection=best["collection"])
+    timestamp = best.get("image_time_utc")
+    if timestamp:
+        acquired = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if acquired.tzinfo is None:
+            acquired = acquired.replace(tzinfo=timezone.utc)
+        used_date = acquired.astimezone(timezone.utc).date()
+        if used_date != scene_datetime.date():
+            diagnostics.warn("alternate_date_used",
+                f"Using MODIS {parameter} from {used_date.isoformat()} instead of acquisition date {scene_datetime.date().isoformat()}.",
+                parameter=parameter, collection=best["collection"], image_time_utc=timestamp,
+                requested_date=scene_datetime.date().isoformat(), date_used=used_date.isoformat(),
+                abs_time_diff_hours=best.get("abs_time_diff_hours"))
+
+
 @_logged_operation("fetch_atmosphere", inputs=(), outputs=(), worker_progress=True)
 def fetch_modis_water_vapor_for_bbox(
     *,
@@ -564,6 +706,7 @@ def fetch_modis_water_vapor_for_bbox(
     modis_scale_factor: float = 0.001,
     modtran_baseline_water_vapor: float = 2.92,
     reduce_scale_m: int = 1000,
+    fallback_values: dict[str, float] | None = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> ModisWaterVaporEstimate:
@@ -587,132 +730,77 @@ def fetch_modis_water_vapor_for_bbox(
         modis_scale_factor: Scale factor for MODIS water vapor values.
         modtran_baseline_water_vapor: Baseline water vapor used to derive the FLAASH preset.
         reduce_scale_m: Reduce-region scale in meters.
+        fallback_values: Explicit defaults for missing aot550, water_vapor (g/cm^2), and ozone_cm_atm (cm-atm). None leaves missing values null.
         log_to_console: Whether to emit console logs.
         scene_basename: Optional scene basename for log prefixes.
     Returns:
         MODIS atmosphere lookup result.
     """
 
-    _log(
-        "Querying MODIS atmosphere data",
-        enabled=log_to_console,
-        step="fetch_atmosphere",
-        scene_basename=scene_basename,
-    )
-    if ee is None:
-        ee = _init_ee_client(ee_project=ee_project, authenticate=authenticate, env_file=env_file)
+    fallbacks = _validate_fallback_values(fallback_values)
+    diagnostics = _AtmosphereDiagnostics("modis_gee", log_to_console, scene_basename)
+    _log("Querying MODIS atmosphere data", enabled=log_to_console,
+         step="fetch_atmosphere", scene_basename=scene_basename)
     if scene_datetime_utc.tzinfo is None:
         scene_datetime_utc = scene_datetime_utc.replace(tzinfo=timezone.utc)
     else:
         scene_datetime_utc = scene_datetime_utc.astimezone(timezone.utc)
-
+    if ee is None:
+        ee = diagnostics.call(_init_ee_client, ee_project=ee_project,
+            authenticate=authenticate, env_file=env_file, lookup={"operation": "initialize_earth_engine"})
     aod_band_candidates = aod_band_candidates or [
         "Aerosol_Optical_Depth_Land_Ocean_Mean",
         "Aerosol_Optical_Depth_Land_Ocean_Mean_Mean",
         "Aerosol_Optical_Depth_Land_Ocean",
     ]
+    bounds = dict(min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
 
-    centroid_lat = (min_lat + max_lat) / 2.0
-    terra = _fetch_collection_value(
-        ee,
-        terra_collection,
-        band_name,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        scene_dt_utc=scene_datetime_utc,
-        hours_window=hours_window,
-        reduce_scale_m=reduce_scale_m,
-    )
-    aqua = _fetch_collection_value(
-        ee,
-        aqua_collection,
-        band_name,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        scene_dt_utc=scene_datetime_utc,
-        hours_window=hours_window,
-        reduce_scale_m=reduce_scale_m,
-    )
+    def lookup(collection, parameter, bands, function):
+        requested = [bands] if isinstance(bands, str) else bands
+        details = dict(collection=collection, parameter=parameter, bands_requested=requested,
+            scene_datetime_utc=scene_datetime_utc.isoformat(), hours_window=hours_window, **bounds)
+        candidate = diagnostics.call(function, ee, collection, bands,
+            scene_dt_utc=scene_datetime_utc, hours_window=hours_window,
+            reduce_scale_m=reduce_scale_m, lookup=details, **bounds)
+        _record_modis_lookup(diagnostics, candidate, details)
+        return candidate
+
+    terra = lookup(terra_collection, "water_vapor", band_name, _fetch_collection_value)
+    aqua = lookup(aqua_collection, "water_vapor", band_name, _fetch_collection_value)
     best = _choose_best_candidate([terra, aqua])
     if best is None:
-        _log(
-            "No MODIS match found",
-            enabled=log_to_console,
-            step="fetch_atmosphere",
-            scene_basename=scene_basename,
-        )
-        return ModisWaterVaporEstimate(
-            status="no_modis_match",
-            selected_collection=None,
-            modis_raw_value=None,
-            modis_scaled_g_cm2=None,
-            water_vapor_preset=None,
-            aod_raw=None,
-            aod_scaled=None,
-            default_visibility=None,
-            modtran_atm=None,
-            image_time_utc=None,
-            abs_time_diff_hours=None,
-        )
+        diagnostics.warn("no_atmosphere_match", "No MODIS water-vapor match found in either collection within the configured time window.")
+        diagnostics.warn("lookup_skipped", "MODIS AOD lookup was not attempted because no water-vapor match was found.", parameter="aot550")
+        values, used = _apply_atmosphere_defaults(dict.fromkeys(_ATMOSPHERE_PARAMETERS), fallbacks, diagnostics)
+        return ModisWaterVaporEstimate(status="no_modis_match", selected_collection=None,
+            modis_raw_value=None, modis_scaled_g_cm2=None, water_vapor_preset=None,
+            aod_raw=None, aod_scaled=None, default_visibility=None, modtran_atm=None,
+            image_time_utc=None, abs_time_diff_hours=None, **values, defaults_used=used,
+            scene_datetime_utc=scene_datetime_utc.isoformat(), **diagnostics.metadata())
 
+    _record_modis_selection(diagnostics, best, terra, aqua, "water_vapor", scene_datetime_utc)
     raw_value = float(best["raw_value"])
     scaled = raw_value * modis_scale_factor
     preset = scaled / modtran_baseline_water_vapor
-
-    terra_aod = _fetch_first_available_band_value(
-        ee,
-        terra_collection,
-        aod_band_candidates,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        scene_dt_utc=scene_datetime_utc,
-        hours_window=hours_window,
-        reduce_scale_m=reduce_scale_m,
-    )
-    aqua_aod = _fetch_first_available_band_value(
-        ee,
-        aqua_collection,
-        aod_band_candidates,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        scene_dt_utc=scene_datetime_utc,
-        hours_window=hours_window,
-        reduce_scale_m=reduce_scale_m,
-    )
+    terra_aod = lookup(terra_collection, "aot550", aod_band_candidates, _fetch_first_available_band_value)
+    aqua_aod = lookup(aqua_collection, "aot550", aod_band_candidates, _fetch_first_available_band_value)
     best_aod = _choose_best_candidate([terra_aod, aqua_aod])
-    aod_raw = (
-        float(best_aod["raw_value"]) if best_aod and best_aod.get("raw_value") is not None else None
-    )
+    if best_aod is not None:
+        _record_modis_selection(diagnostics, best_aod, terra_aod, aqua_aod, "aot550", scene_datetime_utc)
+    aod_raw = float(best_aod["raw_value"]) if best_aod is not None else None
     aod_scaled = aod_raw * aod_scale_factor if aod_raw is not None else None
     default_visibility = _visibility_from_aod(aod_scaled) if aod_scaled is not None else None
-    modtran_atm = _choose_modtran_atm_by_lat_month(centroid_lat, scene_datetime_utc.month)
-    result = ModisWaterVaporEstimate(
-        status="ok",
-        selected_collection=best["collection"],
-        modis_raw_value=raw_value,
-        modis_scaled_g_cm2=scaled,
-        water_vapor_preset=preset,
-        aod_raw=aod_raw,
-        aod_scaled=aod_scaled,
-        default_visibility=default_visibility,
-        modtran_atm=modtran_atm,
-        image_time_utc=best["image_time_utc"],
-        abs_time_diff_hours=best["abs_time_diff_hours"],
-    )
-    _log(
-        "Fetched MODIS atmosphere values",
-        enabled=log_to_console,
-        step="fetch_atmosphere",
-        scene_basename=scene_basename,
-    )
+    modtran_atm = _choose_modtran_atm_by_lat_month((min_lat + max_lat) / 2.0, scene_datetime_utc.month)
+    values, used = _apply_atmosphere_defaults(
+        dict(aot550=aod_scaled, water_vapor=scaled, ozone_cm_atm=None), fallbacks, diagnostics)
+    result = ModisWaterVaporEstimate(status="ok", selected_collection=best["collection"],
+        modis_raw_value=raw_value, modis_scaled_g_cm2=scaled, water_vapor_preset=preset,
+        aod_raw=aod_raw, aod_scaled=aod_scaled, default_visibility=default_visibility,
+        modtran_atm=modtran_atm, image_time_utc=best["image_time_utc"],
+        abs_time_diff_hours=best["abs_time_diff_hours"], **values, defaults_used=used,
+        scene_datetime_utc=scene_datetime_utc.isoformat(), **diagnostics.metadata())
+    _log("Fetched MODIS atmosphere values", enabled=log_to_console,
+         step="fetch_atmosphere", scene_basename=scene_basename)
     return result
 
 
@@ -760,6 +848,13 @@ class FetchAtmosphere(FunctionPlugin):
         output_path = params.pop("output_path", None)
         if not output_path:
             raise ValueError("fetch_atmosphere requires param:output_path")
-        result = super().run(params=params, shared=shared)
+        try:
+            result = super().run(params=params, shared=shared)
+        except Exception as error:
+            diagnostics = getattr(error, "atmosphere_diagnostics", None)
+            if diagnostics is not None:
+                write_json(output_path, dict(status="error", source=source,
+                    error=f"{type(error).__name__}: {error}", **diagnostics))
+            raise
         write_json(output_path, result)
         return result

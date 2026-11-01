@@ -124,7 +124,7 @@ discover_inputs:
   # Sensor constants shared by all imported images.
   const:band_order: [BAND_C, BAND_B, BAND_G, BAND_Y, BAND_R, BAND_RE, BAND_N, BAND_N2]
   # Original 1 nm spectral responses; columns follow const:band_order.
-  # Select exactly one spectral parameter in atmospheric_correction; CSV format/sources: docs/cli/workflow.md.
+  # Select exactly one spectral parameter in py6s_atmospheric_correction; CSV format/sources: docs/cli/workflow.md.
   const:spectral_response_csv:
     WV02: path:./example.worldview2.response.csv
     WV03: path:./example.worldview3.response.csv
@@ -186,7 +186,7 @@ discover_inputs:
   var:solar_azimuth: var:metadata.IMAGE_1.meanSunAz
   var:solar_zenith: expr:90 - var.metadata.IMAGE_1.meanSunEl
   var:view_azimuth: var:metadata.IMAGE_1.meanSatAz
-  var:view_zenith: var:metadata.IMAGE_1.meanOffNadirViewAngle
+  var:view_zenith: expr:90 - var.metadata.IMAGE_1.meanSatEl
   var:line_of_sight_azimuth: var:metadata.IMAGE_1.meanSatAz
   var:line_of_sight_zenith: expr:180 - var.metadata.IMAGE_1.meanOffNadirViewAngle
   var:cloud_cover: expr:100 * var.metadata.IMAGE_1.cloudCover
@@ -266,6 +266,11 @@ fetch_atmosphere:
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
   # param:source: nasa_power # nasa_power | modis_gee; default: nasa_power.
+  # Missing retrieval values use these explicit defaults; warnings and substitutions are saved in the atmosphere JSON.
+  param:fallback_values:
+    aot550: 0.2
+    water_vapor: 2.5 # g/cm^2
+    ozone_cm_atm: 0.3 # cm-atm
   param:day_utc: var:day_utc  # ISO date; required for nasa_power.
   param:min_lon: var:min_lon  # number; required. WGS84 bbox west edge.
   param:min_lat: var:min_lat  # number; required. WGS84 bbox south edge.
@@ -297,12 +302,11 @@ fetch_atmosphere:
   # param:modtran_baseline_water_vapor: 2.92 # g/cm^2; default: 2.92. Denominator for FLAASH water-vapor preset.
   # param:reduce_scale_m: 1000 # meters; default: 1000. Earth Engine reduce-region scale.
 
-# Atmospheric correction. Geometry, band order and radiance calibration come from mapped JSON.
-atmospheric_correction:
-  plugin: atmospheric_correction
+# Py6S atmospheric correction. Geometry, band order and radiance calibration come from mapped JSON.
+py6s_atmospheric_correction:
+  plugin: py6s_atmospheric_correction
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_raster # Default: false. Uncomment to request this output explicitly.
-  # param:method: py6s # py6s | flaash; default: py6s. run: false retains the previous image path.
   core:requires: var:mul_companions # path list; default: []. Preserve access to external RPC metadata.
   param:input_raster: var:current_image_paths # path; required. Previous enabled image step.
   param:dem_file_path: const:dem_path # path | null; default: null. Or var:dem from fetch_dem.
@@ -312,12 +316,9 @@ atmospheric_correction:
   # core:calculate_overviews: true # true | false; default: false.
   param:atmosphere_profile: user # user | tropical | midlatitude_summer | midlatitude_winter | subarctic_summer | subarctic_winter; default: midlatitude_summer.
   # param:aerosol_profile: maritime # maritime | continental | urban | desert | biomass_burning | stratospheric; default: maritime.
-  param:aot550: >- # number; default: 0.2. Used when visibility_km is null.
-    expr:(var.atmosphere.aot550 != null ? var.atmosphere.aot550 : 0.2)
-  param:water_vapor: >- # g/cm^2; default: 2.5. User atmosphere profile.
-    expr:(var.atmosphere.water_vapor != null ? var.atmosphere.water_vapor : 2.5)
-  param:ozone: >- # cm-atm; default: 0.3. User atmosphere profile.
-    expr:(var.atmosphere.ozone_cm_atm != null ? var.atmosphere.ozone_cm_atm : 0.3)
+  param:aot550: var:atmosphere.aot550 # Retrieved value or explicitly recorded fallback; used when visibility_km is null.
+  param:water_vapor: var:atmosphere.water_vapor # g/cm^2; retrieved value or recorded fallback.
+  param:ozone: var:atmosphere.ozone_cm_atm # cm-atm; retrieved value or recorded fallback.
   param:output_scale_factor: 10000.0 # number | null; default: null. Reflectance scale applied before writing.
   # param:output_dtype: int16 # raster dtype; default: shared.output_dtype (Python: float32).
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: source nodata).
@@ -329,6 +330,7 @@ atmospheric_correction:
   # param:dem_ground_percentile: 50.0 # 0..100; default: 50.0. Sample DEM inside mapped geometry.
   param:footprint_geometry: var:geometry # GeoJSON geometry | null; default: null. Footprint used for DEM sampling.
   # Explicit connections from the imported scene and sensor constants to Py6S arguments.
+  # param:variables: null # object | null; default: null. Optional mapped values instead of direct sensor arguments.
   param:solar_zenith: var:solar_zenith # degrees; required unless supplied in an explicit variables object.
   param:solar_azimuth: var:solar_azimuth # degrees; required unless supplied in an explicit variables object.
   param:view_zenith: var:view_zenith # degrees; required unless supplied in an explicit variables object.
@@ -345,72 +347,84 @@ atmospheric_correction:
   # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
 
-  # FLAASH alternative: set method: flaash, use an ENVI output extension if needed,
-  # and remove Py6S-only options (including the direct solar/view/day/band arguments above).
-  # Keep input_raster, output_raster, DEM and footprint_geometry; explicitly supply this mapping:
-  # param:variables: # object | null; default: null. FLAASH requires this mapping unless params is supplied; Py6S also accepts it.
-  #   solar_azimuth: var:solar_azimuth
-  #   solar_zenith: var:solar_zenith
-  #   line_of_sight_azimuth: var:line_of_sight_azimuth
-  #   line_of_sight_zenith: var:line_of_sight_zenith
-  # param:envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe" # path | null; default: null; required without envi_engine.
-  # param:envi_engine: null # initialized ENVI engine | null; default: null. Live objects are Python-only.
-  # param:output_params_path: null # path | null; default: <output_raster>.flaash_params.txt. Set this param explicitly to include it in HPC downloads.
-  # param:convert_paths_for_windows: false # true | false; default: false. Convert WSL /mnt/<drive>/ paths for ENVI.
-  # param:delete_output_before_run: null # path | null; default: output_raster.
-  # param:modtran_atm: Mid-Latitude Summer # MODTRAN atmosphere; default: Mid-Latitude Summer.
-  # param:modtran_aer: Rural # MODTRAN aerosol; default: Rural. Maritime is another option.
-  # param:use_aerosol: AUTO # AUTO | Disabled | ENVI-supported mode; default: AUTO.
-  # param:default_visibility: null # kilometers | null; default: null. Example: 20.0.
-  # param:params: null # object | null; default: null. Complete ENVI task parameters instead of metadata-derived values.
-  # param:custom_params: # object | null; default: null. Override metadata-derived ENVI task settings below.
-  #   # Choices/task defaults below come from docs/flaash_params_info.txt; ENVI versions may differ.
-  #   # Calibration units describe wavelength units; INPUT_SCALE converts radiance to uW/(cm^2 sr nm).
-  #   # Native task defaults can be overridden by the metadata-derived values noted here.
-  #   INPUT_RASTER: {url: /path/to/input, factory: URLRaster} # enviraster; default: ENVI task/metadata-derived value.
-  #   SENSOR_TYPE: "UNKNOWN" # AVIRIS | HYDICE | HyMap | Hyperion | NVIS | Compass | Hycas | Mars | Multispectral | Unknown; default: Unknown.
-  #   INPUT_SCALE: 1.0 # float; default: ENVI task/metadata-derived value.
-  #   OUTPUT_SCALE: 10000.0 # float; default: ENVI task/metadata-derived value.
-  #   CALIBRATION_FILE: /path/to/calibration.txt # enviuri; default: ENVI task/metadata-derived value.
-  #   CALIBRATION_FORMAT: "ENVI" # ASCII | ENVI | Discrete | Filter | FLAASH; default: flaash.
-  #   CALIBRATION_UNITS: Microns # Nanometers | Microns; default: ENVI task/metadata-derived value.
-  #   LAT_LONG: [0.0, 0.0] # float; default: ENVI task/metadata-derived value.
-  #   SENSOR_ALTITUDE: 617.0 # float; default: ENVI task/metadata-derived value.
-  #   DATE_TIME: "2026-01-01T00:00:00Z" # envitime; default: ENVI task/metadata-derived value.
-  #   USE_ADJACENCY: Wavelength-dependent scattering kernel # Disabled | Legacy exponential scattering kernel | Wavelength-dependent scattering kernel; default: Wavelength-dependent scattering kernel.
-  #   DEFAULT_VISIBILITY: 20.0 # float; default: default_visibility (Python: null; ENVI: 40.0).
-  #   USE_POLISHING: Disabled # Disabled | Polish using reference materials | Polish using statistical detection of spectral artifacts; default: Disabled.
-  #   POLISHING_RESOLUTION: 100.0 # uint; default: ENVI task/metadata-derived value.
-  #   SENSOR_AUTOCALIBRATION: false # boolean; default: true.
-  #   SENSOR_CAL_PRECISION: 0.01 # float; default: 0.15000001.
-  #   SENSOR_CAL_FEATURE_LIST: [] # string; default: ENVI task/metadata-derived value.
-  #   GROUND_ELEVATION: 0.5 # float; default: sampled DEM percentile / 1000 (km).
-  #   SOLAR_AZIMUTH: 180.0 # float; default: explicit variables.solar_azimuth.
-  #   SOLAR_ZENITH: 30.0 # float; default: explicit variables.solar_zenith.
-  #   LOS_AZIMUTH: 90.0 # float; default: explicit variables.line_of_sight_azimuth.
-  #   LOS_ZENITH: 10.0 # float; default: explicit variables.line_of_sight_zenith.
-  #   IFOV: 0.002 # float; default: ENVI task/metadata-derived value.
-  #   MODTRAN_ATM: "Mid-Latitude Summer" # Tropical Atmosphere | Mid-Latitude Summer | Mid-Latitude Winter | Sub-Arctic Summer | Sub-Arctic Winter | 1976 US Standard Atmosphere; default: modtran_atm (Python: Mid-Latitude Summer; ENVI: Tropical Atmosphere).
-  #   MODTRAN_AER: "Maritime" # No Aerosol | High-Visibility Rural | Low-Visibility Rural | Maritime | Urban | Tropospheric; default: modtran_aer (Python: Rural; ENVI: High-Visibility Rural).
-  #   MODTRAN_RES: 5.0 # 15.0 | 5.0 | 1.0 | 0.1; default: 5.0 (ENVI: 15.0).
-  #   MODTRAN_MSCAT: "DISORT" # ISAACS | DISORT | Scaled ISAACS; default: DISORT (ENVI: Scaled ISAACS).
-  #   CO2_MIXING: 400.0 # float; default: ENVI task/metadata-derived value.
-  #   WATER_ABS_CHOICE: Automatic Selection # '1130' | '940' | '820' | Automatic Selection; default: Automatic Selection.
-  #   WATER_MULT: 1.0 # float; default: [0.0099999998, 1.0].
-  #   WATER_VAPOR_PRESET: 1.0 # float; default: 0.0.
-  #   USE_AEROSOL: "Disabled" # Disabled | Automatic Selection | Vegetation Based Retrieval | Water Based Retrieval | Wavelength Dependent Water Based Retrieval | Linear Regression Retrieval; default: use_aerosol (Python: AUTO; ENVI: Automatic Selection).
-  #   AEROSOL_SCALE_HT: 2.0 # float; default: 2.0.
-  #   AER_BAND_RATIO: 0.5 # float; default: 0.5.
-  #   AER_BAND_WAVL: 660 # float; default: ENVI task/metadata-derived value.
-  #   AER_REFERENCE_VALUE: 0.1 # float; default: 0.0.
-  #   AER_REFERENCE_PIXEL: [0, 0] # int; default: ENVI task/metadata-derived value.
-  #   AER_BANDLOW_WAVL: 425 # float; default: 425.
-  #   AER_BANDLOW_MAXREFL: 0.2 # float; default: ENVI task/metadata-derived value.
-  #   AER_BANDHIGH_WAVL: 660 # float; default: 660.
-  #   AER_BANDHIGH_MAXREFL: 0.2 # float; default: 0.2.
-  #   CLOUD_RASTER_URI: /path/to/cloud_mask.tif # enviuri; default: ENVI task/metadata-derived value.
-  #   WATER_RASTER_URI: /path/to/water_mask.tif # enviuri; default: ENVI task/metadata-derived value.
-  #   OUTPUT_RASTER_URI: /path/to/output.dat # enviuri; default: ENVI task/metadata-derived value.
+# FLAASH alternative: disable the Py6S step above before enabling this step.
+# flaash_atmospheric_correction:
+#   plugin: flaash_atmospheric_correction
+#   core:run: true # true | false; default: false. Enable this step.
+#   # core:require_outputs: param:output_raster # Default: false. Uncomment to request this output explicitly.
+#   core:requires: var:mul_companions # External RPC metadata for the source image.
+#   param:input_raster: var:current_image_paths # path; required. Previous enabled image step.
+#   param:dem_file_path: const:dem_path # path | null; default: null. DEM for ground elevation.
+#   param:footprint_geometry: var:geometry # GeoJSON geometry | null; default: null. WGS84 footprint for DEM sampling.
+#   var:suffix: expr:var.suffix & '_flaash'
+#   var:current_image_paths: expr:const.temp_dir & '/flaash_atmospheric_correction/' & var.basename & var.suffix & '.tif'
+#   param:output_raster: var:current_image_paths # path; required. Choose an ENVI extension if needed.
+#   # core:calculate_overviews: true # true | false; default: false.
+#   # param:dem_ground_percentile: 50.0 # 0..100; default: 50.0. DEM percentile for ground elevation.
+#   # param:log_to_console: false # true | false; default: false. Processing-function logs.
+#   param:variables: # object | null; default: null. Required unless params is supplied.
+#     solar_azimuth: var:solar_azimuth
+#     solar_zenith: var:solar_zenith
+#     line_of_sight_azimuth: var:line_of_sight_azimuth
+#     line_of_sight_zenith: var:line_of_sight_zenith
+#   param:envi_engine_path: "/mnt/c/Program Files/NV5/ENVI60/IDL90/bin/bin.x86_64/taskengine.exe" # path | null; default: null; required without envi_engine.
+#   # param:envi_engine: null # initialized ENVI engine | null; default: null. Live objects are Python-only.
+#   # param:output_params_path: null # path | null; default: <output_raster>.flaash_params.txt. Set this param explicitly to include it in HPC downloads.
+#   # param:convert_paths_for_windows: false # true | false; default: false. Convert WSL /mnt/<drive>/ paths for ENVI.
+#   # param:delete_output_before_run: null # path | null; default: output_raster.
+#   # param:modtran_atm: Mid-Latitude Summer # MODTRAN atmosphere; default: Mid-Latitude Summer.
+#   # param:modtran_aer: Rural # MODTRAN aerosol; default: Rural. Maritime is another option.
+#   # param:use_aerosol: AUTO # AUTO | Disabled | ENVI-supported mode; default: AUTO.
+#   # param:default_visibility: null # kilometers | null; default: null. Example: 20.0.
+#   # param:params: null # object | null; default: null. Complete ENVI task parameters instead of metadata-derived values.
+#   # param:custom_params: # object | null; default: null. Override metadata-derived ENVI task settings below.
+#   #   # Choices/task defaults below come from docs/flaash_params_info.txt; ENVI versions may differ.
+#   #   # Calibration units describe wavelength units; INPUT_SCALE converts radiance to uW/(cm^2 sr nm).
+#   #   # Native task defaults can be overridden by the metadata-derived values noted here.
+#   #   INPUT_RASTER: {url: /path/to/input, factory: URLRaster} # enviraster; default: ENVI task/metadata-derived value.
+#   #   SENSOR_TYPE: "UNKNOWN" # AVIRIS | HYDICE | HyMap | Hyperion | NVIS | Compass | Hycas | Mars | Multispectral | Unknown; default: Unknown.
+#   #   INPUT_SCALE: 1.0 # float; default: ENVI task/metadata-derived value.
+#   #   OUTPUT_SCALE: 10000.0 # float; default: ENVI task/metadata-derived value.
+#   #   CALIBRATION_FILE: /path/to/calibration.txt # enviuri; default: ENVI task/metadata-derived value.
+#   #   CALIBRATION_FORMAT: "ENVI" # ASCII | ENVI | Discrete | Filter | FLAASH; default: flaash.
+#   #   CALIBRATION_UNITS: Microns # Nanometers | Microns; default: ENVI task/metadata-derived value.
+#   #   LAT_LONG: [0.0, 0.0] # float; default: ENVI task/metadata-derived value.
+#   #   SENSOR_ALTITUDE: 617.0 # float; default: ENVI task/metadata-derived value.
+#   #   DATE_TIME: "2026-01-01T00:00:00Z" # envitime; default: ENVI task/metadata-derived value.
+#   #   USE_ADJACENCY: Wavelength-dependent scattering kernel # Disabled | Legacy exponential scattering kernel | Wavelength-dependent scattering kernel; default: Wavelength-dependent scattering kernel.
+#   #   DEFAULT_VISIBILITY: 20.0 # float; default: default_visibility (Python: null; ENVI: 40.0).
+#   #   USE_POLISHING: Disabled # Disabled | Polish using reference materials | Polish using statistical detection of spectral artifacts; default: Disabled.
+#   #   POLISHING_RESOLUTION: 100.0 # uint; default: ENVI task/metadata-derived value.
+#   #   SENSOR_AUTOCALIBRATION: false # boolean; default: true.
+#   #   SENSOR_CAL_PRECISION: 0.01 # float; default: 0.15000001.
+#   #   SENSOR_CAL_FEATURE_LIST: [] # string; default: ENVI task/metadata-derived value.
+#   #   GROUND_ELEVATION: 0.5 # float; default: sampled DEM percentile / 1000 (km).
+#   #   SOLAR_AZIMUTH: 180.0 # float; default: explicit variables.solar_azimuth.
+#   #   SOLAR_ZENITH: 30.0 # float; default: explicit variables.solar_zenith.
+#   #   LOS_AZIMUTH: 90.0 # float; default: explicit variables.line_of_sight_azimuth.
+#   #   LOS_ZENITH: 10.0 # float; default: explicit variables.line_of_sight_zenith.
+#   #   IFOV: 0.002 # float; default: ENVI task/metadata-derived value.
+#   #   MODTRAN_ATM: "Mid-Latitude Summer" # Tropical Atmosphere | Mid-Latitude Summer | Mid-Latitude Winter | Sub-Arctic Summer | Sub-Arctic Winter | 1976 US Standard Atmosphere; default: modtran_atm (Python: Mid-Latitude Summer; ENVI: Tropical Atmosphere).
+#   #   MODTRAN_AER: "Maritime" # No Aerosol | High-Visibility Rural | Low-Visibility Rural | Maritime | Urban | Tropospheric; default: modtran_aer (Python: Rural; ENVI: High-Visibility Rural).
+#   #   MODTRAN_RES: 5.0 # 15.0 | 5.0 | 1.0 | 0.1; default: 5.0 (ENVI: 15.0).
+#   #   MODTRAN_MSCAT: "DISORT" # ISAACS | DISORT | Scaled ISAACS; default: DISORT (ENVI: Scaled ISAACS).
+#   #   CO2_MIXING: 400.0 # float; default: ENVI task/metadata-derived value.
+#   #   WATER_ABS_CHOICE: Automatic Selection # '1130' | '940' | '820' | Automatic Selection; default: Automatic Selection.
+#   #   WATER_MULT: 1.0 # float; default: [0.0099999998, 1.0].
+#   #   WATER_VAPOR_PRESET: 1.0 # float; default: 0.0.
+#   #   USE_AEROSOL: "Disabled" # Disabled | Automatic Selection | Vegetation Based Retrieval | Water Based Retrieval | Wavelength Dependent Water Based Retrieval | Linear Regression Retrieval; default: use_aerosol (Python: AUTO; ENVI: Automatic Selection).
+#   #   AEROSOL_SCALE_HT: 2.0 # float; default: 2.0.
+#   #   AER_BAND_RATIO: 0.5 # float; default: 0.5.
+#   #   AER_BAND_WAVL: 660 # float; default: ENVI task/metadata-derived value.
+#   #   AER_REFERENCE_VALUE: 0.1 # float; default: 0.0.
+#   #   AER_REFERENCE_PIXEL: [0, 0] # int; default: ENVI task/metadata-derived value.
+#   #   AER_BANDLOW_WAVL: 425 # float; default: 425.
+#   #   AER_BANDLOW_MAXREFL: 0.2 # float; default: ENVI task/metadata-derived value.
+#   #   AER_BANDHIGH_WAVL: 660 # float; default: 660.
+#   #   AER_BANDHIGH_MAXREFL: 0.2 # float; default: 0.2.
+#   #   CLOUD_RASTER_URI: /path/to/cloud_mask.tif # enviuri; default: ENVI task/metadata-derived value.
+#   #   WATER_RASTER_URI: /path/to/water_mask.tif # enviuri; default: ENVI task/metadata-derived value.
+#   #   OUTPUT_RASTER_URI: /path/to/output.dat # enviuri; default: ENVI task/metadata-derived value.
 
 # Orthorectify multispectral imagery with the source RPC model and a DEM.
 orthorectify_mul:

@@ -67,14 +67,14 @@ pip install -e ".[all]"
 
 ## Py6S and 6S troubleshooting
 
-Install the 6S executable from conda-forge with `conda install conda-forge::sixs`. The `py6s` extra installs the Python interface. If the executable is not available on `PATH`, set `sixs_executable` in the atmospheric correction plugin and run `vhr atmospheric_correction --config recipe.yml`.
+Install the 6S executable from conda-forge with `conda install conda-forge::sixs`. The `py6s` extra installs the Python interface. If the executable is not available on `PATH`, set `sixs_executable` in the atmospheric correction plugin and run `vhr py6s_atmospheric_correction --config recipe.yml`.
 
 5. Verify the entry points if desired.
 
 ```bash
 vhr workflow --help
 vhr fetch_atmosphere --help
-vhr atmospheric_correction --help
+vhr py6s_atmospheric_correction --help
 vhr cloud_mask --help
 vhr pansharpen --help
 vhr alignment --help

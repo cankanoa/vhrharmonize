@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .concurrency import _make_dask_client, image_executor, ImageTrackingExecutor
+from .concurrency import _make_dask_client, image_executor, ImageTrackingExecutor, interruptible_pool
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
@@ -1781,9 +1781,9 @@ class Workflow:
                     client.cancel(list(futures))
         elif workers > 1 and len(pending) > 1 and pending[0].record is not None:
             # The progress UI has active threads; fork can inherit locked output streams.
-            with ProcessPoolExecutor(
+            with interruptible_pool(ProcessPoolExecutor(
                 max_workers=min(workers, len(pending)), mp_context=get_context("spawn")
-            ) as executor:
+            )) as executor:
                 futures = {
                     executor.submit(_execute, payload): node for node, payload in dispatches()
                 }
@@ -1920,9 +1920,9 @@ class Workflow:
                     client.cancel(list(running))
         elif workers > 1 and len(previous) > 1:
             # Start clean workers instead of inheriting the progress UI's locks.
-            with ProcessPoolExecutor(
+            with interruptible_pool(ProcessPoolExecutor(
                 max_workers=min(workers, len(previous)), mp_context=get_context("spawn")
-            ) as executor:
+            )) as executor:
                 try:
                     schedule(
                         lambda node, payload: executor.submit(_execute, payload),

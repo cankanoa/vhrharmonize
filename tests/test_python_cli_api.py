@@ -107,7 +107,7 @@ def test_signature_drives_cli_types_defaults_and_new_options(tmp_path, capsys):
             ],
         ),
         (
-            "atmospheric_correction",
+            "py6s_atmospheric_correction",
             "run_py6s",
             {"input_raster": "in.tif", "output_raster": "out.tif"},
             ["--input-raster", "in.tif", "--output-raster", "out.tif"],

@@ -56,8 +56,8 @@ _EXPORTS = {
         "gcp_refined_rpc_orthorectification",
     ),
     "pansharpen_image": (".plugins.pansharpen", "pansharpen_image"),
-    "run_flaash": (".plugins.atmospheric_correction", "run_flaash"),
-    "run_py6s": (".plugins.atmospheric_correction", "run_py6s"),
+    "run_flaash": (".plugins.flaash_atmospheric_correction", "run_flaash"),
+    "run_py6s": (".plugins.py6s_atmospheric_correction", "run_py6s"),
     "cloudmask_raster": (".plugins.cloud_mask", "cloudmask_raster"),
     "apply_binary_cloud_mask_to_image": (
         ".plugins.cloud_mask",
