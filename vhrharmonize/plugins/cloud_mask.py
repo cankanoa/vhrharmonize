@@ -24,7 +24,7 @@ class CloudMaskResult:
 
 
 @_logged_operation(
-    "cloud_mask", inputs=("input_image_path",), outputs=("output_raster_path", "output_mask_path"),
+    "cloud_mask", inputs=("input_image_path", "inference_image_path"), outputs=("output_raster_path", "output_mask_path"),
     worker_progress=True,
 )
 def cloudmask_raster(
@@ -35,6 +35,7 @@ def cloudmask_raster(
     red_band_index: int,
     green_band_index: int,
     nir_band_index: int,
+    inference_image_path: Optional[str] = None,
     cloud_classes: Sequence[int] = (1, 2, 3),
     buffer_pixels: int = 0,
     omnicloud_kwargs: Optional[dict] = None,
@@ -45,7 +46,14 @@ def cloudmask_raster(
     log_to_console: bool = False,
     scene_basename: str | None = None,
 ) -> CloudMaskResult:
-    """Create a cloud mask and apply it to a raster."""
+    """Create a cloud mask and apply it to ``input_image_path``.
+
+    ``inference_image_path`` optionally supplies a separate raster for prediction,
+    such as orthorectified MUL imagery when masking a pansharpened product. Band
+    indices and inference resolution apply to that raster. By default, prediction
+    uses ``input_image_path`` too. The saved mask stays on the inference grid and
+    is resampled with nearest neighbor onto the application grid when needed.
+    """
     if not output_raster_path:
         raise ValueError("output_raster_path must be an explicit output path")
     output_raster_path = str(output_raster_path)
@@ -59,7 +67,7 @@ def cloudmask_raster(
         scene_basename=scene_basename,
     )
     create_cloud_mask_with_omnicloudmask(
-        input_image_path,
+        inference_image_path if inference_image_path is not None else input_image_path,
         output_mask_path,
         red_band_index=red_band_index,
         green_band_index=green_band_index,
@@ -346,11 +354,17 @@ def apply_binary_cloud_mask_to_image(
     """
     with rasterio.open(input_image_path) as src, rasterio.open(cloud_mask_path) as mask_src:
         mask_reader = mask_src
-        if (mask_src.width, mask_src.height) != (src.width, src.height):
+        if (
+            (mask_src.width, mask_src.height) != (src.width, src.height)
+            or mask_src.transform != src.transform
+            or mask_src.crs != src.crs
+        ):
             if not allow_mask_reprojection:
                 raise ValueError(
-                    "Cloud mask shape "
-                    f"{(mask_src.height, mask_src.width)} does not match image shape {(src.height, src.width)}"
+                    "Cloud mask grid does not match image grid "
+                    f"(mask shape {(mask_src.height, mask_src.width)}, "
+                    f"image shape {(src.height, src.width)}); "
+                    "allow_mask_reprojection is False."
                 )
             if src.crs is None or mask_src.crs is None:
                 raise ValueError(
@@ -412,7 +426,7 @@ __all__ = [
 
 
 class CloudMask(FunctionPlugin):
-    input_dependency_paths = frozenset({"input_image_path"})
+    input_dependency_paths = frozenset({"input_image_path", "inference_image_path"})
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths

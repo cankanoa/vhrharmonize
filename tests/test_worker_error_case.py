@@ -64,6 +64,8 @@ def use_backend(monkeypatch, recipe, backend):
                             lambda *, max_workers, mp_context: ThreadPoolExecutor(max_workers=max_workers))
         return
 
+    handlers = {}
+
     class Client:
         def __init__(self, address):
             pass
@@ -73,6 +75,15 @@ def use_backend(monkeypatch, recipe, backend):
 
         def __exit__(self, *args):
             pass
+
+        def subscribe_topic(self, topic, handler):
+            handlers[topic] = handler
+
+        def unsubscribe_topic(self, topic):
+            handlers.pop(topic)
+
+        def nthreads(self):
+            return {"worker": 1}
 
         def submit(self, function, payload, **kwargs):
             future = Future()
@@ -90,6 +101,8 @@ def use_backend(monkeypatch, recipe, backend):
     distributed.Client = Client
     distributed.as_completed = lambda futures: iter(futures)
     monkeypatch.setitem(sys.modules, "dask.distributed", distributed)
+    monkeypatch.setattr("vhrharmonize.workflow.progress._DaskEvents.put",
+                        lambda self, event: handlers[self.topic]((0, event)))
     recipe["shared"].update({"core:concurrent_processing_backend": "dask",
                              "core:dask_scheduler": ["address", "tcp://scheduler:8786"]})
 
@@ -101,7 +114,8 @@ def test_remove_failed_images_and_rebuild_collections(monkeypatch, capsys, direc
     recipe, calls = pipeline(monkeypatch, direction=direction, policy=policy)
     use_backend(monkeypatch, recipe, backend)
     workflow = Workflow(recipe)
-    records = workflow.run()
+    snapshots = []
+    records = workflow.run(progress_callback=snapshots.append)
     assert [r["id"] for r in records] == ["good", "other"]
     expected = [name + " processed finished" for name in ("good", "other")]
     assert ("second", "bad processed") not in calls
@@ -117,6 +131,16 @@ def test_remove_failed_images_and_rebuild_collections(monkeypatch, capsys, direc
     assert "Step: first | Image ID: bad" in output
     assert "ValueError: cannot process bad" in output
     assert "Traceback (most recent call last)" in output
+    from prompt_toolkit.formatted_text import to_plain_text
+    from vhrharmonize.progress import render_progress, validate_progress_snapshot
+
+    final = validate_progress_snapshot(snapshots[-1])
+    assert final["total"]["status"] == "removed"
+    assert final["total"]["removed"] == 1
+    rows = {row["name"]: row for row in final["rows"]}
+    assert rows["first"]["status"] == rows["second"]["status"] == "removed"
+    assert rows["first"]["removed"] == rows["second"]["removed"] == 1
+    assert "removed 1" in to_plain_text(render_progress(final))
 
 
 @pytest.mark.parametrize("direction", ["horizontal", "vertical"])
@@ -158,7 +182,8 @@ def test_failures_at_different_steps_preserve_surviving_context(monkeypatch, dir
     recipe["second"]["plugin"] = "second_failure"
     workflow = Workflow(recipe)
     events = []
-    records = workflow.run(event_callback=events.append)
+    snapshots = []
+    records = workflow.run(event_callback=events.append, progress_callback=snapshots.append)
     assert [r["id"] for r in records] == ["good"]
     assert records[0]["context"]["var"]["value"] == "good processed finished"
     assert calls[-1] == ("gather", ["good processed finished"])
@@ -166,6 +191,11 @@ def test_failures_at_different_steps_preserve_surviving_context(monkeypatch, dir
     outcome = next(e for e in events if e["kind"] == "workflow")
     assert outcome["status"] == "completed"
     assert outcome["attributes"]["vhr.worker_error_count"] == 2
+    final = snapshots[-1]
+    assert final["total"]["removed"] == 2  # Count scenes, not affected steps.
+    rows = {row["name"]: row for row in final["rows"]}
+    assert rows["first"]["removed"] == 1
+    assert rows["second"]["removed"] == rows["gather"]["removed"] == 2
 
 
 def test_later_scene_import_does_not_reintroduce_removed_ids(monkeypatch):
@@ -233,10 +263,12 @@ def test_parent_output_validation_removes_image_and_progress_closes(monkeypatch,
     records = workflow.run(progress_callback=snapshots.append)
     assert [r["id"] for r in records] == ["good", "other"]
     assert "did not produce valid declared outputs" in workflow.errors[0]["error"]
-    assert snapshots[-1]["status"] == snapshots[-1]["total"]["status"] == "completed"
+    assert snapshots[-1]["status"] == "completed"
+    assert snapshots[-1]["total"]["status"] == "removed"
     assert snapshots[-1]["active"] == []
     rows = {row["name"]: row for row in snapshots[-1]["rows"]}
-    assert rows["first"]["status"] == "completed"
+    assert rows["first"]["status"] == "removed"
+    assert rows["first"]["removed"] == 1
     assert rows["first"]["done"] == rows["first"]["run"] == 2
     assert rows["first"]["unused"] == 1
     assert rows["gather"]["done"] == rows["gather"]["run"] == 2
@@ -320,7 +352,9 @@ def test_real_workers_preserve_traceback_and_omit_failed_metadata(tmp_path, caps
     assert "copy_file" in workflow.errors[0]["traceback"]
     assert "IsADirectoryError" in capsys.readouterr().out
     assert snapshots[-1]["active"] == []
-    assert snapshots[-1]["status"] == snapshots[-1]["total"]["status"] == "completed"
+    assert snapshots[-1]["status"] == "completed"
+    assert snapshots[-1]["total"]["status"] == "removed"
+    assert snapshots[-1]["total"]["removed"] == 1
 
 
 @pytest.mark.parametrize("policy,failed,exit_code", [

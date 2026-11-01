@@ -188,8 +188,16 @@ class TerminalProgressDisplay:
             rows = [row for index, row in enumerate(rows) if index in chosen]
         rows = [data["total"], *rows]
         counts = [[_count_cell(r, key) for _, key in COUNT_COLUMNS] for r in rows]
-        etas = [_duration(r["eta_seconds"]) if r["status"] in {"running", "waiting"}
-                else "done" if r["status"] == "completed" else r["status"] for r in rows]
+        def eta_label(row):
+            status = row["status"]
+            removed = row.get("removed", 0)
+            if status in {"running", "waiting"}:
+                return _duration(row["eta_seconds"])
+            if removed and status in {"removed", "restarted"}:
+                return ("restarted " if status == "restarted" else "") + f"removed {removed}"
+            return "done" if status == "completed" else status
+
+        etas = [eta_label(r) for r in rows]
         gap = 1 if width < 100 else 2
         number_widths = [max(len(name), *(len(c[i]) for c in counts)) for i, (name, _) in enumerate(COUNT_COLUMNS)]
         def active_label(row):

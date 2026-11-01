@@ -216,6 +216,8 @@ class WorkflowProgress:
         self.dask_topic = None
         self.snapshot_path = snapshot_path
         self.snapshot_status = "running"
+        self.removed_scenes = set()
+        self.removed_by_step = {}
         self.run_id = getattr(workflow, "_run_id", None) or uuid4().hex
         self.callbacks: list[ProgressCallback] = list(callbacks)
         self._last_snapshot = 0
@@ -350,7 +352,16 @@ class WorkflowProgress:
     def remove_record(self, index):
         """Exclude unfinished work for a removed scene, including later steps."""
         with self.state.lock:
+            scene = self.workflow.records[index]["id"]
+            self.removed_scenes.add(scene)
             for node in self.workflow.nodes:
+                if (node.needed and node.status in {"processing", "failed"}
+                        and node.record in {None, index}):
+                    name = node.step["name"]
+                    self.removed_by_step.setdefault(name, set()).add(scene)
+                    overview = self.overview_name(node.step)
+                    if overview in self.state.rows:
+                        self.removed_by_step.setdefault(overview, set()).add(scene)
                 if node.record != index or node.status not in {"processing", "failed"}:
                     continue
                 identity = self.identity(node)
@@ -448,6 +459,7 @@ class WorkflowProgress:
         self.workflow._emit_timing("task", name, started, duration, status=status, attributes=attributes)
 
     def _row_snapshot(self, row, *, total=False):
+        removed = len(self.removed_scenes if total else self.removed_by_step.get(row.name, ()))
         failed = self.state.failed if total else any(
             t.failed and not t.recovered for t in self.state.tasks.values() if t.step == row.name)
         eta = None
@@ -459,7 +471,8 @@ class WorkflowProgress:
             status = "waiting"
         elif row.done >= row.run:
             restarted = any(t.attempt > 0 for t in self.state.tasks.values() if total or t.step == row.name)
-            status = "restarted" if restarted else "completed" if row.run else "reused" if row.reused else "skipped"
+            status = ("restarted" if restarted else "removed" if removed else
+                      "completed" if row.run else "reused" if row.reused else "skipped")
             eta = 0.0
         else:
             status = "running"
@@ -473,7 +486,7 @@ class WorkflowProgress:
                 eta = None if work is None else work / max(row.workers, row.peak_active)
         counts = {key: getattr(row, key) for key in ("unused", "done", "run", "all", "reused")}
         return {
-            "name": row.name, **counts,
+            "name": row.name, **counts, "removed": removed,
             "percentages": {key: 100 * value / row.all if row.all else 0.0 for key, value in counts.items()},
             "fraction_done": row.done / row.run if row.run else None,
             "active": self.state.active(None if total else row.name),

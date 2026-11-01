@@ -148,6 +148,14 @@ identical consecutive messages. A sequence gap larger than the history length
 means earlier messages have expired. Reset the cursor when `run_id` changes.
 Older version 2 snapshots without this optional field still render normally.
 
+Step rows and `total` include `removed`, the number of distinct scenes removed
+after worker errors. Counts survive replanning and aggregate retries; the total
+counts each scene once, even when removal affects several steps. Completed rows
+with removals use status `removed`, displayed as `removed X`. A retried step keeps
+status `restarted` and displays `restarted removed X`. Steps that completed before
+a scene was removed keep their original completion status. Workflow-level status
+and exit-code behavior still follow the configured worker-error policy.
+
 Each row contains `unused`, `done`, `run`, `all`, `reused`, `percentages`,
 `fraction_done`, `active`, `pending`, `worker_progress`, `status`, and
 `eta_seconds`. **Done means completed during this run** and overlaps Run.

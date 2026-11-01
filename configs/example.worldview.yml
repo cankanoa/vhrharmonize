@@ -172,6 +172,8 @@ discover_inputs:
       path: literal:expr:$replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
     metadata:
       to_json: literal:expr:$replace(var.file_path, '.TIF', '.IMD') # IMD/JSON/GeoJSON/XML/YAML -> object; kept in memory.
+    pan_metadata:
+      to_json: literal:expr:$replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.IMD')
   var:mul: returned:file_path # Original multispectral image; retained for source metadata.
   var:metadata_path: expr:$replace(var.mul, '.TIF', '.IMD') # Source metadata file; enables an individual HPC mapping.
   var:current_image_paths: returned:file_path # Current image for this scene; updated by enabled image steps.
@@ -192,6 +194,7 @@ discover_inputs:
   var:line_of_sight_zenith: expr:180 - var.metadata.IMAGE_1.meanOffNadirViewAngle
   var:cloud_cover: expr:100 * var.metadata.IMAGE_1.cloudCover
   var:product_resolution: var:metadata.IMAGE_1.meanProductGSD
+  var:pan_product_resolution: var:pan_metadata.IMAGE_1.meanProductGSD
   var:dn_to_radiance_factors: expr:$map(const.band_order, function($band){$lookup(var.metadata, $band).absCalFactor / $lookup(var.metadata, $band).effectiveBandwidth * $lookup($lookup(const.calibration, var.sensor_id), $band)[0]})
   var:dn_to_radiance_offsets: expr:$map(const.band_order, function($band){$lookup($lookup(const.calibration, var.sensor_id), $band)[1]})
   var:min_lon: expr:$min([var.metadata.BAND_C.ULLon, var.metadata.BAND_C.URLon, var.metadata.BAND_C.LRLon, var.metadata.BAND_C.LLLon])
@@ -440,6 +443,7 @@ orthorectify_mul:
   var:suffix: expr:var.suffix & '_ortho'
   var:current_image_paths: expr:const.temp_dir & '/orthorectification/' & var.basename & var.suffix & '.tif'
   param:output_image_path: var:current_image_paths # path; required.
+  var:orthorectified_mul_path: var:current_image_paths # Retain MUL imagery for cloud-mask prediction after pansharpening.
   param:output_resolution: var:product_resolution # positive number | [x,y] | null; default: null/native. CRS units; use null for a geographic CRS.
   # param:output_epsg: 6635 # EPSG integer; default: shared.epsg; required without shared.epsg.
   # param:custom_nodata_value: -9999 # number | null; default: shared.custom_nodata_value (Python: null).
@@ -457,6 +461,7 @@ orthorectify_pan:
   core:requires: var:pan_companions # path list; default: []. External PAN RPC sidecars.
   param:input_image_path: var:pan # path; required.
   param:dem_image_path: const:dem_path # path; required. Or var:dem from fetch_dem.
+  param:output_resolution: var:pan_product_resolution # PAN IMD meanProductGSD; pansharpening inherits this grid.
   var:pan: expr:const.temp_dir & '/orthorectification/' & var.basename & '_pan_ortho.tif'
   param:output_image_path: var:pan # path; required.
   # All orthorectification options listed above also apply here.
@@ -476,13 +481,14 @@ pansharpen:
   # param:scene_basename: var:basename # string | null; default: null. Explicit scene label for logs.
   # core:calculate_overviews: true # true | false; default: false.
 
-# OmniCloudMask inference and application. Band indices here are one-based.
+# Predict clouds on orthorectified MUL imagery and mask the pansharpened raster. Band indices are one-based.
 cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
-  # core:swap_for_temp_file: [input_image_path, output_raster_path, output_mask_path] # File parameters to process through local UUID copies.
+  # core:swap_for_temp_file: [input_image_path, inference_image_path, output_raster_path, output_mask_path] # File parameters to process through local UUID copies.
   # core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:current_image_paths # path; required.
+  param:inference_image_path: var:orthorectified_mul_path # path | null; default: null. Predict on this raster; null uses input_image_path. Mask is applied to input_image_path.
   var:cloudmask: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'
   var:suffix: expr:var.suffix & '_cloudmasked'
   var:current_image_paths: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '.tif'

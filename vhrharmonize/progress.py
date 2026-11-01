@@ -18,6 +18,7 @@ class _RowExtras(TypedDict, total=False):
     children: list[ProgressRow]
     id: str
     unit: str
+    removed: int
 
 
 class ProgressRow(_RowExtras):
@@ -129,6 +130,10 @@ def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
                 number(row[key])
                 if not isinstance(row[key], int):
                     raise ValueError("Progress counts must be integers")
+            if "removed" in row:
+                number(row["removed"])
+                if not isinstance(row["removed"], int):
+                    raise ValueError("Progress removed count must be an integer")
             if "disabled" in row and not isinstance(row["disabled"], bool):
                 raise ValueError("Expected progress disabled boolean")
             for key in ("pending", "worker_progress"):

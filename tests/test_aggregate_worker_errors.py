@@ -98,10 +98,12 @@ def test_restart_rebuilds_inputs_and_keeps_native_reuse_optional(monkeypatch, tm
     assert snapshots[-1]["active"] == []
     assert snapshots[-1]["status"] == "completed"
     assert snapshots[-1]["total"]["status"] == "restarted"
+    assert snapshots[-1]["total"]["removed"] == 1
     row = next(row for row in snapshots[-1]["rows"] if row["name"] == "aggregate")
     assert row["status"] == "restarted"
+    assert row["removed"] == 1
     assert row["done"] == row["run"] == 2
-    assert "restarted" in to_plain_text(render_progress(validate_progress_snapshot(snapshots[-1])))
+    assert "restarted removed 1" in to_plain_text(render_progress(validate_progress_snapshot(snapshots[-1])))
     outcome = next(event for event in events if event["kind"] == "workflow")
     assert outcome["status"] == "completed"
     assert outcome["attributes"]["vhr.worker_error_count"] == 1
@@ -172,22 +174,33 @@ def test_repeated_restarts_keep_upstream_results_and_exception_identity(monkeypa
     adapter.function = lambda: aggregate
     workflow = Workflow(config, config_dir=tmp_path)
     events = []
-    assert [record["id"] for record in workflow.run(event_callback=events.append)] == ["good"]
+    snapshots = []
+    assert [record["id"] for record in workflow.run(event_callback=events.append, progress_callback=snapshots.append)] == ["good"]
     assert prepared == ["good", "bad", "other"]
     assert attempts == [("good", "bad", "other"), ("good", "other"), ("good",)]
     assert [(error["image_id"], error["error_type"]) for error in workflow.errors] == [("bad", "ValueError"), ("other", "ValueError")]
     assert (tmp_path / "good.out").read_text().splitlines() == ["good"]
     tasks = [event for event in events if event["kind"] == "task" and event["name"] == "aggregate"]
     assert len({event["attributes"]["vhr.task_id"] for event in tasks}) == 3
+    final = validate_progress_snapshot(snapshots[-1])
+    assert final["total"]["removed"] == 2
+    rows = {row["name"]: row for row in final["rows"]}
+    assert rows["prepare"]["removed"] == 0
+    assert rows["aggregate"]["removed"] == 2
+    assert "restarted removed 2" in to_plain_text(render_progress(final))
 
 
 def test_all_images_failing_terminates_without_an_empty_retry(monkeypatch, tmp_path):
     thread_pool(monkeypatch)
     config, attempts, _ = aggregate_recipe(monkeypatch, tmp_path, fail_names=("good", "bad", "other"))
     workflow = Workflow(config, config_dir=tmp_path)
-    assert workflow.run() == []
+    snapshots = []
+    assert workflow.run(progress_callback=snapshots.append) == []
     assert len(attempts) == 1
     assert len(workflow.errors) == 3
+    assert snapshots[-1]["total"]["status"] == "removed"
+    assert snapshots[-1]["total"]["removed"] == 3
+    assert next(row for row in snapshots[-1]["rows"] if row["name"] == "aggregate")["removed"] == 3
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])

@@ -58,18 +58,43 @@ def test_failed_copy_back_retains_completed_output_but_removes_input_copy(tmp_pa
 
     source, destination = tmp_path / "source.txt", tmp_path / "output.txt"
     source.write_text("original")
-    copy = temp_files.shutil.copy2
-    def copy2(before, after):
+    copy = temp_files.shutil.copyfile
+    def copy_file(before, after, **kwargs):
         if str(after) == str(destination):
             raise OSError("NAS unavailable")
-        return copy(before, after)
-    monkeypatch.setattr(temp_files.shutil, "copy2", copy2)
+        return copy(before, after, **kwargs)
+    monkeypatch.setattr(temp_files.shutil, "copyfile", copy_file)
     with pytest.raises(OSError, match="retained at"):
         with swap(tmp_path).apply({"inputs": str(source), "outputs": str(destination)}) as (local, _):
             Path(local["outputs"]).write_text("complete output")
     assert not Path(local["inputs"]).exists()
     assert Path(local["outputs"]).read_text() == "complete output"
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_copy_back_succeeds_when_destination_rejects_metadata_changes(
+    tmp_path, monkeypatch, existing_output,
+):
+    from vhrharmonize.workflow import temp_files
+
+    source, destination = tmp_path / "source.txt", tmp_path / "output.txt"
+    source.write_text("original input")
+    if existing_output:
+        destination.write_text("previous output")
+    copystat = temp_files.shutil.copystat
+
+    def restricted_copystat(before, after, **kwargs):
+        if Path(after) == destination:
+            raise PermissionError(1, "Operation not permitted")
+        return copystat(before, after, **kwargs)
+
+    monkeypatch.setattr(temp_files.shutil, "copystat", restricted_copystat)
+    with swap(tmp_path).apply({"inputs": str(source), "outputs": str(destination)}) as (local, _):
+        Path(local["outputs"]).write_text("complete output")
+    assert destination.read_text() == "complete output"
+    assert source.read_text() == "original input"
+    assert not list((tmp_path / "swap").iterdir())
 
 
 def test_missing_output_is_not_published_and_optional_files_are_unchanged(tmp_path):

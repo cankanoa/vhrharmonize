@@ -72,7 +72,8 @@ class TempFileSwap:
             for original, local in outputs:
                 try:
                     Path(original).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(local, original)
+                    # NAS destinations may allow writes but reject timestamp changes.
+                    shutil.copyfile(local, original)
                 except OSError as exc:
                     raise TempFileSwapError(f"Could not copy temporary output to {original}; retained at {local}") from exc
                 retained.remove(local.parent)
