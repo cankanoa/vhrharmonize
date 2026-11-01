@@ -32,6 +32,7 @@ from .config import validate_config, steps, shared_settings
 from .registry import load_plugin
 from .paths import DIRECTORY_FEATURES, directory_values, directory_bindings
 from .metadata import FinalMetadataWriter
+from .temp_files import TempFileSwap, TempFileSwapError
 from .context_io import ContextFiles, LOAD_CONTROLS, SAVE_CONTROLS
 from .values import (
     Pending,
@@ -146,6 +147,11 @@ def _target_features(plugin, step):
     features["output_target_paths"] = frozenset()
     require_outputs = step.get("require_outputs", False)
     outputs = file_parameter_names(features, "output")
+    unknown_swaps = set(step.get("swap_for_temp_file", [])) - (
+        file_parameter_names(features, "input") | outputs
+    )
+    if unknown_swaps:
+        raise ValueError(f"{step['name']} core:swap_for_temp_file must select declared file parameters: {sorted(unknown_swaps)}")
     if isinstance(require_outputs, bool):
         selected = outputs if require_outputs else set()
     else:
@@ -234,11 +240,18 @@ class ConstantBindings:
 
 def _execute(payload, *, executor=None):
     plugin_name, params, shared, *reporters = payload
+    swap = reporters.pop(0) if reporters and isinstance(reporters[0], TempFileSwap) else None
     plugin = load_plugin(plugin_name)
     if executor is not None:
         params = {**params, plugin.executor_parameter: executor}
+    def invoke():
+        if swap is None:
+            return plugin.run(params=params, shared=shared)
+        with swap.apply(params) as (local_params, originals):
+            return remap_paths(plugin.run(params=local_params, shared=shared), originals)
+
     if not reporters:
-        return plugin.run(params=params, shared=shared)
+        return invoke()
     from vhrharmonize.io.progress import capture_messages, progress_context
 
     reporter = reporters[0]
@@ -246,7 +259,7 @@ def _execute(payload, *, executor=None):
     reporter.event("start", started_ns=started_ns)
     try:
         with progress_context(reporter, reporter.message), capture_messages():
-            result = plugin.run(params=params, shared=shared)
+            result = invoke()
     except BaseException as exc:
         reporter.event("failed", duration=monotonic() - started, started_ns=started_ns, error_type=type(exc).__name__)
         raise
@@ -1333,7 +1346,18 @@ class Workflow:
         if node.step["plugin"] is not None:
             plugin = load_plugin(node.step["plugin"])
             params = {**params, **plugin.runtime_parameters(tile_threads=self.controls["tile_threads"])}
-        return node.step["plugin"], params, shared
+        payload = node.step["plugin"], params, shared
+        if node.step.get("swap_for_temp_file"):
+            if self.controls["swap_temp_dir"] is None:
+                raise ValueError("core:swap_temp_dir must be set in shared when core:swap_for_temp_file is used")
+            directory = path(self._resolve(self.controls["swap_temp_dir"], context,
+                records=self._record_values(node) if node.record is None else None), base_dir=node.base_dir)
+            if not isinstance(directory, str):
+                raise ValueError("core:swap_temp_dir must resolve to one folder")
+            payload += (TempFileSwap(tuple(node.step["swap_for_temp_file"]), directory,
+                        frozenset(file_parameter_names(node.file_features, "input")), frozenset(output_names),
+                        tuple(node.requirements)),)
+        return payload
 
     def _finish(self, node, returned):
         _, updates, _, _ = self._evaluate(
@@ -1665,7 +1689,7 @@ class Workflow:
             if self._progress:
                 self._progress.fail(node, exc)
             policy = self.controls["worker_error_case"]
-            if policy == "error":
+            if policy == "error" or isinstance(exc, TempFileSwapError):
                 raise
             if node.record is not None:
                 self._remove_record(node.record)

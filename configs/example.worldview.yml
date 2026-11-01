@@ -94,6 +94,7 @@ shared:
   # Any function setting can be shared here; a matching per-step setting overrides it.
 
   core:cleanup_dirs: [const:temp_dir] # Cleanup roots; default: []. Requested outputs and sources stay protected.
+  core:swap_temp_dir: const:temp_dir # Local folder for core:swap_for_temp_file copies; default: null.
   # Workflow-wide constants. They remain available to every scene and aggregate.
   const:red_band_index: 5 # one-based integer; recipe setting. WorldView red.
   const:green_band_index: 3 # one-based integer; recipe setting. WorldView green.
@@ -306,6 +307,7 @@ fetch_atmosphere:
 py6s_atmospheric_correction:
   plugin: py6s_atmospheric_correction
   core:run: true # true | false; default: false. Enable this step.
+  # core:swap_for_temp_file: [input_raster] # File parameters to process through local UUID copies.
   # core:require_outputs: param:output_raster # Default: false. Uncomment to request this output explicitly.
   core:requires: var:mul_companions # path list; default: []. Preserve access to external RPC metadata.
   param:input_raster: var:current_image_paths # path; required. Previous enabled image step.
@@ -478,6 +480,7 @@ pansharpen:
 cloud_mask:
   plugin: cloud_mask
   core:run: true # true | false; default: false. Enable this step.
+  # core:swap_for_temp_file: [input_image_path, output_raster_path, output_mask_path] # File parameters to process through local UUID copies.
   # core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
   param:input_image_path: var:current_image_paths # path; required.
   var:cloudmask: expr:var.relative_output_dir & '/' & var.basename & var.suffix & '_cloudmask.tif'

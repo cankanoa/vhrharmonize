@@ -34,6 +34,7 @@ STEP_CONTROLS = {
     "requires",
     "processing_direction",
     "satisfies",
+    "swap_for_temp_file",
     *CONTEXT_CONTROLS,
 }
 DEFAULT_SHARED = {
@@ -56,6 +57,7 @@ DEFAULT_SHARED = {
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
     "worker_error_case": "error",
+    "swap_temp_dir": None,
 }
 SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler"}
 BOOLEANS = {
@@ -109,6 +111,16 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError(f"{key} must be a boolean")
             if name in CONTEXT_CONTROLS:
                 validate_operation(value, name)
+            if name == "swap_for_temp_file" and (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) or not item.isidentifier() for item in value)
+                or len(set(value)) != len(value)
+            ):
+                raise ValueError("core:swap_for_temp_file must be a list of unique parameter names")
+            if name == "swap_temp_dir" and value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError("core:swap_temp_dir must be a folder path/reference or null")
             if name == "cleanup_dirs":
                 selected = [value] if isinstance(value, str) else value
                 if not isinstance(selected, list) or any(

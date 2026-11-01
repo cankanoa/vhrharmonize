@@ -118,6 +118,48 @@ Expressions use [JSONata](https://docs.jsonata.org/overview.html), evaluated by 
 
 Assignments resolve in declaration order and may update an existing value, such as `var:suffix: expr:var.suffix & '_aligned'`. Function parameters see preceding assignments. `returned:` assignments and their dependents take effect after the function returns. A function parameter cannot depend on that same invocation's result; place its input reference before the return assignment. An explicitly passed scope snapshot contains the values at its parameter’s position in the settings. Missing fields or undefined expression results raise `ValueError`; JSON null remains `None`. JSONata's `??` supplies a default for a missing field.
 
+### Temporary file swaps
+
+To process selected files on a local disk while keeping their configured paths
+for planning, reuse and downstream steps, set an explicit shared swap folder:
+
+```yaml
+shared:
+  plugin: shared
+  core:run: true
+  core:swap_temp_dir: const:temp_dir
+```
+
+`const:temp_dir` is an ordinary YAML-defined constant; core does not guess its
+location. The swap folder can instead be a literal path or another reference.
+On a processing step, select bare file parameter names:
+
+```yaml
+core:swap_for_temp_file: [input_image_path, output_raster_path, output_mask_path]
+```
+
+Each distinct file gets `<swap_temp_dir>/<random_uuid>/<original_filename>`.
+Inputs are copied before the plugin runs. Companion files explicitly listed in
+`core:requires`, in the same source directory and sharing the input filename's
+stem, are copied beside it in that UUID folder. This preserves external RPC
+metadata without discovering or copying unrelated files.
+Selected outputs are written locally
+and copied to their original destinations only after the plugin succeeds.
+Existing outputs are copied in as well, preserving native reuse behavior.
+Returned paths are restored to their original values. Successful copies are
+removed automatically, independently of the normal intermediate cleanup flags.
+If copying an output back fails, its UUID folder is retained and the error
+identifies the recovery path. Plugin failures clean up their temporary copies.
+Preparation, copy-back and cleanup failures raise `TempFileSwapError` and stop
+the workflow even with `core:worker_error_case: remove_and_restart` or
+`remove_instence`; transfer failures never silently remove an image or fall
+back to its original path.
+
+This is opt-in and accepts declared file parameters containing a path, a list
+of paths, or null. It does not expand globs, copy directories, or discover
+undeclared companion files. No plugin arguments or output naming expressions need
+to change. The `file_source` plugin remains available for explicit file copies.
+
 ### Nested objects
 
 Tables stay ordinary nested YAML; only the setting itself needs a prefix:
