@@ -208,3 +208,15 @@ expressions, so the saved JSON describes the actual inputs passed to Py6S.
 Request/authentication errors remain errors: the adapter saves their lookup
 diagnostics with `status: error`, then re-raises the original exception. They
 do not trigger an automatic provider switch or default substitution.
+
+Pansharpening uses `core:tile_threads` for both Orthority worker pools and GDAL
+warping/compression within each image. `core:concurrent_processing` still controls
+concurrent images. Native Orthority overviews are disabled; request overviews
+through `core:calculate_overviews` on the desired output step.
+
+NASA POWER retrieval preserves each parameter from the closest date that supplies
+it, searching the configured alternate days for parameters still missing before
+using configured defaults. The saved JSON's `parameter_dates` records the source
+date for each parameter (`null` for a default or missing value). The legacy
+`date_used` field records the first date that supplied any value; consult
+`parameter_dates` when values come from multiple dates.

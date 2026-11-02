@@ -5,7 +5,6 @@ from typing import Optional, Sequence
 import numpy as np
 import rasterio
 from affine import Affine
-from osgeo import gdal
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
 
@@ -235,60 +234,21 @@ def create_cloud_mask_with_omnicloudmask(
             and src.crs.is_projected
             and (src.res[0] < inference_resolution_m or src.res[1] < inference_resolution_m)
         ):
-            # Match SpectralMatch sizing logic and GDAL buffered read behavior.
-
-            def _read_band_gdal_buffer(
-                path: str, band_index: int, out_h: int, out_w: int
-            ) -> np.ndarray:
-                """Read and resample a band with GDAL buffering.
-                Args:
-                    path: Input raster path.
-                    band_index: 1-based band index.
-                    out_h: Output height in pixels.
-                    out_w: Output width in pixels.
-                Returns:
-                    Buffered float32 band array.
-                """
-                ds = gdal.Open(path, gdal.GA_ReadOnly)
-                if ds is None:
-                    raise RuntimeError(f"Unable to open raster with GDAL: {path}")
-                band = ds.GetRasterBand(int(band_index))
-                raw = band.ReadRaster(
-                    xoff=0,
-                    yoff=0,
-                    xsize=band.XSize,
-                    ysize=band.YSize,
-                    buf_xsize=out_w,
-                    buf_ysize=out_h,
-                    buf_type=gdal.GDT_Float32,
+            # Resample the complete source extent and use the exact same grid
+            # for the mask. Fractional source pixels must not shift its footprint.
+            out_w = max(1, int(np.ceil(src.width * src.res[0] / inference_resolution_m)))
+            out_h = max(1, int(np.ceil(src.height * src.res[1] / inference_resolution_m)))
+            nodata = src.nodata if src.nodata is not None else 0.0
+            with WarpedVRT(
+                src,
+                transform=src.transform * Affine.scale(src.width / out_w, src.height / out_h),
+                width=out_w, height=out_h, dtype="float32", nodata=nodata,
+                resampling=Resampling.average,
+            ) as inference:
+                rgbn = inference.read([red_band_index, green_band_index, nir_band_index])
+                rgbn_profile.update(
+                    height=out_h, width=out_w, transform=inference.transform,
                 )
-                if raw is None:
-                    raise RuntimeError(f"GDAL ReadRaster failed for band {band_index}: {path}")
-                arr = np.frombuffer(raw, dtype=np.float32).reshape(out_h, out_w)
-                return arr
-
-            left, top = src.transform.c, src.transform.f
-            right = left + src.width * src.transform.a
-            bottom = top + src.height * src.transform.e
-            out_w = max(1, int((right - left) / float(inference_resolution_m)))
-            out_h = max(1, int((top - bottom) / float(inference_resolution_m)))
-            red = _read_band_gdal_buffer(input_image_path, red_band_index, out_h, out_w)
-            green = _read_band_gdal_buffer(input_image_path, green_band_index, out_h, out_w)
-            nir = _read_band_gdal_buffer(input_image_path, nir_band_index, out_h, out_w)
-            rgbn = np.stack([red, green, nir], axis=0)
-            out_gt = (
-                left,
-                float(inference_resolution_m),
-                0.0,
-                top,
-                0.0,
-                -float(inference_resolution_m),
-            )
-            rgbn_profile.update(
-                height=out_h,
-                width=out_w,
-                transform=Affine.from_gdal(*out_gt),
-            )
             _log(
                 f"Downsampling inference input to {inference_resolution_m:.3f} map units",
                 enabled=log_to_console,

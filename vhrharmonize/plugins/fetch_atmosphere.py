@@ -101,6 +101,7 @@ class AtmosphereEstimate:
     warnings: List[Dict[str, Any]] = field(default_factory=list)
     lookup_attempts: List[Dict[str, Any]] = field(default_factory=list)
     defaults_used: Dict[str, float] = field(default_factory=dict)
+    parameter_dates: Dict[str, Optional[str]] = field(default_factory=dict)
 
 
 def _linspace(min_v: float, max_v: float, n: int) -> List[float]:
@@ -248,11 +249,12 @@ def fetch_power_atmosphere_for_bbox(
 
     values = dict.fromkeys(_ATMOSPHERE_PARAMETERS)
     date_used = day_utc
+    parameter_dates = dict.fromkeys(_ATMOSPHERE_PARAMETERS)
     for delta in offsets:
         query_day = day_utc + timedelta(days=delta)
         if delta:
             diagnostics.warn("alternate_date_lookup",
-                f"No atmospheric values found on earlier NASA POWER lookup dates; trying {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
+                f"NASA POWER values still missing for {', '.join(name for name, value in values.items() if value is None)}; trying {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
                 requested_date=day_utc.isoformat(), query_date=query_day.isoformat(), offset_days=delta)
         samples = {name: [] for name in _ATMOSPHERE_PARAMETERS}
         for lon, lat in progress(points, desc=f"Fetching atmosphere for {query_day}", unit="points"):
@@ -269,23 +271,30 @@ def fetch_power_atmosphere_for_bbox(
             for name in _ATMOSPHERE_PARAMETERS:
                 if item[name] is not None:
                     samples[name].append(float(item[name]))
-        if any(samples.values()):
-            values = {name: sum(items) / len(items) if items else None for name, items in samples.items()}
-            date_used = query_day
+        selected = [name for name in _ATMOSPHERE_PARAMETERS
+                    if values[name] is None and samples[name]]
+        if selected:
+            if not any(parameter_dates.values()):
+                date_used = query_day
+            for name in selected:
+                values[name] = sum(samples[name]) / len(samples[name])
+                parameter_dates[name] = query_day.isoformat()
             if delta:
                 diagnostics.warn("alternate_date_used",
-                    f"Using NASA POWER values from {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
+                    f"Using NASA POWER {', '.join(selected)} from {query_day.isoformat()} instead of acquisition date {day_utc.isoformat()}.",
                     requested_date=day_utc.isoformat(), date_used=query_day.isoformat(),
-                    parameters=[name for name, value in values.items() if value is not None])
-            _log(f"Using NASA POWER values from {query_day.isoformat()}", enabled=log_to_console,
-                 step="fetch_atmosphere", scene_basename=scene_basename)
+                    parameters=selected)
+            _log(f"Using NASA POWER {', '.join(selected)} from {query_day.isoformat()}",
+                 enabled=log_to_console, step="fetch_atmosphere", scene_basename=scene_basename)
+        if all(value is not None for value in values.values()):
             break
-    else:
+    if not any(parameter_dates.values()):
         diagnostics.warn("no_atmosphere_match", "No external atmosphere values found from NASA POWER on any searched date.",
             dates_attempted=[(day_utc + timedelta(days=delta)).isoformat() for delta in offsets])
     values, used = _apply_atmosphere_defaults(values, fallbacks, diagnostics)
     return AtmosphereEstimate(**values, source="nasa_power_daily_point_grid", sample_count=len(points),
-        date_used=date_used.isoformat(), date_requested=day_utc.isoformat(), defaults_used=used,
+        date_used=date_used.isoformat(), date_requested=day_utc.isoformat(),
+        parameter_dates=parameter_dates, defaults_used=used,
         **diagnostics.metadata())
 
 

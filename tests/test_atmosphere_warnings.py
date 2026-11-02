@@ -68,7 +68,7 @@ def test_nasa_missing_fields_warn_for_every_point_and_only_default_missing_field
         return dict(aot550=None if len(calls) == 1 else .1, water_vapor=1., ozone_cm_atm=None)
     monkeypatch.setattr(fetch, '_fetch_power_daily_point', lookup)
     result = fetch.fetch_power_atmosphere_for_bbox(day_utc=DAY, grid_size=2, **BBOX,
-        fallback_values=DEFAULTS, log_to_console=True)
+        fallback_values=DEFAULTS, log_to_console=True, search_days=0)
     assert len(calls) == 4 and {call[0] for call in calls} == {DAY}
     missing = codes(result, 'lookup_missing_values')
     assert len(missing) == 4 and missing[0]['parameters'] == ['aot550', 'ozone_cm_atm']
@@ -279,3 +279,29 @@ def test_earth_engine_initialization_failure_is_also_saved(tmp_path, monkeypatch
     saved = json.loads(path.read_text())
     assert saved['lookup_attempts'][0]['operation'] == 'initialize_earth_engine'
     assert saved['warnings'][0]['code'] == 'lookup_error'
+
+
+def test_nasa_searches_missing_parameters_without_replacing_acquisition_day_values(monkeypatch):
+    calls = []
+    def lookup(day, *args, **kwargs):
+        calls.append((day - DAY).days)
+        if day == DAY:
+            return dict(aot550=None, water_vapor=1., ozone_cm_atm=.28)
+        return dict(aot550=.1, water_vapor=99., ozone_cm_atm=.99)
+    result = nasa(monkeypatch, lookup, fallback_values=DEFAULTS)
+    assert calls == [0, 1]
+    assert (result.aot550, result.water_vapor, result.ozone_cm_atm) == (.1, 1., .28)
+    assert not result.defaults_used
+    assert result.parameter_dates == dict(aot550=(DAY + timedelta(days=1)).isoformat(),
+                                         water_vapor=DAY.isoformat(), ozone_cm_atm=DAY.isoformat())
+    assert codes(result, 'alternate_date_used')[0]['parameters'] == ['aot550']
+    assert result.date_used == DAY.isoformat()
+
+
+def test_nasa_defaults_only_after_searching_all_dates_for_missing_parameters(monkeypatch):
+    result = nasa(monkeypatch, lambda *a, **kw: dict(aot550=None, water_vapor=1., ozone_cm_atm=.28),
+                  fallback_values=DEFAULTS)
+    assert len(result.lookup_attempts) == 3
+    assert result.defaults_used == {'aot550': .2}
+    assert result.parameter_dates['aot550'] is None
+    assert result.parameter_dates['water_vapor'] == DAY.isoformat()

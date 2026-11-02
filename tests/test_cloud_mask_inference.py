@@ -118,3 +118,32 @@ def test_planner_rebuilds_inference_input_even_when_pansharpened_image_is_reused
         np.testing.assert_array_equal(ds.read(), expected)
     with rasterio.open(pan) as ds:
         assert (ds.read() == 42).all()
+
+
+def test_downsampling_preserves_full_extent_and_averages_only_valid_pixels(monkeypatch, tmp_path):
+    from vhrharmonize.plugins.cloud_mask import create_cloud_mask_with_omnicloudmask
+    image, mask = tmp_path / 'mul.tif', tmp_path / 'mask.tif'
+    data = np.full((3, 13, 17), 100, dtype='int16')
+    data[:, :4, :4] = -9999
+    data[:, 4:8, 4:8] = 300
+    transform = from_origin(123, 456, 1.43, 1.43)
+    with rasterio.open(image, 'w', driver='GTiff', width=17, height=13,
+                       count=3, dtype='int16', crs='EPSG:6635',
+                       transform=transform, nodata=-9999) as dst:
+        dst.write(data)
+
+    def predict(array, **kwargs):
+        assert array.shape == (3, 2, 3)
+        # NoData is excluded from averaging rather than mixed into reflectance.
+        assert (array >= 100).all() and (array <= 300).all()
+        assert ((array > 100) & (array < 300)).any()
+        return np.zeros((2, 3), dtype='uint8')
+
+    monkeypatch.setitem(sys.modules, 'omnicloudmask', SimpleNamespace(predict_from_array=predict))
+    create_cloud_mask_with_omnicloudmask(
+        str(image), str(mask), red_band_index=1, green_band_index=2,
+        nir_band_index=3, inference_resolution_m=10,
+    )
+    with rasterio.open(image) as source, rasterio.open(mask) as output:
+        assert output.bounds == source.bounds
+        assert output.transform == transform * rasterio.Affine.scale(17 / 3, 13 / 2)

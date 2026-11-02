@@ -341,7 +341,11 @@ def test_pansharpen(monkeypatch, tmp_path: Path) -> None:
             with rasterio.open(pan) as src:
                 self._profiles = {"pan_to_pan": src.profile.copy()}
 
-        def process(self, output_image_path, write_mask=False, overwrite=True):
+        def _get_stats(self, *args):
+            pass
+
+        def process(self, output_image_path, write_mask=False, overwrite=True, build_ovw=True):
+            assert build_ovw is False
             with rasterio.open(self.mul) as src:
                 profile = src.profile.copy()
                 data = src.read()

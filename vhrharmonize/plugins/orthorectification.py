@@ -1,6 +1,5 @@
 import json
 import os
-from tempfile import NamedTemporaryFile
 from osgeo import gdal
 from typing import Any, Optional, Tuple, Union
 
@@ -94,7 +93,7 @@ def gcp_refined_rpc_orthorectification(
 
     # Ensure the output directory exists
     output_image_dir = os.path.dirname(output_image_path)
-    if not os.path.exists(output_image_dir):
+    if output_image_dir and not os.path.exists(output_image_dir):
         os.makedirs(output_image_dir)
 
     camera = None
@@ -106,41 +105,16 @@ def gcp_refined_rpc_orthorectification(
         cameras.refine(gcp_geojson_file_path)
         camera = cameras.get(input_image_path)._rpc  # Extract the refined RPC camera
 
-    # Step 2: Create a temporary file for the modified input image
-    with NamedTemporaryFile(delete=False, suffix=".tif") as temp_file:
-        temp_image_path = temp_file.name
-
-    # Build TranslateOptions to remove all metadata, optionally applying data type
-    translate_kwargs = {
-        "format": "GTiff",
-        "metadataOptions": ["REMOVE_ALL"],  # Remove all metadata
-    }
-    if output_dtype is not None:
-        gdal_dtype = gdal.GetDataTypeByName(output_dtype)
-        if gdal_dtype is None:
-            raise ValueError(f"Unsupported GDAL data type: {output_dtype}")
-        translate_kwargs["outputType"] = gdal_dtype
-
-    callback = gdal_progress("Preparing orthorectification raster")
-    if callback is not None:
-        translate_kwargs["callback"] = callback
-    translate_options = gdal.TranslateOptions(**translate_kwargs)
-    gdal.Translate(temp_image_path, input_image_path, options=translate_options)
-
-    # Step 3: Update the temporary file
-    temp_dataset = gdal.Open(temp_image_path, gdal.GA_Update)
+    # Open the original read-only. Only RPC refinement needs a virtual view;
+    # its metadata changes belong to the VRT, never to the source raster.
     input_dataset = gdal.Open(input_image_path, gdal.GA_ReadOnly)
-
-    # Apply NoData value if specified (unconditionally)
-    if custom_nodata_value is not None:
-        for band_idx in range(1, temp_dataset.RasterCount + 1):
-            band = temp_dataset.GetRasterBand(band_idx)
-            band.SetNoDataValue(custom_nodata_value)
-
-    # If RPC refinement was done, add refined RPC metadata
+    if input_dataset is None:
+        raise RuntimeError(f"Unable to open orthorectification input: {input_image_path}")
+    warp_source = input_dataset
     if camera is not None:
-        # Clear any existing RPC metadata and add the refined RPC metadata
-        temp_dataset.SetMetadata(None, "RPC")
+        warp_source = gdal.Translate("", input_dataset, format="VRT")
+        if warp_source is None:
+            raise RuntimeError("Unable to create the RPC refinement VRT.")
         refined_rpc_metadata = {
             "LINE_OFF": str(camera.line_off),
             "LINE_SCALE": str(camera.line_scale),
@@ -157,19 +131,22 @@ def gcp_refined_rpc_orthorectification(
             "SAMP_NUM_COEFF": " ".join(map(str, camera.samp_num_coeff)),
             "SAMP_DEN_COEFF": " ".join(map(str, camera.samp_den_coeff)),
         }
-        temp_dataset.SetMetadata(refined_rpc_metadata, "RPC")
-    else:
-        # Preserve source RPC metadata for standard RPC orthorectification path.
-        if input_dataset is not None:
-            source_rpc_metadata = input_dataset.GetMetadata("RPC")
-            if source_rpc_metadata:
-                temp_dataset.SetMetadata(source_rpc_metadata, "RPC")
+        warp_source.SetMetadata(refined_rpc_metadata, "RPC")
 
-    # Close the dataset to write changes
-    temp_dataset = None
-    input_dataset = None
+    warp_kwargs = {}
+    if output_dtype is not None:
+        gdal_dtype = gdal.GetDataTypeByName(output_dtype)
+        if not gdal_dtype:
+            raise ValueError(f"Unsupported GDAL data type: {output_dtype}")
+        warp_kwargs["outputType"] = gdal_dtype
+    if custom_nodata_value is not None:
+        warp_kwargs["dstNodata"] = custom_nodata_value
+        # Preserve declared source NoData; use the configured sentinel only
+        # when the input has no declared NoData (as with some raw PAN products).
+        if all(input_dataset.GetRasterBand(i).GetNoDataValue() is None
+               for i in range(1, input_dataset.RasterCount + 1)):
+            warp_kwargs["srcNodata"] = custom_nodata_value
 
-    # Step 4: Perform orthorectification using GDAL Warp
     warp_options = gdal.WarpOptions(
         format="GTiff",
         dstSRS=f"EPSG:{output_epsg}",
@@ -179,11 +156,12 @@ def gcp_refined_rpc_orthorectification(
         transformerOptions=[f"RPC_DEM={dem_image_path}"],
         resampleAlg="bilinear",
         copyMetadata=True,  # Copies metadata excluding original RPC
+        **warp_kwargs,
         **({"callback": callback} if (callback := gdal_progress("Orthorectifying raster")) else {}),
     )
     warp_result = gdal.Warp(
         destNameOrDestDS=output_image_path,
-        srcDSOrSrcDSTab=temp_image_path,
+        srcDSOrSrcDSTab=warp_source,
         options=warp_options,
     )
     if warp_result is None:
@@ -193,19 +171,8 @@ def gcp_refined_rpc_orthorectification(
         )
     warp_result = None
 
-    # Step 3: Update the temporary file
-    dataset = gdal.Open(output_image_path, gdal.GA_Update)
-    if dataset is None:
-        raise RuntimeError(f"Orthorectification output was not created: {output_image_path}")
-
-    # Apply NoData value if specified (unconditionally)
-    if custom_nodata_value is not None:
-        for band_idx in range(1, dataset.RasterCount + 1):
-            band = dataset.GetRasterBand(band_idx)
-            band.SetNoDataValue(custom_nodata_value)
-
-    # Clean up the temporary file
-    os.remove(temp_image_path)
+    warp_source = None
+    input_dataset = None
     _log(
         f"Wrote output {os.path.basename(output_image_path)}",
         enabled=log_to_console,

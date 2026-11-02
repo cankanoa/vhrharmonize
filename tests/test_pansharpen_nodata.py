@@ -97,3 +97,76 @@ def test_unrepresentable_custom_nodata_is_rejected_before_creating_output(tmp_pa
     with pytest.raises(ValueError, match="not representable"):
         module.pansharpen_image(str(ms), str(pan), str(output), custom_nodata_value=nodata)
     assert not output.exists()
+
+
+@pytest.mark.parametrize('threads,nodata', [(1, None), (2, -9999)])
+def test_pansharpen_honors_thread_control_and_never_builds_native_overviews(
+    tmp_path, monkeypatch, inputs, threads, nodata,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    import orthority.pan_sharp as upstream
+    module = importlib.import_module('vhrharmonize.plugins.pansharpen')
+    ms, pan = write_inputs(tmp_path, inputs, 'int16')
+    counts, gdal_threads, vrt_threads = [], [], []
+    original_env, original_vrt = rasterio.Env, upstream.WarpedVRT
+    original_cpu_count = upstream.os.cpu_count
+
+    class RecordedPool(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, **kwargs):
+            counts.append(max_workers)
+            super().__init__(max_workers=max_workers, **kwargs)
+
+    def env(*args, **kwargs):
+        if 'GDAL_NUM_THREADS' in kwargs:
+            gdal_threads.append(kwargs['GDAL_NUM_THREADS'])
+        return original_env(*args, **kwargs)
+
+    def vrt(*args, **kwargs):
+        vrt_threads.append(kwargs.get('num_threads'))
+        return original_vrt(*args, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Only core may build overviews')
+
+    monkeypatch.setattr(upstream, 'ThreadPoolExecutor', RecordedPool)
+    monkeypatch.setattr(upstream, 'WarpedVRT', vrt)
+    monkeypatch.setattr(rasterio, 'Env', env)
+    monkeypatch.setattr(upstream.common, 'build_overviews', forbidden)
+    module.pansharpen_image(str(ms), str(pan), str(tmp_path / 'out.tif'),
+                           custom_nodata_value=nodata, tile_threads=threads)
+    assert counts == [threads, threads]
+    assert gdal_threads and set(gdal_threads) == {threads}
+    assert vrt_threads and set(vrt_threads) == {threads}
+    assert upstream.os.cpu_count is original_cpu_count
+    assert module.Pansharpen().runtime_parameters(tile_threads=threads) == {'tile_threads': threads}
+
+
+def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, inputs):
+    from vhrharmonize.workflow.engine import Workflow
+    from workflow_helpers import import_settings
+    ms, pan = write_inputs(tmp_path, inputs, 'int16')
+    output = tmp_path / 'pansharpened.tif'
+    workflow = Workflow({
+        'shared': {
+            'plugin': 'shared', 'core:run': True, 'core:tile_threads': 2,
+            'core:concurrent_processing': 1, 'core:show_progress': False,
+            'core:validity_check_grid_size': 1,
+            'core:log_to_console': False, 'core:save_statistics_path': None,
+            'core:load_statistics_path': None, 'param:window_scales': [2, 4],
+        },
+        'files': import_settings(ms, tmp_path),
+        'pansharpen': {
+            'plugin': 'pansharpen', 'core:run': True,
+            'core:require_outputs': 'param:output_image_path',
+            'core:calculate_overviews': True,
+            'param:input_low_resolution_path': 'var:mul',
+            'param:input_high_resolution_path': str(pan),
+            'param:output_image_path': str(output),
+            'param:custom_nodata_value': -9999,
+        },
+    })
+    workflow.run()
+    with rasterio.open(output) as result:
+        assert result.overviews(1) == [2, 4]
+        assert result.nodata == -9999
+        assert result.res == (.5, .5)
