@@ -123,10 +123,10 @@ def test_invalid_concurrency_declarations_fail_clearly(declaration):
         plugin.runtime_parameters(tile_threads=1)
 
 
-def test_spectralmatch_and_seamline_adapters_disable_internal_pools():
+def test_spectralmatch_adapters_disable_internal_pools():
     from vhrharmonize.workflow.registry import load_plugin
     from vhrharmonize.parameters import function_parameters
-    names = "joint_coregistration global_regression local_block_adjustment align_rasters create_footprints postprocess_footprints markov_triangles mask_rasters merge_rasters band_math create_cloud_mask_with_omnicloudmask process_raster_values_to_vector_polygons compute_overviews seamline_metadata".split()
+    names = "joint_coregistration global_regression local_block_adjustment align_rasters create_footprints postprocess_footprints markov_triangles mask_rasters merge_rasters band_math create_cloud_mask_with_omnicloudmask process_raster_values_to_vector_polygons compute_overviews".split()
     for name in names:
         plugin = load_plugin(name)
         values = plugin.runtime_parameters(tile_threads=3)
@@ -134,10 +134,7 @@ def test_spectralmatch_and_seamline_adapters_disable_internal_pools():
         assert values['concurrent_processing_backend'] == 'process_pool'
         assert values['dask_scheduler'] is None
         assert set(values) <= set(function_parameters(plugin.function()))
-        if name == 'seamline_metadata':
-            assert values['concurrent_processing'] == 1
-        else:
-            assert values['image_threads'] is None
+        assert values['image_threads'] is None
 
 
 def test_undeclared_function_keeps_its_own_concurrency_arguments(tmp_path, monkeypatch):

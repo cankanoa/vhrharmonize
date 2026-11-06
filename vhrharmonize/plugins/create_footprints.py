@@ -25,9 +25,18 @@ create_footprints.__parameter_sources__ = (_upstream,)
 
 class CreateFootprints(SpectralMatchPlugin):
     executor_parameter = "executor"
+    record_filter_parameters = frozenset({"outline_path", "image_rank_function"})
+
+    def retained_record_indices(self, params, returned):
+        """Keep workflow scene order while omitting images with no output coverage."""
+        import geopandas as gpd
+
+        retained = set(gpd.read_file(returned, layer=params.get("output_layer"))["image_path"])
+        return [index for index, path in enumerate(params["input_images"]) if path in retained]
+
     target = "vhrharmonize.plugins.create_footprints:create_footprints"
     scope = "aggregate"
-    input_dependency_paths = frozenset(["input_images", "metadata_csv"])
+    input_dependency_paths = frozenset(["input_images", "metadata_csv", "outline_path"])
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths
@@ -40,4 +49,5 @@ class CreateFootprints(SpectralMatchPlugin):
     output_temporary_cleanup_paths = output_path_resolution_paths
     output_hpc_staging_paths = output_path_resolution_paths
     output_hpc_download_paths = output_path_resolution_paths
-    output_reuse_paths = output_path_resolution_paths
+    # SpectralMatch checks streaming completeness before applying native resume.
+    output_reuse_paths = frozenset()

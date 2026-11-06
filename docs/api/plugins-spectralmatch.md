@@ -31,6 +31,56 @@ merge_rasters(input_images=matched, output_image_path="mosaic.tif")
 
 ## create_footprints
 
+SpectralMatch owns both raw footprint creation and optional initial mosaic coverage.
+The VHR adapter passes its native arguments through. `footprint_source: metadata`
+uses the GeoJSON `geometry` in each ordered `metadata_records` entry without
+reading raster pixels; the default `calculate_bounds` polygonizes validity masks.
+Scalar metadata attributes are copied into the output. `metadata_crs` defaults to
+EPSG:4326, and `epsg` optionally selects the output CRS.
+
+Set `outline_path` (and optionally `outline_layer`) to define the goal area.
+`image_rank_function` and `image_rank_descending` assign overlapping area to the
+preferred image. `extrude_distance` buffers each owned area in projected CRS units,
+clipped to its source footprint, preserving overlap for matching and movement.
+Buffering also extends beyond the outline. Empty owners are omitted, and VHR
+retains only the corresponding workflow scenes in their original order.
+
+The WorldView recipe invokes `plugin: create_footprints` twice: the early
+`standardize_mosaic_coverage` call uses IMD geometry, ranking and a margin, then
+`mask_mosaic_coverage` crops the rasters once before coregistration and matching.
+The later `create_footprints` call retains raw valid-data footprints for final
+seamlines. Raw defaults preserve overlaps; outline/ranking/buffering recomputes
+coverage as a group and replaces the polygon file only after success.
+
+The initial coverage recipe favors the lowest combined raw `view_zenith` and
+`solar_zenith`, with equal weight per degree and `image_rank_descending: true`.
+**Higher expression values rank on top by default.** Negating the raw sum makes
+the lowest combined angle produce the highest ranking value:
+
+```text
+-({var:view_zenith} + {var:solar_zenith})
+```
+
+There is no standardization or cloud-cover term in this recipe. Both angles at
+zero produce the best score, zero; larger combined angles produce lower scores.
+The expression also works for a single image or constant-angle sets.
+
+SpectralMatch's summary placeholders remain available for other ranking
+expressions. `{var:field}` selects an image attribute. `{summary:field}` selects an
+image-level summary across the candidates entering that ranking call, after
+outline clipping and before ownership assignment. Supported summaries are
+`mean`, `std`, `variance`, `min`, `max`, `median`, `sum`, `count`, and `range`.
+`std` and `variance` use the population (`ddof=0`); each image counts equally.
+Referenced summary fields must contain finite numeric values for every candidate.
+The native `image_rank_function` default remains `None`, and the later raw
+footprint call leaves it unset.
+
+The former VHR `seamline_metadata` plugin has been removed. Use `input_images`,
+`output_polygons`, `output_layer`, and `eight_connected` in place of its
+`image_paths`, `output_path`, `layer`, and `calculate_bounds_eight_connected`.
+Native raw-output reuse uses `resume_from_outputs`, replacing `reuse`. Install
+the updated SpectralMatch checkout in both local and HPC environments.
+
 ::: vhrharmonize.plugins.create_footprints
 
 ## postprocess_footprints

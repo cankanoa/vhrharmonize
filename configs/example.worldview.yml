@@ -578,11 +578,44 @@ setup_spectralmatch:
   # output_dtype, window_scales, concurrent_processing_backend, window_size,
   # image_threads, io_threads, tile_threads, cache, dask_scheduler, calculation_dtype,
   # save_as_cog, debug_logs and resume_from_outputs. Commented shared settings use function defaults.
-  # epsg is offered too, but SpectralMatch uses the input raster/vector CRS instead.
+  # create_footprints accepts epsg to project raster or supplied metadata footprints.
   # core: controls stay with VHR; core:calculate_overviews uses shared.param:window_scales.
   # Only state needed by later steps belongs in const:; ordinary settings remain param: values.
-  const:spectralmatch.polygon_layer: seamline_metadata # Shared by footprint generation and seamline selection.
+  const:spectralmatch.polygon_layer: footprints # Shared by footprint generation and seamline selection.
   const:spectralmatch.image_field_name: image # Shared identifier field for footprint generation, seamlines and masking; image_path is reserved by SpectralMatch.
+
+# Allocate initial coverage from IMD corners before coregistration and matching.
+# This invokes the same plugin as the later valid-data footprint step.
+standardize_mosaic_coverage:
+  plugin: create_footprints
+  core:run: true # true | false; default: false. Reduce the area processed by SpectralMatch.
+  param:input_images: collect:current_image_paths # path list; required. Ordered across imported records.
+  param:metadata_records: collect:footprint_metadata # JSON object list | null; default: null. One record per input image; required for metadata geometry.
+  const:coverage_mask: expr:const.temp_dir & '/standardize_mosaic_coverage/coverage.gpkg'
+  param:output_polygons: const:coverage_mask # path; required. Ranked coverage; images with no retained area leave the subsequent workflow.
+  param:output_layer: const:spectralmatch.polygon_layer # layer name; default: footprints.
+  param:image_field_name: const:spectralmatch.image_field_name # field name; default: image. Current image stems match the coverage-cropped output suffixes.
+  # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". CRS of mapped IMD geometry.
+  param:footprint_source: metadata # calculate_bounds | metadata; default: calculate_bounds. Uses mapped IMD corners without reading raster pixels.
+  # param:outline_path: null # path | null; default: null. Goal-area polygon file; null uses all image coverage. Example: path:/path/to/outline.gpkg.
+  # param:outline_layer: null # layer name | null; default: null. First layer when null; requires outline_path.
+  # Higher scores rank on top. Negate the combined raw angles so the lowest sum wins.
+  # Each degree counts equally for both angles; a combined angle of zero gives the best score (zero).
+  param:image_rank_function: "-({var:view_zenith} + {var:solar_zenith})" # expression | null; default: null. Explicit initial-coverage preference; native ranking remains unset by default.
+  param:image_rank_descending: true # true | false; default: true. Larger expression scores own overlaps.
+  param:extrude_distance: 500 # nonnegative number; default: 0.0. Overlap/movement margin in projected CRS units, clipped to each source footprint; also extends beyond the outline.
+  # Coverage options recompute ownership together even when resume_from_outputs requests reuse.
+
+# Crop once; all following steps consume these smaller rasters and retain their masks.
+mask_mosaic_coverage:
+  plugin: mask_rasters
+  core:run: true # true | false; default: false. Apply initial coverage before joint coregistration.
+  param:input_images: collect:current_image_paths # path list; required. Only scenes retained by standardize_mosaic_coverage.
+  var:suffix: expr:var.suffix & '_coverage'
+  var:current_image_paths: expr:const.temp_dir & '/mask_mosaic_coverage/' & var.basename & var.suffix & '.tif'
+  param:output_images: collect:current_image_paths # path list; required. Cropped rasters used by subsequent processing.
+  core:requires: const:coverage_mask
+  param:vector_mask: [include, const:coverage_mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null.
 
 # Jointly register overlapping imagery before matching.
 joint_coregistration:
@@ -634,23 +667,31 @@ joint_coregistration:
   # param:debug_logs: false # true | false; default: false. bool, default False; print processing details. Inherits shared.param:debug_logs when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". 'no' (default) overwrites, 'yes' reuses existing outputs, or 'validate' reuses outputs that pass validation. Inherits shared.param:resume_from_outputs when set.
 
-# Build footprints after radiometric matching so image identifiers match Markov inputs exactly.
-seamline_metadata:
-  plugin: seamline_metadata
-  core:run: true # true | false; default: false. Enable this step.
-  # core:require_outputs: param:output_path # Default: false. Uncomment to request this output explicitly.
-  param:image_paths: collect:current_image_paths # path list; required. Ordered across imported records.
-  param:metadata_records: collect:footprint_metadata # JSON object list; required. Same length as image_paths.
-  const:footprints: expr:const.temp_dir & '/seamline_metadata/seamline_metadata.gpkg'
-  param:output_path: const:footprints # path; required. Input to seamlines; set core:require_outputs to param:output_path to retain it as a deliverable.
-  param:layer: const:spectralmatch.polygon_layer # layer name; default: seamline_metadata. Previous example: footprints.
-  param:image_field_name: const:spectralmatch.image_field_name # field name; default: image_path. Use the same field in SpectralMatch seamline options.
-  # param:footprint_source: calculate_bounds # calculate_bounds | metadata; default: calculate_bounds. metadata uses mapped IMD corners; calculate_bounds polygonizes valid raster data.
-  # param:calculate_bounds_eight_connected: true # true | false; default: true. 8-connected versus 4-connected polygonization.
-  # param:epsg: 6635 # EPSG integer; default: shared.epsg (Python: 4326).
-  # param:scene_total: null # integer | null; default: null -> input count for progress logs.
-  param:reuse: true # true | false; default: false. Native record-level reuse for the footprint table.
-  # param:log_to_console: false # true | false; default: false. Processing-function logs; core logging is separate.
+# Build actual valid-data footprints after initial masking/coregistration for final seamlines.
+create_footprints:
+  plugin: create_footprints
+  core:run: true # true | false; default: false. Calculate actual footprints for final seamlines.
+  # core:require_outputs: param:output_polygons # Default: false. Uncomment to retain the polygon file.
+  param:input_images: collect:current_image_paths # path list; required. Current rasters in scene order.
+  param:metadata_records: collect:footprint_metadata # JSON object list | null; default: null. Flat attributes and optional GeoJSON geometry in image order; mutually exclusive with metadata_csv.
+  const:footprints: expr:const.temp_dir & '/create_footprints/footprints.gpkg'
+  param:output_polygons: const:footprints # path; required. Input to the final seamline solver.
+  param:output_layer: const:spectralmatch.polygon_layer # layer name; default: "footprints".
+  param:image_field_name: const:spectralmatch.image_field_name # field name; default: "image". Current raster stem; later suffixes retain this identifier.
+  # param:metadata_csv: null # path | null; default: null. Alternative CSV attributes; omit metadata_records when using this.
+  # param:metadata_image_field_name: "image" # field name; default: "image". CSV join field.
+  # param:footprint_source: "calculate_bounds" # calculate_bounds | metadata; default: "calculate_bounds". Raster validity masks; metadata uses supplied geometry without raster reads.
+  # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". CRS of metadata geometry.
+  # param:epsg: null # EPSG integer | null; default: null. Inherits shared.param:epsg; null preserves the source CRS.
+  # param:band: 1 # positive integer; default: 1. Raster band whose GDAL validity mask is polygonized.
+  # param:eight_connected: true # true | false; default: true. Preserve diagonally connected valid pixels.
+  # param:outline_path: null # path | null; default: null. Optional goal-area polygon; omitted here to retain raw valid-data footprints.
+  # param:outline_layer: null # layer name | null; default: null. First layer when null.
+  # param:image_rank_function: null # expression | null; default: null. Preserve overlapping footprints for the final seamline solver.
+  # param:image_rank_descending: true # true | false; default: true. Larger scores own overlaps when ranking is enabled.
+  # param:extrude_distance: 0.0 # nonnegative number; default: 0.0. Buffer owned coverage in projected output CRS units, clipped to source footprints.
+  # param:debug_logs: false # true | false; default: false. Inherits shared.param:debug_logs when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Native raw-footprint reuse; coverage options always recompute.
 
 # Global radiometric regression between overlapping images.
 global_regression:
@@ -773,8 +814,9 @@ postprocess_footprints:
 #   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Recompute outputs with "no", reuse existing outputs with "yes", or validate existing outputs before reusing them with "validate"; default is "no". Inherits shared.param:resume_from_outputs when set.
 
 # # Weighted seamlines. Ranking requires attributes in the input polygons.
-# # Rank expressions use {field} placeholders, arithmetic, comparisons, and/or/not,
-# # parentheses and abs/min/max/round/sqrt/log/log10/exp/sin/cos/tan. Example: -{cloud_cover} - {solar_zenith}.
+# # Rank expressions use {var:field} and {summary:field} placeholders, arithmetic,
+# # comparisons, and/or/not, parentheses and abs/min/max/round/sqrt/log/log10/exp/sin/cos/tan.
+# # Summaries: mean/std/variance/min/max/median/sum/count/range; std and variance use the population.
 # weighted_seamline:
 #   plugin: weighted_seamline
 #   core:run: true # true | false; default: false. Enable this step.
@@ -783,7 +825,7 @@ postprocess_footprints:
 #   param:input_polygons: const:footprints # path; required. Footprints and attributes from the selected footprint step.
 #   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path for the ranked seamline polygons.
 #   param:input_images: collect:current_image_paths # list | null; default: null. Optional raster folder, glob or paths for substring footprint matching; None infers names from the polygon field.
-#   param:rank_function: "-{cloud_cover} - {solar_zenith}" # string; required. Ranking expression, required when steps includes weighted_seamline. Example: "-{cloud_cover} - {solar_zenith}".
+#   param:rank_function: "-({var:view_zenith} + {var:solar_zenith})" # string; required. Higher scores rank on top; the lowest combined raw angle wins.
 #   param:image_field_name: const:spectralmatch.image_field_name # string; default: "image". Explicit setup value.
 #   param:input_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Defaults to "footprints" for explicit polygons; None selects their first layer; either inherits the preceding footprint step's layer when using its polygons.
 #   # param:output_layer: "seamlines" # string; default: "seamlines".

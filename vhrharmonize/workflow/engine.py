@@ -578,6 +578,15 @@ class Workflow:
             if not (plugin.var_records_return and key.startswith("var:")) and key not in discovered
         }
 
+    def _filters_records(self, step, plugin=None):
+        plugin = plugin or load_plugin(step["plugin"])
+        return any(step["settings"].get("param:" + name, self.shared.get(name)) is not None
+                   for name in plugin.record_filter_parameters)
+
+    def _sets_records(self, step, plugin=None):
+        plugin = plugin or load_plugin(step["plugin"])
+        return bool(plugin.var_records_return or self._filters_records(step, plugin))
+
     def _register_directories(self, plugin):
         for role, name in DIRECTORY_FEATURES.items():
             for selector in getattr(plugin, name):
@@ -742,7 +751,7 @@ class Workflow:
             self._register_directories(plugin)
             input_names = file_parameter_names(features, "input")
             output_names = file_parameter_names(features, "output")
-            source = plugin.var_records_return is not None
+            source = self._sets_records(step, plugin)
             if source and step.get("scope", "aggregate") != "aggregate":
                 raise ValueError("Scene-setting plugins run once with aggregate scope")
             initialized = "var" in self.context
@@ -1107,7 +1116,7 @@ class Workflow:
             node.needed = True
             plugin = load_plugin(node.step["plugin"])
             reuse = node.step.get("reuse", self.controls["run_from_existing"])
-            values_ready = not plugin.var_records_return and all(self._known(node.context, name) for name in node.demanded_values)
+            values_ready = not self._sets_records(node.step, plugin) and all(self._known(node.context, name) for name in node.demanded_values)
             unresolved = any(contains_pending(node.params.get(name)) for name in file_parameter_names(node.file_features, "output"))
             unresolved |= node.requirements_pending
             unresolved |= self.has_nonexecuting_steps and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
@@ -1138,7 +1147,7 @@ class Workflow:
         for node in self.nodes:
             # Even a plugin-only run needs the scene list before its selected
             # processing step can be planned. Unselected setters may only restore.
-            if not self._runs(node) and not load_plugin(node.step["plugin"]).var_records_return:
+            if not self._runs(node) and not self._sets_records(node.step):
                 continue
             targets = node.paths("output_target_paths")
             if (
@@ -1146,7 +1155,7 @@ class Workflow:
                 or node.step.get("require_outputs") is True
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
-                or load_plugin(node.step["plugin"]).var_records_return
+                or self._sets_records(node.step)
                 or node.step.get("execution_mode", "run") != "run" and (contains_pending(node.params) or node.requirements_pending)
             ):
                 local_returns = node.dynamic_names if self.preparing and node.step.get("execution_mode", "run") == "run" else ()
@@ -1391,10 +1400,10 @@ class Workflow:
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
             )
         self._publish_values(node, values)
-        source = load_plugin(node.step["plugin"]).var_records_return
+        source = self._sets_records(node.step)
         if source:
             self._var_result = (node, returned)
-        if not load_plugin(node.step["plugin"]).var_records_return:
+        if not source:
             self._save_node_context(node)
         node.status = "completed"
         if self._executing:
@@ -1568,11 +1577,23 @@ class Workflow:
         node, returned = self._var_result
         context = _materialize(node.context, {"const": self.constant_values, "var": {}})
         plugin = load_plugin(node.step["plugin"])
-        if plugin.var_records_mode == "merge":
+        filtering = self._filters_records(node.step, plugin)
+        if plugin.var_records_mode == "merge" or filtering:
             # Carry actual completed/cached values across the planning boundary.
             for record, current in zip(self.records, self._record_values(node)):
                 record["context"] = available_context(current)
-        self._update_var_records(plugin, node.step, returned, context)
+        if filtering:
+            self._retained_protected_paths.update(self.protected_paths)
+            indices = plugin.retained_record_indices(node.params, returned)
+            if (not isinstance(indices, list) or any(type(index) is not int or not 0 <= index < len(self.records) for index in indices)
+                    or indices != sorted(set(indices))):
+                raise ValueError("retained_record_indices must return unique input indices in scene order")
+            self.records = [self.records[index] for index in indices]
+            for record in self.records:
+                record["context"]["const"] = deepcopy(context["const"])
+            self.initial_context = {"const": deepcopy(context["const"]), "var": {}}
+        else:
+            self._update_var_records(plugin, node.step, returned, context)
         self.discovery_sources.update(p for record in self.records for p in record["source_paths"])
         for filename in self.discovery_sources:
             self.discovery_source_steps.setdefault(filename, node.step["name"])

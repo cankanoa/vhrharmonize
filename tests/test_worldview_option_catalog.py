@@ -47,7 +47,6 @@ def documented_plugin_keys():
         ("pansharpen", ["pansharpen_image"]),
         ("cloud_mask", ["cloudmask_raster"]),
         ("alignment", ["align_image_pair"]),
-        ("seamline_metadata", ["write_seamline_metadata_gpkg"]),
         *[(name, [name]) for name in FUNCTIONS],
     ],
 )

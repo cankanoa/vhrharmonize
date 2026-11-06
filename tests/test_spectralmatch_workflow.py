@@ -107,21 +107,18 @@ def test_worldview_selects_one_chain_and_inherits_function_settings():
     setup = config["setup_spectralmatch"]
     assert "plugin" not in setup and setup["core:scope"] == "aggregate"
     assert list(config)[-1] == "merge_rasters"
-    selected = [name for name in config if name in FUNCTIONS]
+    selected = [name for name in config if name in FUNCTIONS and config[name]["core:run"]]
     assert selected == [
-        "global_regression",
-        "local_block_adjustment",
-        "markov_triangles",
-        "mask_rasters",
-        "merge_rasters",
+        "joint_coregistration", "create_footprints", "global_regression",
+        "local_block_adjustment", "postprocess_footprints", "markov_triangles", "mask_rasters", "merge_rasters",
     ]
     assert all(config[name]["core:run"] for name in selected)
     assert (
-        list(config).index("local_block_adjustment")
-        < list(config).index("seamline_metadata")
+        list(config).index("joint_coregistration")
+        < list(config).index("create_footprints")
         < list(config).index("markov_triangles")
     )
-    assert config["seamline_metadata"]["param:image_paths"] == "collect:current_image_paths"
+    assert config["create_footprints"]["param:input_images"] == "collect:current_image_paths"
     assert config["shared"]["param:window_scales"] == [2, 4, 8, 16, 32, 64, 128, 256, 512]
     assert not any(
         key.startswith("const:")
@@ -139,9 +136,10 @@ def test_worldview_selects_one_chain_and_inherits_function_settings():
         ):
             assert "param:" + parameter not in config[name]
             assert "const:spectralmatch." + parameter not in setup
-        if name != "markov_triangles":
-            assert config[name]["core:calculate_overviews"] is True
-    assert config["merge_rasters"]["param:output_image_path"].startswith("expr:")
+        if name == "create_footprints":
+            assert "param:metadata_records" in config[name]
+    assert config["merge_rasters"]["param:output_image_path"] == "const:mosaic_path"
+    assert config["merge_rasters"]["const:mosaic_path"].startswith("expr:")
 
 
 def test_batch_outputs_explicit_context_reuse_cleanup_and_hpc(tmp_path, monkeypatch):
@@ -278,7 +276,7 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
             for name in (
                 "global_regression",
                 "local_block_adjustment",
-                "seamline_metadata",
+                "create_footprints",
                 "markov_triangles",
                 "mask_rasters",
                 "merge_rasters",

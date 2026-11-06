@@ -86,7 +86,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
         assert counts[step]["processing"] == 0
     assert counts["cloud_mask"]["loaded"] == 1
     assert counts["alignment"]["processing"] == 1
-    assert counts["seamline_metadata"]["processing"] == 1
+    assert counts["create_footprints"]["processing"] == 1
 
 
 def test_planet_recipe_uses_same_runner(make_test_raster, tmp_path):
@@ -128,14 +128,14 @@ def test_seamline_aggregate_receives_projected_metadata_and_resumes(tmp_path, ma
             "const:temp_dir": str(tmp_path / "temp"),
             "var:fields": {"scene_id": "var:input_stem", "quality": 10},
         },
-        "seamline_metadata": {
-            "plugin": "seamline_metadata",
+        "create_footprints": {
+            "plugin": "create_footprints",
             "core:run": True, "core:require_outputs": True,
-            "param:image_paths": "collect:image",
+            "param:input_images": "collect:image",
             "param:metadata_records": "collect:fields",
             "param:epsg": 4326,
             "const:footprints": "expr:const.output_dir & '/footprints.gpkg'",
-            "param:output_path": "const:footprints",
+            "param:output_polygons": "const:footprints",
         },
     }
     Workflow(config).run()
@@ -155,12 +155,12 @@ def test_imd_multiple_assignments_and_quoted_semicolons():
 
 
 def test_footprints_reproject_to_output_crs(tmp_path, make_test_raster):
-    from vhrharmonize.plugins.seamline_metadata import _calculate_seamline_metadata_geometry
+    import geopandas as gpd
+    from vhrharmonize import create_footprints
     from pyproj import Transformer
 
     source = make_test_raster(tmp_path / "image.tif", crs="EPSG:4326")
-    _, geometry = _calculate_seamline_metadata_geometry(
-        str(source), {}, "calculate_bounds", True, 3857, "image", "unused.gpkg", False
-    )
+    output = create_footprints([str(source)], str(tmp_path / "footprints.gpkg"), epsg=3857)
+    geometry = gpd.read_file(output).geometry.iloc[0]
     x, y = Transformer.from_crs(4326, 3857, always_xy=True).transform(4, 4)
     assert geometry.bounds == pytest.approx((0, 0, x, y))

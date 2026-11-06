@@ -195,6 +195,17 @@ The scene-setting function runs once with aggregate scope. Each dictionary becom
 
 Optional declarations:
 
+An aggregate plugin can also filter existing scenes without replacing their
+metadata. Declare `record_filter_parameters` as a set of option names and
+implement `retained_record_indices(params, returned)`, returning unique input
+indices in scene order. A non-null value for any declared option enables a
+planning barrier: core finishes the aggregate call, retains those scenes with
+their completed context, and rebuilds downstream dependencies. With all options
+null or absent, the plugin remains an ordinary processing step. The
+`create_footprints` adapter uses this for optional outline/rank coverage; its
+function still returns its GeoPackage path. These calls follow the same
+planning and HPC execution restrictions as scene setters.
+
 | Declaration | Default | Purpose |
 |---|---|---|
 | `var_records_mode` | `"replace"` | `"replace"` resets scenes; `"merge"` adds scenes and missing fields while preserving existing values. Merge requires `var_id_return`. |

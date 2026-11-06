@@ -280,7 +280,7 @@ def test_spectralmatch_job_adapter_recovers_a_real_aggregate(monkeypatch, tmp_pa
     assert workflow.errors[0]["image_id"] == "bad"
 
 
-def test_seamline_metadata_restarts_with_normal_record_reuse(monkeypatch, tmp_path, make_test_raster):
+def test_create_footprints_restarts_after_image_failure(monkeypatch, tmp_path, make_test_raster):
     pytest.importorskip("osgeo")
     import geopandas as gpd
 
@@ -295,17 +295,17 @@ def test_seamline_metadata_restarts_with_normal_record_reuse(monkeypatch, tmp_pa
                    "core:show_progress": False, "core:log_to_console": False,
                    "core:save_statistics_path": None, "core:load_statistics_path": None},
         "source": {"plugin": "scenes", "core:run": True},
-        "footprints": {"plugin": "seamline_metadata", "core:run": True, "core:require_outputs": True,
-                       "param:image_paths": "collect:image", "param:metadata_records": "collect:metadata",
+        "footprints": {"plugin": "create_footprints", "core:run": True, "core:require_outputs": True,
+                       "param:input_images": "collect:image", "param:metadata_records": "collect:metadata",
                        "param:footprint_source": "calculate_bounds", "param:epsg": 4326,
-                       "param:output_path": str(tmp_path / "footprints.gpkg"), "param:reuse": True},
+                       "param:output_polygons": str(tmp_path / "footprints.gpkg")},
     }
     workflow = Workflow(config, config_dir=tmp_path)
     snapshots = []
     assert [record["id"] for record in workflow.run(progress_callback=snapshots.append)] == ["good"]
     assert workflow.errors[0]["image_id"] == "bad"
     frame = gpd.read_file(tmp_path / "footprints.gpkg")
-    assert list(frame["image_basename"]) == ["good.tif"]
+    assert list(frame["image"]) == ["good"]
     final = snapshots[-1]
     assert final["status"] == "completed"
     assert final["total"]["status"] == "restarted"

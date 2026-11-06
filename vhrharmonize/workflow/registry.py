@@ -34,7 +34,6 @@ BUILTINS = {
     "pansharpen": "pansharpen:Pansharpen",
     "cloud_mask": "cloud_mask:CloudMask",
     "alignment": "alignment:Alignment",
-    "seamline_metadata": "seamline_metadata:SeamlineMetadata",
 }
 
 

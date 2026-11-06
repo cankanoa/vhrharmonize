@@ -153,7 +153,6 @@ orthorectification = "vhrharmonize.plugins.orthorectification:Orthorectification
 pansharpen = "vhrharmonize.plugins.pansharpen:Pansharpen"
 cloud_mask = "vhrharmonize.plugins.cloud_mask:CloudMask"
 alignment = "vhrharmonize.plugins.alignment:Alignment"
-seamline_metadata = "vhrharmonize.plugins.seamline_metadata:SeamlineMetadata"
 joint_coregistration = "vhrharmonize.plugins.joint_coregistration:JointCoregistration"
 global_regression = "vhrharmonize.plugins.global_regression:GlobalRegression"
 local_block_adjustment = "vhrharmonize.plugins.local_block_adjustment:LocalBlockAdjustment"

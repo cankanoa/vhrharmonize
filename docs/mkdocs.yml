@@ -43,7 +43,6 @@ nav:
       - slurm: api/slurm.md
       - plugins.fetch_atmosphere: api/plugins-fetch-atmosphere.md
       - plugins.fetch_dem: api/plugins-fetch-dem.md
-      - plugins.seamline_metadata: api/plugins-seamline-metadata.md
       - cli.functions: api/cli-functions.md
 
 theme:
