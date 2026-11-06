@@ -578,15 +578,6 @@ class Workflow:
             if not (plugin.var_records_return and key.startswith("var:")) and key not in discovered
         }
 
-    def _filters_records(self, step, plugin=None):
-        plugin = plugin or load_plugin(step["plugin"])
-        return any(step["settings"].get("param:" + name, self.shared.get(name)) is not None
-                   for name in plugin.record_filter_parameters)
-
-    def _sets_records(self, step, plugin=None):
-        plugin = plugin or load_plugin(step["plugin"])
-        return bool(plugin.var_records_return or self._filters_records(step, plugin))
-
     def _register_directories(self, plugin):
         for role, name in DIRECTORY_FEATURES.items():
             for selector in getattr(plugin, name):
@@ -751,7 +742,7 @@ class Workflow:
             self._register_directories(plugin)
             input_names = file_parameter_names(features, "input")
             output_names = file_parameter_names(features, "output")
-            source = self._sets_records(step, plugin)
+            source = plugin.var_records_return is not None
             if source and step.get("scope", "aggregate") != "aggregate":
                 raise ValueError("Scene-setting plugins run once with aggregate scope")
             initialized = "var" in self.context
@@ -1116,7 +1107,7 @@ class Workflow:
             node.needed = True
             plugin = load_plugin(node.step["plugin"])
             reuse = node.step.get("reuse", self.controls["run_from_existing"])
-            values_ready = not self._sets_records(node.step, plugin) and all(self._known(node.context, name) for name in node.demanded_values)
+            values_ready = not plugin.var_records_return and all(self._known(node.context, name) for name in node.demanded_values)
             unresolved = any(contains_pending(node.params.get(name)) for name in file_parameter_names(node.file_features, "output"))
             unresolved |= node.requirements_pending
             unresolved |= self.has_nonexecuting_steps and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
@@ -1147,7 +1138,7 @@ class Workflow:
         for node in self.nodes:
             # Even a plugin-only run needs the scene list before its selected
             # processing step can be planned. Unselected setters may only restore.
-            if not self._runs(node) and not self._sets_records(node.step):
+            if not self._runs(node) and not load_plugin(node.step["plugin"]).var_records_return:
                 continue
             targets = node.paths("output_target_paths")
             if (
@@ -1155,7 +1146,8 @@ class Workflow:
                 or node.step.get("require_outputs") is True
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
-                or self._sets_records(node.step)
+                or load_plugin(node.step["plugin"]).var_records_return
+                or load_plugin(node.step["plugin"]).removes_scenes
                 or node.step.get("execution_mode", "run") != "run" and (contains_pending(node.params) or node.requirements_pending)
             ):
                 local_returns = node.dynamic_names if self.preparing and node.step.get("execution_mode", "run") == "run" else ()
@@ -1247,6 +1239,26 @@ class Workflow:
         values = {name: lookup(node.context, name) for name in node.dynamic_names if self._known(node.context, name)}
         self._publish_values(node, values)
         self._restored_nodes.add(node.index)
+
+    def _apply_scene_removals(self, node, returned):
+        """Apply a successful plugin's runtime scene selection at the next step boundary."""
+        if not self._executing or not self.records or node.step.get("execution_mode", "run") != "run":
+            return
+        plugin = load_plugin(node.step["plugin"])
+        if not plugin.removes_scenes:
+            return
+        scene_ids = ([self.records[node.record]["id"]] if node.record is not None
+                     else [record["id"] for record in self.records])
+        removed = plugin.scene_ids_to_remove(params=deepcopy(node.params), returned=returned,
+                                            scene_ids=list(scene_ids))
+        if (not isinstance(removed, (list, tuple))
+                or any(not isinstance(value, str) for value in removed)
+                or len(set(removed)) != len(removed) or not set(removed).issubset(scene_ids)):
+            raise ValueError("scene_ids_to_remove must return unique scene IDs from this invocation")
+        removed = set(removed)
+        for index, record in enumerate(self.records):
+            if record["id"] in removed:
+                self._remove_record(index)
 
     def _payload(self, node):
         for index in node.dependencies:
@@ -1400,16 +1412,17 @@ class Workflow:
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
             )
         self._publish_values(node, values)
-        source = self._sets_records(node.step)
+        source = load_plugin(node.step["plugin"]).var_records_return
         if source:
             self._var_result = (node, returned)
-        if not source:
+        if not load_plugin(node.step["plugin"]).var_records_return:
             self._save_node_context(node)
         node.status = "completed"
         if self._executing:
             self._save_final_metadata(node)
         if self._progress:
             self._progress.complete(node)
+        self._apply_scene_removals(node, returned)
 
     @timed_core("cleanup")
     def _cleanup(self, *, final=False):
@@ -1577,23 +1590,11 @@ class Workflow:
         node, returned = self._var_result
         context = _materialize(node.context, {"const": self.constant_values, "var": {}})
         plugin = load_plugin(node.step["plugin"])
-        filtering = self._filters_records(node.step, plugin)
-        if plugin.var_records_mode == "merge" or filtering:
+        if plugin.var_records_mode == "merge":
             # Carry actual completed/cached values across the planning boundary.
             for record, current in zip(self.records, self._record_values(node)):
                 record["context"] = available_context(current)
-        if filtering:
-            self._retained_protected_paths.update(self.protected_paths)
-            indices = plugin.retained_record_indices(node.params, returned)
-            if (not isinstance(indices, list) or any(type(index) is not int or not 0 <= index < len(self.records) for index in indices)
-                    or indices != sorted(set(indices))):
-                raise ValueError("retained_record_indices must return unique input indices in scene order")
-            self.records = [self.records[index] for index in indices]
-            for record in self.records:
-                record["context"]["const"] = deepcopy(context["const"])
-            self.initial_context = {"const": deepcopy(context["const"]), "var": {}}
-        else:
-            self._update_var_records(plugin, node.step, returned, context)
+        self._update_var_records(plugin, node.step, returned, context)
         self.discovery_sources.update(p for record in self.records for p in record["source_paths"])
         for filename in self.discovery_sources:
             self.discovery_source_steps.setdefault(filename, node.step["name"])
@@ -1726,8 +1727,8 @@ class Workflow:
             if self._progress:
                 self._progress.recover(node)
 
-    def _remove_failed_records(self, next_step):
-        """Compact scenes at a synchronization point and replan later collections."""
+    def _compact_removed_records(self, next_step):
+        """Compact removed scenes at a step boundary and replan later collections."""
         if not self._removed_records:
             return
         first = next((node for node in self.nodes if node.step_index >= next_step), None)
@@ -1780,6 +1781,7 @@ class Workflow:
             if node.status == "loaded":
                 self._restore(node)
                 self._save_final_metadata(node)
+                self._apply_scene_removals(node, returned=None)
         pending = [node for node in nodes if node.status == "processing"]
         if not pending:
             self._advance_var_records(step_index)
@@ -1852,6 +1854,9 @@ class Workflow:
             return False
         if not step["run"] or step.get("processing_direction", self.controls["processing_direction"]) != "vertical":
             return False
+        plugin = load_plugin(step["plugin"])
+        if plugin.removes_scenes:
+            return False  # Finish selection for every scene before dispatching later steps.
         nodes = [n for n in self.nodes if n.step_index == step_index and n.needed]
         if not nodes or any(n.record is None for n in nodes):
             return False
@@ -1912,6 +1917,7 @@ class Workflow:
                     if node.status == "loaded":
                         self._restore(node)
                         self._save_final_metadata(node)
+                        self._apply_scene_removals(node, returned=None)
                         completed.add(node.index)
                         self._cleanup()
                     else:
@@ -2211,7 +2217,7 @@ class Workflow:
             if self._restart_step is not None:
                 step_index, self._restart_step = self._restart_step, None
             if self._removed_records:
-                self._remove_failed_records(step_index)
+                self._compact_removed_records(step_index)
                 if not self.records:
                     break
         if self.preparing:

@@ -181,7 +181,7 @@ def validate_statistics_record(span: dict) -> dict:
         for key in ("vhr.run_id", "vhr.name"):
             require(isinstance(attributes[key], str) and bool(attributes[key]), key)
         require(attributes["vhr.kind"] in {"workflow", "core", "task", "step_summary"}, "vhr.kind")
-        require(attributes["vhr.status"] in {"completed", "failed", "incomplete", "reused", "skipped", "waiting"},
+        require(attributes["vhr.status"] in {"completed", "failed", "incomplete", "reused", "skipped", "waiting", "removed"},
                 "vhr.status")
         duration = attributes.get("vhr.duration_seconds")
         require(number(duration) or duration is None and attributes["vhr.status"] == "incomplete",

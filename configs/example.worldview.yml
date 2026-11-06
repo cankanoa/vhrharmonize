@@ -592,7 +592,7 @@ standardize_mosaic_coverage:
   param:input_images: collect:current_image_paths # path list; required. Ordered across imported records.
   param:metadata_records: collect:footprint_metadata # JSON object list | null; default: null. One record per input image; required for metadata geometry.
   const:coverage_mask: expr:const.temp_dir & '/standardize_mosaic_coverage/coverage.gpkg'
-  param:output_polygons: const:coverage_mask # path; required. Ranked coverage; images with no retained area leave the subsequent workflow.
+  param:output_polygons: const:coverage_mask # path; required. Ranked coverage polygons; images with no retained area have no output polygon.
   param:output_layer: const:spectralmatch.polygon_layer # layer name; default: footprints.
   param:image_field_name: const:spectralmatch.image_field_name # field name; default: image. Current image stems match the coverage-cropped output suffixes.
   # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". CRS of mapped IMD geometry.
@@ -603,6 +603,7 @@ standardize_mosaic_coverage:
   # Each degree counts equally for both angles; a combined angle of zero gives the best score (zero).
   param:image_rank_function: "-({var:view_zenith} + {var:solar_zenith})" # expression | null; default: null. Explicit initial-coverage preference; native ranking remains unset by default.
   param:image_rank_descending: true # true | false; default: true. Larger expression scores own overlaps.
+  param:min_polygon_area: 1.0 # square metres; default: 1.0. Remove tiny owned pieces before buffering; null disables.
   param:extrude_distance: 500 # nonnegative number; default: 0.0. Overlap/movement margin in projected CRS units, clipped to each source footprint; also extends beyond the outline.
   # Coverage options recompute ownership together even when resume_from_outputs requests reuse.
 

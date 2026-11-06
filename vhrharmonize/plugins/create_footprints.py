@@ -25,14 +25,23 @@ create_footprints.__parameter_sources__ = (_upstream,)
 
 class CreateFootprints(SpectralMatchPlugin):
     executor_parameter = "executor"
-    record_filter_parameters = frozenset({"outline_path", "image_rank_function"})
+    removes_scenes = True
 
-    def retained_record_indices(self, params, returned):
-        """Keep workflow scene order while omitting images with no output coverage."""
+    def scene_ids_to_remove(self, *, params, returned, scene_ids):
+        """Remove images absent from the written footprints after this step runs."""
+        import os
         import geopandas as gpd
 
-        retained = set(gpd.read_file(returned, layer=params.get("output_layer"))["image_path"])
-        return [index for index, path in enumerate(params["input_images"]) if path in retained]
+        def identity(filename):
+            return os.path.normcase(os.path.realpath(filename))
+
+        frame = gpd.read_file(params["output_polygons"], layer=params.get("output_layer", "footprints"))
+        retained = {identity(filename) for filename in frame["image_path"]}
+        paths = params["input_images"]
+        if not isinstance(paths, list) or len(paths) != len(scene_ids):
+            raise ValueError("Scene removal requires one explicit input image per scene")
+        return [scene_id for scene_id, filename in zip(scene_ids, paths)
+                if identity(filename) not in retained]
 
     target = "vhrharmonize.plugins.create_footprints:create_footprints"
     scope = "aggregate"

@@ -220,3 +220,5 @@ using configured defaults. The saved JSON's `parameter_dates` records the source
 date for each parameter (`null` for a default or missing value). The legacy
 `date_used` field records the first date that supplied any value; consult
 `parameter_dates` when values come from multiple dates.
+
+Initial coverage (`create_footprints`) accepts `param:min_polygon_area: 1.0` to remove individual owned polygon pieces smaller than 1 square metre before buffering. Use YAML `null` (Python `None`) to disable this filter. The default applies when outline, ranking or buffering controls are used; ordinary raw footprint generation is unchanged.

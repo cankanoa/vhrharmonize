@@ -68,7 +68,7 @@ def test_worldview_prefers_lowest_combined_raw_angle_and_ignores_cloud_cover(tmp
 
 
 @pytest.mark.parametrize("prepare_images", [False, True])
-def test_real_workflow_filters_empty_owners_and_crops_before_next_step(tmp_path, monkeypatch, prepare_images):
+def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, monkeypatch, prepare_images):
     scene_records = []
     to_wgs84 = Transformer.from_crs(3857, 4326, always_xy=True).transform
     srs = osr.SpatialReference()
@@ -124,13 +124,33 @@ def test_real_workflow_filters_empty_owners_and_crops_before_next_step(tmp_path,
                     "param:input_images": "collect:current_image_paths"},
     }
     workflow = Workflow(config)
+    counts = workflow.counts()
+    assert [record["id"] for record in workflow.records] == ["partial", "hidden", "best", "outside"]
+    assert counts["coverage"]["processing"] == 1
+    assert seen == []
+    assert not (tmp_path / "temp/standardize_mosaic_coverage/coverage.gpkg").exists()
+    assert not (tmp_path / "temp/mask_mosaic_coverage").exists()
+
     result = workflow.run()
     assert [record["id"] for record in result] == ["partial", "best"]
     suffix = "_prepared_coverage" if prepare_images else "_coverage"
-    assert seen == [str(tmp_path / "temp/mask_mosaic_coverage" / f"{name}{suffix}.tif") for name in ("partial", "best")]
+    assert seen == [str(tmp_path / "temp/mask_mosaic_coverage" / f"{name}{suffix}.tif")
+                    for name in ("partial", "best")]
     assert [record["context"]["var"]["kept_metadata"]["nested"] for record in result] == ["partial", "best"]
     assert not (tmp_path / "temp/mask_mosaic_coverage/hidden_coverage.tif").exists()
-    footprints = gpd.read_file(tmp_path / "temp/create_footprints/footprints.gpkg")
-    assert set(footprints.scene_id) == {"best", "partial"}
-    assert "weighted_score" not in footprints
-    assert footprints.geometry.iloc[0].intersection(footprints.geometry.iloc[1]).area > 0
+    assert workflow.errors == []
+
+
+@pytest.mark.parametrize("minimum, expected", [(1.0, 1), (None, 2)])
+def test_vhr_passes_min_polygon_area_to_spectralmatch(tmp_path, minimum, expected):
+    output = create_footprints(
+        ["large.tif", "small.tif"], str(tmp_path / "filtered.gpkg"),
+        footprint_source="metadata", metadata_crs="EPSG:3857", epsg=3857,
+        metadata_records=[
+            {"quality": 2, "geometry": mapping(box(0, 0, 10, 10))},
+            {"quality": 1, "geometry": mapping(box(9, 0, 10.01, 0.01))},
+        ],
+        image_rank_function="{quality}", extrude_distance=500,
+        min_polygon_area=minimum,
+    )
+    assert len(gpd.read_file(output)) == expected

@@ -158,6 +158,38 @@ No function must implement every shared parameter. The engine owns scheduling an
 
 There is one adapter class: `FunctionPlugin`. If custom execution is needed, override `run(self, *, params, shared)`. All resolved arguments—including input paths and output paths—are in `params`. The independent file-feature declarations determine what core does with each argument. Leave core reuse, validation, invalid-removal or overview selections empty for operations the function handles itself. Core never skips an invocation merely because its output directory exists.
 
+## Removing scenes during execution
+
+A processing adapter can opt into runtime scene removal:
+
+```python
+import json
+from pathlib import Path
+
+class SelectScenes(FunctionPlugin):
+    scope = "aggregate"
+    removes_scenes = True
+
+    def scene_ids_to_remove(self, *, params, returned, scene_ids):
+        selection = returned if returned is not None else json.loads(Path(params["output_path"]).read_text())
+        return [scene_id for scene_id, keep in zip(scene_ids, selection["keep"]) if not keep]
+```
+
+The hook runs in the parent after the step succeeds and its outputs are validated.
+It receives resolved parameters and scene IDs in invocation order (one ID for a
+scene-scoped step). Return a list or tuple of unique IDs from that invocation;
+return an empty sequence to keep every scene. Core preserves scene order and
+context, protects source files, and removes those records before executing later
+steps, rebuilding downstream collections as needed. Removal is not a worker error.
+Scene-scoped removal steps finish all invocations before later steps proceed.
+
+Planning and dry runs never invoke this hook or execute the processing function.
+For reused outputs, the hook runs during execution with `returned=None`; such
+adapters must determine selection from their declared output files. A removal
+adapter cannot also declare `var_records_return`. Disabled steps do not remove
+scenes. `create_footprints` implements this interface by comparing its input
+images with the `image_path` values in its saved output layer.
+
 ## Creating or replacing scenes
 
 Any ordinary function can return a list of plain dictionaries and declare which returned field contains it:

@@ -57,7 +57,7 @@ class FunctionPlugin:
     var_id_return = None
     var_path_return = None  # Primary path within each returned scene; used by core:satisfies and HPC mappings.
     source_file_protection_paths_return = None
-    record_filter_parameters = frozenset()  # Non-null options enabling aggregate scene filtering.
+    removes_scenes = False  # Runtime-only hook; never changes scene discovery/planning.
     directory_parameters = {}  # Declared directory context location -> function parameter accepting that directory.
     discovery_input_parameter = None  # Optional parameter name for discovery upload labels.
     # Each set contains function argument names, not filenames. Opt in separately.
@@ -87,9 +87,15 @@ class FunctionPlugin:
         """
         return ()
 
-    def retained_record_indices(self, params, returned):
-        """Return input scene indices to retain when record_filter_parameters is enabled."""
-        raise NotImplementedError("Record filtering requires retained_record_indices")
+    def scene_ids_to_remove(self, *, params, returned, scene_ids):
+        """Return scene IDs to remove after this step succeeds (opt in with removes_scenes).
+
+        Called in the parent during execution, including reused outputs where returned
+        is None. scene_ids follows invocation order; a scene-scoped call sees one ID.
+        Implementations must inspect their result or declared output files and leave
+        inputs unchanged. Core compacts records before the next step executes.
+        """
+        return ()
 
     def runtime_parameters(self, *, tile_threads):
         """Map workflow controls to explicitly declared function arguments.
@@ -125,10 +131,10 @@ class FunctionPlugin:
         """Validate independent file-feature declarations without loading the function."""
         if self.scope not in {"var", "aggregate"}:
             raise ValueError("Plugin scope must be var or aggregate")
-        if not isinstance(self.record_filter_parameters, (set, frozenset)) or any(
-            not isinstance(name, str) or not name.isidentifier() for name in self.record_filter_parameters
-        ):
-            raise ValueError("record_filter_parameters must select function parameter names")
+        if not isinstance(self.removes_scenes, bool):
+            raise ValueError("removes_scenes must be a boolean")
+        if self.removes_scenes and self.var_records_return is not None:
+            raise ValueError("Scene removal cannot also replace or merge scene records")
         for name in (
             "var_records_return",
             "var_id_return",
