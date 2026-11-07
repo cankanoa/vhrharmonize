@@ -570,7 +570,7 @@ See [Adding plugins](../getting-started/adding-plugins.md) for registration and 
 
 ## Individual SpectralMatch functions
 
-`setup_spectralmatch` in the WorldView example is an ordinary pluginless aggregate step. It defines shared polygon identifiers. Each image keeps its path and filename suffix in `var`; batch functions receive paths through `collect:`. Ordinary settings are direct `param:` entries under `shared`, inherited automatically by functions that accept them. The enabled example runs matching, footprint generation, Markov seamlines and masking, with `merge_rasters` last. Alternative stages remain fully commented with their parameter catalogs. Disabled steps leave the current image list and suffix unchanged. Copy a step under another name to invoke the same plugin again.
+The WorldView example defines shared polygon identifiers in `shared`. `polygonize_images` writes one cached valid-data vector per processed image; initial coverage consumes those vectors through `input_images` with `footprint_source: vector_bounds`, preserving their original image IDs and attributes. Its `{stat:area_crs}` ranking term is calculated for each connected polygon after clipping; `var:` still references arbitrary table columns. `create_seamline_footprints` recalculates footprints after alignment and matching, immediately before seamline postprocessing. Each image keeps its path and filename suffix in `var`; batch functions receive paths through `collect:`. Ordinary settings are direct `param:` entries under `shared`, inherited automatically by functions that accept them. The enabled example runs matching, footprint generation, Markov seamlines and masking, with `merge_rasters` last. Alternative stages remain fully commented with their parameter catalogs. Disabled steps leave the current image list and suffix unchanged. Copy a step under another name to invoke the same plugin again.
 
 ```yaml
 shared:
@@ -578,19 +578,15 @@ shared:
   core:run: true
   param:output_dtype: float32
   param:window_scales: [2, 4, 8, 16, 32]
-
-setup_spectralmatch:
-  core:run: true
-  core:scope: aggregate
-  const:spectralmatch.images: collect:aligned
+  const:spectralmatch.polygon_layer: footprints
+  const:spectralmatch.image_field_name: image
 
 match_global:
   plugin: global_regression
   core:run: true
   core:calculate_overviews: true
-  param:input_images: const:spectralmatch.images
+  param:input_images: collect:aligned
   param:output_images: [/work/a_global.tif, /work/b_global.tif]
-  const:spectralmatch.images: returned:$
 ```
 
 The adapters import algorithms from the installed `spectralmatch` package. They expose native function parameters and convert YAML lists to native tuple options where required. There is no nested SpectralMatch pipeline or implicit forwarding of stage outputs. Statistics functions are not registered. See the [function catalog](../api/plugins-spectralmatch.md).

@@ -1,6 +1,7 @@
 """Ranked initial coverage limits raster work without changing raw footprint defaults."""
 
 from pathlib import Path
+import math
 
 import geopandas as gpd
 import numpy as np
@@ -23,15 +24,24 @@ def test_removed_seamline_metadata_plugin_has_no_alternative_implementation():
         load_plugin("seamline_metadata")
 
 
-def test_worldview_uses_metadata_coverage_then_crops_and_keeps_raw_footprints():
+def test_worldview_caches_vectors_then_recalculates_seamline_footprints():
     recipe = load_config("configs/example.worldview.yml")
     names = list(recipe)
     assert [name for name, step in recipe.items() if step.get("plugin") == "create_footprints"] == [
-        "standardize_mosaic_coverage", "create_footprints"
+        "polygonize_images", "standardize_mosaic_coverage", "create_seamline_footprints"
     ]
     assert names.index("standardize_mosaic_coverage") < names.index("mask_mosaic_coverage") < names.index("joint_coregistration")
-    early, later = recipe["standardize_mosaic_coverage"], recipe["create_footprints"]
-    assert early["param:footprint_source"] == "metadata"
+    early, later = recipe["standardize_mosaic_coverage"], recipe["create_seamline_footprints"]
+    assert early["param:footprint_source"] == "vector_bounds"
+    assert early["param:input_images"] == "collect:polygonized_footprint_path"
+    assert "param:input_vectors" not in early
+    assert "{stat:area_crs}" in early["param:image_rank_function"]
+    assert recipe["polygonize_images"]["core:scope"] == "var"
+    assert "var:current_image_paths" not in recipe["polygonize_images"]
+    assert names.index("cloud_mask") < names.index("polygonize_images") < names.index("standardize_mosaic_coverage")
+    assert names.index("local_block_adjustment") < names.index("create_seamline_footprints")
+    assert names.index("create_seamline_footprints") + 1 == names.index("postprocess_footprints")
+    assert "setup_spectralmatch" not in recipe
     assert early["param:extrude_distance"] > 0
     assert later.get("param:footprint_source", "calculate_bounds") == "calculate_bounds"
     assert later.get("param:image_rank_function") is None
@@ -64,7 +74,7 @@ def test_worldview_prefers_lowest_combined_raw_angle_and_ignores_cloud_cover(tmp
     )
     result = gpd.read_file(output)
     assert list(result.image) == [owner]
-    assert result.weighted_score.iloc[0] == pytest.approx(score)
+    assert result.weighted_score.iloc[0] == pytest.approx(score + 5 * math.log2(100 / 1000000))
 
 
 @pytest.mark.parametrize("prepare_images", [False, True])
@@ -82,6 +92,7 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
         dataset.GetRasterBand(1).Fill(quality + 1)
         dataset = None
         scene_records.append({"scene_id": name, "basename": name, "suffix": "", "current_image_paths": source,
+                              "relative_output_dir": str(tmp_path / "processed"),
                               "kept_metadata": {"nested": name}, "footprint_metadata": {
                                   "scene_id": name, "quality": quality,
                                   "geometry": mapping(transform(to_wgs84, box(left, 0, left + 10, 10)))}})
@@ -105,7 +116,8 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
                    "core:delete_temp_steps_proactively": False, "param:epsg": 3857,
-                   "param:custom_nodata_value": -9999},
+                   "param:custom_nodata_value": -9999,
+                   **{k: v for k, v in recipe["shared"].items() if k.startswith("const:spectralmatch.")}},
         "input": {"plugin": "coverage_inputs", "core:run": True, "const:temp_dir": str(tmp_path / "temp")},
         **({"prepare": {
             "plugin": "file_source", "core:run": True,
@@ -114,11 +126,11 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
             "var:current_image_paths": "expr:const.temp_dir & '/prepare/' & var.basename & var.suffix & '.tif'",
             "param:output_path": "var:current_image_paths",
         }} if prepare_images else {}),
-        "setup": recipe["setup_spectralmatch"],
+        "polygonize": recipe["polygonize_images"],
         "coverage": {**recipe["standardize_mosaic_coverage"], "param:outline_path": outline,
                      "param:image_rank_function": "{quality}", "param:extrude_distance": 1},
         "mask": recipe["mask_mosaic_coverage"],
-        "footprints": recipe["create_footprints"],
+        "footprints": recipe["create_seamline_footprints"],
         "inspect": {"plugin": "inspect_coverage", "core:run": True, "core:require_outputs": True,
                     "core:requires": "const:footprints",
                     "param:input_images": "collect:current_image_paths"},
@@ -154,3 +166,39 @@ def test_vhr_passes_min_polygon_area_to_spectralmatch(tmp_path, minimum, expecte
         min_polygon_area=minimum,
     )
     assert len(gpd.read_file(output)) == expected
+
+
+def test_saved_vector_bounds_are_staged_and_read_without_raster_pixels(tmp_path):
+    from workflow_helpers import import_settings, stage, transfer
+
+    # An unreadable raster proves vector_bounds uses only its identifier and vector.
+    image = tmp_path / 'image.tif'
+    image.write_text('Raster pixels are deliberately unavailable')
+    vector = tmp_path / 'image_footprint.gpkg'
+    shape = box(0, 0, 10, 10).difference(box(2, 2, 3, 3))
+    gpd.GeoDataFrame({'image': ['original_scene'], 'image_path': [str(image)]},
+                     geometry=[shape], crs=3857).to_file(vector, layer='footprints')
+    recipe = {
+        'shared': {'plugin': 'shared', 'core:run': True, 'core:log_to_console': False,
+                   'core:show_progress': False, 'core:save_statistics_path': None,
+                   'core:load_statistics_path': None},
+        'files': import_settings(image, tmp_path),
+        'coverage': {
+            'plugin': 'create_footprints', 'core:run': True,
+            'core:require_outputs': 'param:output_polygons',
+            'param:input_images': [str(vector)],
+            'param:vector_layer': 'footprints',
+            'param:footprint_source': 'vector_bounds',
+            'param:output_polygons': str(tmp_path / 'output/coverage.gpkg'),
+        },
+    }
+    staged, uploads, downloads = stage(recipe, tmp_path)
+    assert str(vector) in uploads
+    transfer(uploads)
+    Workflow(staged).run()
+    output = downloads[str(tmp_path / 'output/coverage.gpkg')]
+    result = gpd.read_file(output)
+    assert result.geometry.iloc[0].equals(shape)
+    assert result.crs.to_epsg() == 3857
+    assert result.image.iloc[0] == 'original_scene'
+    assert result.image_path.iloc[0] == str(image)

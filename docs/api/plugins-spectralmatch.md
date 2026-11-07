@@ -1,6 +1,6 @@
 # Individual SpectralMatch functions
 
-These adapters import the installed SpectralMatch functions directly. Processing algorithms remain in that package. YAML uses the native parameter names, with explicit connections in `setup_spectralmatch` and subsequent steps in [the WorldView recipe](https://github.com/cankanoa/vhrharmonize/blob/main/configs/example.worldview.yml). Statistics functions and the old pipeline adapter are excluded.
+These adapters import the installed SpectralMatch functions directly. Processing algorithms remain in that package. YAML uses the native parameter names, with explicit connections in `shared` and the processing steps in [the WorldView recipe](https://github.com/cankanoa/vhrharmonize/blob/main/configs/example.worldview.yml). Statistics functions and the old pipeline adapter are excluded.
 
 All functions are available from `vhrharmonize` in Python and as `plugin: function_name` in YAML. Each has a generated `vhr function_name --config recipe.yml` command. Use explicit file lists in recipes for core dependency tracking, reuse, validation and HPC transfers. The full native parameter catalog, defaults and concise option comments are in the example recipe.
 
@@ -45,41 +45,44 @@ clipped to its source footprint, preserving overlap for matching and movement.
 Buffering also extends beyond the outline. Empty owners are omitted, and VHR
 retains only the corresponding workflow scenes in their original order.
 
-The WorldView recipe invokes `plugin: create_footprints` twice: the early
-`standardize_mosaic_coverage` call uses IMD geometry, ranking and a margin, then
-`mask_mosaic_coverage` crops the rasters once before coregistration and matching.
-The later `create_footprints` call retains raw valid-data footprints for final
-seamlines. Raw defaults preserve overlaps; outline/ranking/buffering recomputes
-coverage as a group and replaces the polygon file only after success.
+The WorldView recipe invokes `plugin: create_footprints` three times:
 
-The initial coverage recipe favors the lowest combined raw `view_zenith` and
-`solar_zenith`, with equal weight per degree and `image_rank_descending: true`.
-**Higher expression values rank on top by default.** Negating the raw sum makes
-the lowest combined angle produce the highest ranking value:
+- `polygonize_images` runs per scene after cloud masking. It writes an individual
+  `_footprint.gpkg` into the processed folder and validates cached vectors on reruns.
+- `standardize_mosaic_coverage` uses `footprint_source: vector_bounds` with
+  `input_images: collect:polygonized_footprint_path`. It reads those saved geometries,
+  applies ranking and a margin, then `mask_mosaic_coverage` crops the rasters.
+- `create_seamline_footprints` recalculates valid-data polygons after alignment and
+  radiometric matching, directly before `postprocess_footprints` consumes them.
 
-```text
--({var:view_zenith} + {var:solar_zenith})
+In vector mode `input_images` selects saved vectors, one original image per file.
+`image_field_name` selects the ID column, while `image_path` contains the original
+raster path. These identifiers and saved scalar attributes are retained; raster
+files are not required or opened. `vector_layer` selects a layer, or defaults to
+the first. Multiple features with the same image ID are combined before ranking.
+Explicit `metadata_records` or CSV values override saved attributes with matching
+names. VHR tracks and stages the vector files as dependencies and removes scenes
+using their preserved image IDs.
+
+The initial coverage recipe ranks each connected polygon component using:
+
+```yaml
+param:image_rank_function: >-
+  5 * log(max({stat:area_crs}, 1) / 1000000) / log(2)
+  - ({var:view_zenith} + {var:solar_zenith})
 ```
 
-There is no standardization or cloud-cover term in this recipe. Both angles at
-zero produce the best score, zero; larger combined angles produce lower scores.
-The expression also works for a single image or constant-angle sets.
+`stat:area_crs` is calculated from each component's geometry after outline clipping
+and before ownership subtraction/buffering. Holes are subtracted. It uses squared
+CRS units; the example uses metres, making `/1000000` an area in km². Doubling a
+component's area offsets five degrees of worse combined view/solar zenith.
+MultiPolygons are ranked as separate components with the same image ID and metadata,
+so a small island cannot borrow a larger component's area bonus. The statistic is
+not a table field; `var:area_crs` remains an ordinary arbitrary column reference.
+Ranking without a geometry-statistic reference continues to operate per image.
 
-SpectralMatch's summary placeholders remain available for other ranking
-expressions. `{var:field}` selects an image attribute. `{summary:field}` selects an
-image-level summary across the candidates entering that ranking call, after
-outline clipping and before ownership assignment. Supported summaries are
-`mean`, `std`, `variance`, `min`, `max`, `median`, `sum`, `count`, and `range`.
-`std` and `variance` use the population (`ddof=0`); each image counts equally.
-Referenced summary fields must contain finite numeric values for every candidate.
-The native `image_rank_function` default remains `None`, and the later raw
-footprint call leaves it unset.
-
-The former VHR `seamline_metadata` plugin has been removed. Use `input_images`,
-`output_polygons`, `output_layer`, and `eight_connected` in place of its
-`image_paths`, `output_path`, `layer`, and `calculate_bounds_eight_connected`.
-Native raw-output reuse uses `resume_from_outputs`, replacing `reuse`. Install
-the updated SpectralMatch checkout in both local and HPC environments.
+Raw defaults preserve overlaps; outline/ranking/buffering recomputes coverage as
+a group and replaces the polygon file only after success.
 
 ::: vhrharmonize.plugins.create_footprints
 

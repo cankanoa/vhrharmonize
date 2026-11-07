@@ -222,3 +222,7 @@ date for each parameter (`null` for a default or missing value). The legacy
 `parameter_dates` when values come from multiple dates.
 
 Initial coverage (`create_footprints`) accepts `param:min_polygon_area: 1.0` to remove individual owned polygon pieces smaller than 1 square metre before buffering. Use YAML `null` (Python `None`) to disable this filter. The default applies when outline, ranking or buffering controls are used; ordinary raw footprint generation is unchanged.
+
+The WorldView recipe caches per-image polygons in `polygonize_images`, beside the processed rasters. Initial coverage reads those GeoPackages with `footprint_source: vector_bounds`, `input_images: collect:polygonized_footprint_path`, and `vector_layer: footprints`. After alignment and matching, `create_seamline_footprints` regenerates polygons just before seamline postprocessing.
+
+Coverage ranking can use `{stat:area_crs}` to calculate and rank each connected polygon's area in squared CRS units, after outline clipping and before overlap subtraction. This statistic is separate from `{var:field}` table columns. Saved vectors supply their original configured image ID, `image_path`, and attributes; the separate `input_vectors` parameter is no longer used by `create_footprints`.

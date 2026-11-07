@@ -86,7 +86,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
         assert counts[step]["processing"] == 0
     assert counts["cloud_mask"]["loaded"] == 1
     assert counts["alignment"]["processing"] == 1
-    assert counts["create_footprints"]["processing"] == 1
+    assert counts["create_seamline_footprints"]["processing"] == 1
 
 
 def test_planet_recipe_uses_same_runner(make_test_raster, tmp_path):

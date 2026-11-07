@@ -36,10 +36,22 @@ class CreateFootprints(SpectralMatchPlugin):
             return os.path.normcase(os.path.realpath(filename))
 
         frame = gpd.read_file(params["output_polygons"], layer=params.get("output_layer", "footprints"))
-        retained = {identity(filename) for filename in frame["image_path"]}
         paths = params["input_images"]
         if not isinstance(paths, list) or len(paths) != len(scene_ids):
-            raise ValueError("Scene removal requires one explicit input image per scene")
+            raise ValueError("Scene removal requires one explicit input file per scene")
+        if params.get("footprint_source") == "vector_bounds":
+            field = params.get("image_field_name", "image")
+            retained = set(frame[field].astype(str))
+            removed = []
+            for scene_id, filename in zip(scene_ids, paths):
+                source = gpd.read_file(filename, layer=params.get("vector_layer"))
+                identifiers = source[field].astype(str).unique()
+                if len(identifiers) != 1:
+                    raise ValueError("Each footprint vector must identify exactly one image")
+                if identifiers[0] not in retained:
+                    removed.append(scene_id)
+            return removed
+        retained = {identity(filename) for filename in frame["image_path"]}
         return [scene_id for scene_id, filename in zip(scene_ids, paths)
                 if identity(filename) not in retained]
 
