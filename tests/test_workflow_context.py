@@ -13,10 +13,30 @@ from vhrharmonize.workflow.values import (
     evaluate_settings,
     expression,
     expression_names,
+    references,
     resolve,
 )
 from workflow_helpers import context_controls
 from workflow_helpers import import_settings, install_function, stage, transfer
+
+
+@pytest.mark.parametrize("literal", ["var", "const", "collect", "expr", "path"])
+def test_bare_namespace_names_are_literals_not_dependencies(literal):
+    assert resolve(literal, {}) == literal
+    assert references(literal) == set()
+    assert references({"core:scope": literal}) == set()
+
+
+@pytest.mark.parametrize("selector, expected", [
+    ("var:", {"var.*"}),
+    ("var:$", {"var.*"}),
+    ("const:", {"const.*"}),
+    ("collect:$", {"collect:*"}),
+    ("var:atmosphere.water_vapor", {"var.atmosphere"}),
+    ("path:expr:var.output_dir & '/image.tif'", {"var.output_dir"}),
+])
+def test_explicit_namespace_references_keep_their_dependencies(selector, expected):
+    assert references(selector) == expected
 
 
 @pytest.fixture

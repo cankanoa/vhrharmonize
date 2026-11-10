@@ -433,6 +433,56 @@ def test_explicit_atmosphere_context_ignores_old_corrupt_sidecar(pipeline, monke
     assert workflow.records[0]["context"]["var"]["water_vapor"] == 2.5
 
 
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("uses_atmosphere", [False, True])
+def test_scene_scope_does_not_require_unrelated_atmosphere(
+    pipeline, make_test_raster, monkeypatch, cached, uses_atmosphere
+):
+    original, raw = pipeline
+    calls = []
+
+    def atmosphere():
+        calls.append("atmosphere")
+        return {"water_vapor": 2.5}
+
+    def copy(input_path, output_path, water_vapor=None):
+        if water_vapor is not None:
+            assert water_vapor == 2.5
+        shutil.copy2(input_path, output_path)
+
+    install_function(monkeypatch, "atmosphere", atmosphere)
+    install_function(monkeypatch, "copy_with_atmosphere", copy,
+                     input_paths={"input_path"}, output_paths={"output_path"})
+    config = {key: original[key] for key in ("shared", "import_files")}
+    config["atmosphere"] = {
+        "plugin": "atmosphere", "core:run": True, "var:atmosphere": "returned:$",
+    }
+    config["correct"] = {
+        **copy_step("corrected", "mul", "expr:const.temp_dir & '/corrected.tif'"),
+        "plugin": "copy_with_atmosphere", "param:water_vapor": "var:atmosphere.water_vapor",
+    }
+    config["cloud_mask"] = copy_step(
+        "cloudmasked", "corrected", "expr:const.output_dir & '/cloudmasked.tif'",
+        require_outputs=True,
+    )
+    config["finish"] = {
+        **copy_step("finished", "cloudmasked", "expr:const.output_dir & '/finished.tif'",
+                    require_outputs=True),
+        "plugin": "copy_with_atmosphere", "core:scope": "var",
+    }
+    if uses_atmosphere:
+        config["finish"]["param:water_vapor"] = "var:atmosphere.water_vapor"
+    if cached:
+        make_test_raster(Path(config["import_files"]["const:output_dir"]) / "cloudmasked.tif")
+    workflow = Workflow(config)
+    counts = workflow.counts()
+    assert counts["atmosphere"]["processing"] == int(not cached or uses_atmosphere)
+    assert counts["correct"]["processing"] == int(not cached)
+    workflow.run()
+    assert calls == (["atmosphere"] if not cached or uses_atmosphere else [])
+    assert Path(config["import_files"]["const:output_dir"], "finished.tif").is_file()
+
+
 def test_cached_raster_does_not_require_unused_temporary_mask(
     pipeline, make_test_raster, monkeypatch
 ):

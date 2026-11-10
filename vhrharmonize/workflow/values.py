@@ -330,7 +330,9 @@ def references(value):
         return set().union(*(references(v) for v in value.values()))
     if not isinstance(value, str):
         return set()
-    kind, _, text = value.partition(":")
+    kind, colon, text = value.partition(":")
+    if not colon:
+        return set()
     if kind == "path":
         return references(text)
     if kind in {"var", "const"}:
