@@ -256,6 +256,20 @@ def _execute(payload, *, executor=None):
                 with swap.apply(params) as (local_params, originals):
                     return remap_paths(plugin.run(params=local_params, shared=shared), originals)
             return plugin.run(params=params, shared=shared)
+        if plugin.writing_postfix_parameter is not None:
+            # Native functions see final paths for reuse and only switch to
+            # writing paths inside their actual writers, after that decision.
+            native_params = {**params, plugin.writing_postfix_parameter: policy.postfix}
+            if executor is not None:
+                native_params[plugin.executor_parameter] = executor
+            if swap is not None:
+                with swap.apply(native_params, publication=policy) as (local_params, originals):
+                    local_policy = policy.relocated({original: local for local, original in originals.items()})
+                    with plugin.output_finalizer(local_policy.finish):
+                        result = plugin.run(params=local_params, shared=shared)
+                    return remap_paths(result, originals)
+            with plugin.output_finalizer(policy.finish):
+                return plugin.run(params=native_params, shared=shared)
         features = plugin.file_features()
         writing_names = features["output_validation_paths"] | features["output_overview_calculation_paths"]
         worker_names = (plugin.worker_output_parameters(params) & writing_names) if executor is not None else set()

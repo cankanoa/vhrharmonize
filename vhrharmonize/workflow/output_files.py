@@ -1,7 +1,7 @@
 """Publish completed plugin outputs without exposing in-progress final filenames."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
 from time import monotonic, time_ns
@@ -61,6 +61,13 @@ class OutputPolicy:
     step: str = "output"
     overview_reporters: dict = field(default_factory=dict)
 
+    def relocated(self, mapping):
+        """Retain validation settings when explicit temp-file swapping relocates files."""
+        return replace(self,
+            validation_paths=tuple(mapping.get(p, p) for p in self.validation_paths),
+            overview_paths=tuple(mapping.get(p, p) for p in self.overview_paths),
+            overview_reporters={mapping.get(p, p): v for p, v in self.overview_reporters.items()})
+
     @contextmanager
     def overview(self, filename):
         from vhrharmonize.io.progress import progress_context
@@ -113,6 +120,8 @@ class OutputPolicy:
                 elif os.path.isfile(dst):
                     os.unlink(dst)  # Do not attach stale masks/overviews to the new image.
             os.replace(work, final)
+            if os.path.isfile(final + ".incomplete"):
+                os.unlink(final + ".incomplete")
 
     def run(self, function, args=(), kwargs=None, *, outputs=()):
         outputs = tuple(dict.fromkeys(outputs))

@@ -5,6 +5,12 @@ from .base import FunctionPlugin
 
 class SpectralMatchPlugin(FunctionPlugin):
     options = {"skip_single_image"}
+    writing_postfix_parameter = "validity_writing_postfix"
+
+    def output_finalizer(self, callback):
+        """Keep core validation/overviews at the native writer's publication point."""
+        from spectralmatch.utils_output import output_finalizer
+        return output_finalizer(callback)
 
     def run(self, *, params, shared):
         """Optionally pass a one-image group through a matching-only step."""
@@ -25,7 +31,11 @@ class SpectralMatchPlugin(FunctionPlugin):
             if source == output:
                 raise ValueError("Single-image output must differ from its input")
             output.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, output)
+            from spectralmatch.utils_output import output_context, current_output_context, writing_outputs
+            _, finalizer = current_output_context()
+            with output_context(params.get("validity_writing_postfix"), finalizer):
+                with writing_outputs(str(output)) as (destination,):
+                    shutil.copy2(source, destination)
             return [str(output)]
         return super().run(params=params, shared=shared)
 

@@ -46,6 +46,7 @@ def json_value(value):
 
 class FunctionPlugin:
     executor_parameter = None
+    writing_postfix_parameter = None
     tile_threads_parameter = None
 
     scope = "var"
@@ -115,7 +116,7 @@ class FunctionPlugin:
         from vhrharmonize.parameters import function_parameters
 
         declared = {key: getattr(self, key) for key in
-                    ("executor_parameter", "tile_threads_parameter")}
+                    ("executor_parameter", "tile_threads_parameter", "writing_postfix_parameter")}
         accepted = None
         for key, name in declared.items():
             if name is None:
@@ -131,6 +132,8 @@ class FunctionPlugin:
         values = {}
         if self.executor_parameter is not None:
             values[self.executor_parameter] = None
+        if self.writing_postfix_parameter is not None:
+            values[self.writing_postfix_parameter] = None
         if self.tile_threads_parameter is not None:
             values[self.tile_threads_parameter] = (cpu_count() or 1) if tile_threads in ("cpu", "num_cpu") else tile_threads
         return values

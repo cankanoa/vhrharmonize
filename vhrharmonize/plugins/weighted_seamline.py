@@ -1,6 +1,6 @@
 """weighted_seamline: thin adapter for the installed SpectralMatch function."""
 
-from .base import FunctionPlugin
+from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
 
@@ -20,7 +20,7 @@ def weighted_seamline(*args, **kwargs):
 weighted_seamline.__parameter_sources__ = (_upstream,)
 
 
-class WeightedSeamline(FunctionPlugin):
+class WeightedSeamline(SpectralMatchPlugin):
     target = "vhrharmonize.plugins.weighted_seamline:weighted_seamline"
     scope = "aggregate"
     input_dependency_paths = frozenset(["input_images", "input_polygons"])

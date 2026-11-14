@@ -61,6 +61,14 @@ inside workflow workers and receive `None` for the declared executor argument.
 local CPU count, and `None` passes through. Undeclared arguments keep their normal
 shared, explicit, and function-default behavior.
 
+Plugins with native resume logic can declare
+`writing_postfix_parameter = "validity_writing_postfix"`. The function receives
+original output filenames and this single `str | None` parameter, and switches to
+temporary names only after its own reuse check. The adapter's
+`output_finalizer(callback)` context connects completed writes to the runner's
+existing validation, overview and publication handling. SpectralMatch provides
+this integration; do not wrap its entire invocation in an output-path rewrite.
+
 An aggregate adapter can identify the image inputs of each submitted worker job
 by overriding `worker_image_paths(function, args, kwargs)`. Return a source path
 or sequence of source paths for that job, or `()` when unknown. For example, if

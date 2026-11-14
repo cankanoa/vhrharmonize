@@ -20,7 +20,7 @@ class TempFileSwap:
     requirements: tuple[str, ...] = ()
 
     @contextmanager
-    def apply(self, params):
+    def apply(self, params, *, publication=None):
         """Keep original destinations outside the call; copy outputs back on success."""
         files, retained = {}, set()
 
@@ -73,7 +73,10 @@ class TempFileSwap:
                 try:
                     Path(original).parent.mkdir(parents=True, exist_ok=True)
                     # NAS destinations may allow writes but reject timestamp changes.
-                    shutil.copyfile(local, original)
+                    if publication is None:
+                        shutil.copyfile(local, original)
+                    else:
+                        publication.run(shutil.copyfile, (str(local), original), outputs=(original,))
                 except OSError as exc:
                     raise TempFileSwapError(f"Could not copy temporary output to {original}; retained at {local}") from exc
                 retained.remove(local.parent)

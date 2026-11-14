@@ -721,10 +721,16 @@ Interrupted writing files are never reused as final products. `null` or `""`
 disables this naming behavior. The final rename is on the destination filesystem;
 it cannot prevent storage failures. GDAL mask/overview sidecars follow the rename.
 
+SpectralMatch receives the original filenames and one native function parameter,
+`validity_writing_postfix: str | None`. Core supplies the configured suffix; native
+standalone calls default to `None`. Functions check native reuse against the final
+filenames before opening a temporary writing destination. Existing validation and
+overview settings still run before each newly written output is published.
+
 Aggregate adapters can implement `worker_output_parameters(params)` to identify
 output parameters written by image jobs, and `worker_output_paths(function, args,
 kwargs)` to identify each job's destinations. The core wraps those jobs, validates
 and publishes their outputs before returning the worker result, and preserves
-image attribution if validation fails. SpectralMatch adapters implement these
-hooks for their image jobs. Other declared file outputs are published when the
-plugin call completes.
+image attribution if validation fails. SpectralMatch uses its native writer hook
+instead, so reuse checks see unchanged paths. Other declared file outputs are
+published when the plugin call completes.
