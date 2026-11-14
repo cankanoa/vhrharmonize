@@ -25,7 +25,6 @@ from vhrharmonize.plugins.base import (
 )
 from vhrharmonize.io.metadata import write_json
 from vhrharmonize.io.logging import _log
-from vhrharmonize.io.validation import _existing_output_failures
 from vhrharmonize.io.workflow_utils import remove_output_files
 from .timing import timed_core, timed_preflight
 from .config import validate_config, steps, shared_settings
@@ -34,6 +33,7 @@ from .paths import DIRECTORY_FEATURES, directory_values, directory_bindings
 from .metadata import FinalMetadataWriter
 from .temp_files import TempFileSwap, TempFileSwapError
 from .output_files import OutputPolicy, OutputExecutor, writing_path
+from .validation import ValidationPass
 from .context_io import ContextFiles, LOAD_CONTROLS, SAVE_CONTROLS
 from .values import (
     Pending,
@@ -462,11 +462,8 @@ class Workflow:
                 outputs = path(outputs, base_dir=self.config_dir)
                 loaded_scenes = (
                     bool(outputs) and not any(os.path.isdir(filename) for filename in outputs)
-                    and not _existing_output_failures(outputs,
-                        check_validity=step.get("check_validity", self.controls["check_validity"]),
-                        validity_raster_grid=self.controls["validity_raster_grid"],
-                        validity_raster_check_stop=self.controls["validity_raster_check_stop"], log_to_console=False,
-                        step=step["name"])
+                    and not ValidationPass(self.controls).failures(
+                        outputs, step.get("check_validity", self.controls["check_validity"]))
                     and step.get("reuse", self.controls["run_from_existing"])
                 )
             if loaded_scenes:
@@ -1069,18 +1066,12 @@ class Workflow:
         return self.selected_plugin is None or node.step["plugin"] in {None, self.selected_plugin}
 
     def _failures(self, node, filenames, *, check_validity=None):
-        return _existing_output_failures(
-            list(filenames),
-            check_validity=(
-                node.step.get("check_validity", self.controls["check_validity"])
-                if check_validity is None
-                else check_validity
-            ),
-            validity_raster_grid=self.controls["validity_raster_grid"],
-            validity_raster_check_stop=self.controls["validity_raster_check_stop"],
-            log_to_console=False,
-            step=node.step["name"],
-        )
+        enabled = (node.step.get("check_validity", self.controls["check_validity"])
+                   if check_validity is None else check_validity)
+        validation = getattr(self, "_planning_validation", None)
+        if validation is None:
+            validation = ValidationPass(self.controls)
+        return validation.failures(filenames, enabled)
 
     def _valid(self, node, output_paths):
         filenames = set(output_paths)
@@ -1120,6 +1111,25 @@ class Workflow:
         if self._planned:
             return self
         self._log_core_start("planning")
+        self._planning_validation = ValidationPass(self.controls)
+        try:
+            requests = []
+            for node in self.nodes:
+                paths = set(node.paths("output_reuse_paths", "output_target_paths", "output_dependency_paths"))
+                requests.extend((p, False) for p in paths)
+                enabled = node.step.get("check_validity", self.controls["check_validity"])
+                if enabled and (node.step.get("reuse", self.controls["run_from_existing"]) or not self._runs(node)):
+                    requests.extend((p, True) for p in paths & set(node.paths("output_validation_paths")))
+            self._planning_validation.prepare(requests)
+            self._plan_nodes()
+        finally:
+            # Discovery may execute plugins and recursively plan a new scene list.
+            # Never reuse cached file checks after any processing can occur.
+            self._planning_validation = None
+        self._discover_ready_var_records()
+        return self
+
+    def _plan_nodes(self):
         for node in self.nodes:
             node.loaded = self._valid(node, node.paths("output_reuse_paths"))
 
@@ -1184,8 +1194,6 @@ class Workflow:
                 local_returns = node.dynamic_names if self.preparing and node.step.get("execution_mode", "run") == "run" else ()
                 require(node, targets or None, local_returns)
         self._planned = True
-        self._discover_ready_var_records()
-        return self
 
     def counts(self):
         self.plan()
@@ -1412,6 +1420,7 @@ class Workflow:
                 raise ValueError("core:calculate_overviews requires shared.param:window_scales")
         policy = OutputPolicy(
             postfix=self.controls["validity_writing_postfix"], check_validity=mode,
+            tile_threads=self.controls["tile_threads"],
             raster_grid=self.controls["validity_raster_grid"], check_stop=self.controls["validity_raster_check_stop"],
             validation_paths=tuple(node.paths("output_validation_paths")), overview_paths=tuple(overview_paths),
             overview_scales=scales, log_to_console=self.controls["log_to_console"], step=node.step["name"],

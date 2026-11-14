@@ -699,6 +699,14 @@ new outputs before publishing them. `false` disables format checks; existence
 checks still apply. TIFF metadata/byte ranges, JSON syntax and GeoPackage
 integrity/readability are checked independently of raster sampling.
 
+Planning reports `[core:validation]` with a percentage of files checked.
+`core:concurrent_processing` limits simultaneous file checks using the configured
+workflow backend (Dask uses cluster capacity). `core:tile_threads` controls raster
+grid-reading threads within each file, with a separate GDAL handle per thread;
+`null` uses one validation thread. Planning caches each path's result separately
+for existence and format checks, so dependency resolution does not validate the
+same output twice. The cache is discarded before execution or scene discovery.
+
 `core:validity_raster_grid: 255` reads a pixel every 255 pixels on each axis in
 each band, including masks. `1` reads every base-resolution pixel in bounded
 windows; `false` disables pixel reads, retaining structural checks.

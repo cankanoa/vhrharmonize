@@ -4,6 +4,8 @@ import os
 import math
 import json
 import struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Event
 from typing import List, Dict
 from osgeo import gdal
 from tifffile import TiffFile, TiffFileError
@@ -39,6 +41,7 @@ def _tiff_truncation_reason(path: str) -> str | None:
 def _gdal_raster_is_valid(
     path: str, *, validity_raster_grid: int | bool = 255,
     validity_raster_check_stop: str = "readable",
+    tile_threads: int | str | None = 1,
 ) -> tuple[bool, str | None]:
     """Inspect metadata and optionally read a regular pixel grid in every band.
 
@@ -67,8 +70,13 @@ def _gdal_raster_is_valid(
                 if dataset.GetRasterBand(index) is None:
                     return False, f"missing band {index}"
             if validity_raster_grid is not False:
-                found = _read_raster_grid(dataset, width, height, validity_raster_grid,
-                                          validity_raster_check_stop)
+                threads = (os.cpu_count() or 1) if tile_threads in ("cpu", "num_cpu") else (tile_threads or 1)
+                if threads > 1:
+                    found = _read_raster_grid_parallel(path, dataset, width, height,
+                        validity_raster_grid, validity_raster_check_stop, threads)
+                else:
+                    found = _read_raster_grid(dataset, width, height, validity_raster_grid,
+                                              validity_raster_check_stop)
                 if validity_raster_check_stop == "has_valid_data" and not found:
                     return False, "no finite valid pixels found in validity sample"
     except Exception as exc:
@@ -80,17 +88,57 @@ def _gdal_raster_is_valid(
 
 def _read_raster_grid(dataset, width, height, spacing, stop):
     """Read all requested samples unless the caller explicitly permits early success."""
+    return _read_grid_rows(dataset, width, height, spacing, stop)
+
+
+def _read_grid_rows(dataset, width, height, spacing, stop, first=0, last=None, found=None):
     stride = 512 if spacing == 1 else spacing
-    for index in range(1, dataset.RasterCount + 1):
+    rows = (height + stride - 1) // stride
+    last = dataset.RasterCount * rows if last is None else last
+    for row in range(first, last):
+        index, y = row // rows + 1, (row % rows) * stride
         band = dataset.GetRasterBand(index)
-        for y in range(0, height, stride):
-            for x in range(0, width, stride):
-                w, h = (min(512, width - x), min(512, height - y)) if spacing == 1 else (1, 1)
-                valid = _gdal_band_window_has_valid_pixel(band, x, y, w, h,
-                                                         check_values=stop == "has_valid_data")
-                if stop == "has_valid_data" and valid:
-                    return True
+        for x in range(0, width, stride):
+            if found is not None and found.is_set():
+                return False
+            w, h = (min(512, width - x), min(512, height - y)) if spacing == 1 else (1, 1)
+            valid = _gdal_band_window_has_valid_pixel(band, x, y, w, h,
+                                                     check_values=stop == "has_valid_data")
+            if stop == "has_valid_data" and valid:
+                if found is not None:
+                    found.set()
+                return True
     return False
+
+
+def _read_raster_grid_parallel(path, dataset, width, height, spacing, stop, threads):
+    """Partition band rows with bounded tasks and one private GDAL handle per thread."""
+    stride = 512 if spacing == 1 else spacing
+    rows = dataset.RasterCount * ((height + stride - 1) // stride)
+    workers = min(threads, rows)
+    found = Event()
+
+    def read(first, last):
+        local = None
+        try:
+            with gdal.ExceptionMgr(useExceptions=True):
+                local = gdal.OpenEx(path, gdal.OF_RASTER)
+                if local is None:
+                    raise IOError(f"GDAL open failed: {path}")
+                return _read_grid_rows(local, width, height, spacing, stop, first, last, found)
+        except BaseException:
+            found.set()
+            raise
+        finally:
+            local = None
+
+    any_valid = False
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(read, rows * i // workers, rows * (i + 1) // workers)
+                   for i in range(workers)]
+        for future in as_completed(futures):
+            any_valid = future.result() or any_valid
+    return any_valid
 
 
 def _gdal_band_window_has_valid_pixel(
@@ -165,6 +213,7 @@ def _existing_output_failures(
     check_validity: bool,
     validity_raster_grid: int | bool = 255,
     validity_raster_check_stop: str = "readable",
+    tile_threads: int | str | None = 1,
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -182,6 +231,7 @@ def _existing_output_failures(
         elif _is_gdal_raster_path(output_path):
             is_valid, reason = _gdal_raster_is_valid(
                 output_path,
+                tile_threads=tile_threads,
                 validity_raster_grid=validity_raster_grid,
                 validity_raster_check_stop=validity_raster_check_stop,
             )
@@ -202,6 +252,7 @@ def _existing_outputs_are_reusable(
     check_validity: bool,
     validity_raster_grid: int | bool = 255,
     validity_raster_check_stop: str = "readable",
+    tile_threads: int | str | None = 1,
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -210,6 +261,7 @@ def _existing_outputs_are_reusable(
     return bool(output_paths) and not _existing_output_failures(
         output_paths,
         check_validity=check_validity,
+        tile_threads=tile_threads,
         validity_raster_grid=validity_raster_grid,
         validity_raster_check_stop=validity_raster_check_stop,
         log_to_console=log_to_console,

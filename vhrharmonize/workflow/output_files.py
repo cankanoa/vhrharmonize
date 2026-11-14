@@ -51,6 +51,7 @@ def companions(filename):
 class OutputPolicy:
     postfix: str | None = "_writing"
     check_validity: str | bool = "before_reuse"
+    tile_threads: int | str | None = 1
     raster_grid: int | bool = 255
     check_stop: str = "readable"
     validation_paths: tuple[str, ...] = ()
@@ -92,6 +93,7 @@ class OutputPolicy:
         checked = [mapping.get(p, p) for p in outputs if p in self.validation_paths]
         failures = _existing_output_failures(
             checked, check_validity=self.check_validity == "around",
+            tile_threads=self.tile_threads,
             validity_raster_grid=self.raster_grid, validity_raster_check_stop=self.check_stop,
             log_to_console=False, step=self.step,
         )
