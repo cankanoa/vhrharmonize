@@ -20,15 +20,11 @@ vhr hpc-prepare --config configs/example.hpc.yml
 vhr hpc-upload --config configs/1.staged.hpc.yml
 vhr hpc-start --config configs/1.staged.hpc.yml
 vhr hpc-status --config configs/1.staged.hpc.yml
-vhr hpc-progress --config configs/1.staged.hpc.yml
 vhr hpc-download --config configs/1.staged.hpc.yml
 ```
 
-`hpc-progress` fetches just the public progress snapshot and prints JSON when
-available, without changing the staged YAML. Set `shared.core:report_progress: true`
-and `shared.core:show_progress: false` to publish snapshots without a console dashboard. `hpc-status`
-fetches the same data and renders it with `prompt_toolkit` alongside scheduler status and
-logs. See the [progress API](../api/progress.md) for Python callbacks and polling.
+`hpc-status` fetches scheduler status and job logs. Workflow progress remains in
+memory and in terminal output; no progress JSON files are written or fetched.
 
 Preparation uses the same requested-output dependency plan as local execution. It uploads required inputs, valid reusable products, and explicitly loaded context files. Generated outputs are downloaded when requested through `core:require_outputs` and enabled by the plugin's download declaration.
 
@@ -54,8 +50,7 @@ expressions are preserved. The source recipe and local preparation are unchanged
 Lists and null replace values; nested mappings merge. Unknown steps and unsupported
 settings fail before local processing. Supported `core:`/`param:` execution keys are
 `concurrent_processing_backend`, `concurrent_processing`, `tile_threads`,
-`dask_scheduler`, `image_threads`, `io_threads`, `log_to_console`, `show_progress`,
-and `report_progress`. Keep dependency, path, and step-enablement changes in the
+`dask_scheduler`, `image_threads`, `io_threads`, `log_to_console`, and `show_progress`. Keep dependency, path, and step-enablement changes in the
 source recipe so local preparation can plan their transfers correctly.
 
 `hpc-upload` uses the same terminal display as workflow progress, with a total row
@@ -106,7 +101,7 @@ locally. Neither forces the cutoff step on or changes `core:require_outputs`.
 
 With `debug_logs: true` in the HPC YAML, preparation logs its start, the local
 execution cutoff, and the start of staging. Discovery-only local runs keep their
-logs and progress snapshots but omit the empty workflow dashboard.
+logs and in-memory progress but omit the empty workflow dashboard.
 
 The cutoff names a workflow step, independently of its `plugin:` selection.
 Both sensor examples use `discover_inputs` for that step; changing its plugin

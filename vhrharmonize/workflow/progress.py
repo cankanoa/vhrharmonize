@@ -4,16 +4,14 @@ from __future__ import annotations
 
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from copy import deepcopy
 from datetime import datetime, timezone
-import json
 import os
 import re
 from multiprocessing import get_context
 from pathlib import Path
 from queue import Empty, Queue
-from tempfile import NamedTemporaryFile
 from threading import RLock, Thread
 from time import monotonic, time_ns
 from uuid import uuid4
@@ -133,7 +131,9 @@ class ProgressState:
                     return
             if "started_ns" in event:
                 task.started_ns = event["started_ns"]
-            if kind == "computed":
+            if kind == "accepted":
+                self.complete(event["task"])
+            elif kind == "computed":
                 task.duration = max(0.0, event["duration"])
                 task.computed = True
             elif kind == "failed":
@@ -205,7 +205,7 @@ def _plain_text(value):
 class WorkflowProgress:
     """Collect worker events and publish detached snapshots to parent consumers."""
 
-    def __init__(self, workflow, *, callbacks=(), snapshot_path=None):
+    def __init__(self, workflow, *, callbacks=()):
         self.workflow = workflow
         workers = workflow.controls["concurrent_processing"]
         if workers == "num_cpu":
@@ -214,13 +214,11 @@ class WorkflowProgress:
         self.queue = Queue()
         self.manager = None
         self.dask_topic = None
-        self.snapshot_path = snapshot_path
         self.snapshot_status = "running"
         self.removed_scenes = set()
         self.removed_by_step = {}
         self.run_id = getattr(workflow, "_run_id", None) or uuid4().hex
         self.callbacks: list[ProgressCallback] = list(callbacks)
-        self._last_snapshot = 0
         self._last_publish = 0
         self.sync()
 
@@ -330,6 +328,12 @@ class WorkflowProgress:
         return EventReporter(_DaskEvents(self.dask_topic) if remote else self.queue, identity)
 
     def payload(self, node, payload, *, remote=False):
+        from .output_files import OutputPolicy
+        payload = tuple(
+            replace(item, overview_reporters={p: self.reporter(node, remote=remote, overview=p)
+                                             for p in item.overview_paths})
+            if isinstance(item, OutputPolicy) else item for item in payload
+        )
         return (*payload, self.reporter(node, remote=remote))
 
     def complete(self, node):
@@ -561,7 +565,6 @@ class WorkflowProgress:
             return
         self._last_publish = monotonic()
         data = self.snapshot()
-        self.save_snapshot(data, force=force)
         for callback in self.callbacks[:]:
             try:
                 callback(deepcopy(data))
@@ -571,30 +574,12 @@ class WorkflowProgress:
                 with self.state.lock:
                     self.state.messages.append(_plain_text(f"Progress consumer disabled: {type(exc).__name__}: {exc}"))
 
-    def save_snapshot(self, data, *, force=False):
-        if self.snapshot_path is None or (not force and monotonic() - self._last_snapshot < 1):
-            return
-        self._last_snapshot = monotonic()
-        filename = Path(self.snapshot_path)
-        temporary = None
-        try:
-            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=filename.parent,
-                                    prefix=filename.name + ".", suffix=".tmp", delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump(data, stream, allow_nan=False)
-                stream.write("\n")
-            os.replace(temporary, filename)
-        except (OSError, ValueError, TypeError) as exc:
-            with self.state.lock:
-                message = _plain_text(f"Cannot save progress snapshot: {exc}")
-                if message not in self.state.messages:
-                    self.state.messages.append(message)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
     def __enter__(self):
-        if self.state.workers > 1 and self.workflow.controls["concurrent_processing_backend"] == "process_pool":
+        # Aggregate plugins dispatch image workers even when concurrency is one.
+        # Their overview reporters must therefore use a process-safe queue too.
+        image_overviews = any(n.needed and n.record is None and n.step.get("calculate_overviews")
+                              and self.overview_paths(n) for n in self.workflow.nodes)
+        if (self.state.workers > 1 or image_overviews) and self.workflow.controls["concurrent_processing_backend"] == "process_pool":
             self.manager = get_context("spawn").Manager()
             self.queue = self.manager.Queue()
         self.context = progress_context(messages=lambda text: self.queue.put({"kind": "message", "text": text}))

@@ -97,6 +97,14 @@ class FunctionPlugin:
         """
         return ()
 
+    def worker_output_parameters(self, params):
+        """Output parameters published by individual executor jobs, rather than the coordinator."""
+        return frozenset()
+
+    def worker_output_paths(self, function, args, kwargs):
+        """Declared destinations completed by this worker job; empty for analysis-only jobs."""
+        return ()
+
     def runtime_parameters(self, *, tile_threads):
         """Map workflow controls to explicitly declared function arguments.
 

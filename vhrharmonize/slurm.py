@@ -22,7 +22,6 @@ import yaml
 
 from vhrharmonize.io.logging import _log
 from vhrharmonize.workflow.config import load_config
-from vhrharmonize.progress import ProgressSnapshot
 
 
 PATH_TEMPLATE_RUN_ID = "{run_id}"
@@ -467,7 +466,7 @@ def _remote_workflow_overrides(workflow, overrides):
         # Execution controls do not change the dependency/transfer graph.
         allowed = {"concurrent_processing_backend", "concurrent_processing",
                    "tile_threads", "dask_scheduler", "image_threads", "io_threads",
-                   "log_to_console", "show_progress", "report_progress"}
+                   "log_to_console", "show_progress"}
         for key in settings:
             if not isinstance(key, str) or key.split(":", 1)[0] not in {"core", "param"} or key.split(":", 1)[-1] not in allowed:
                 raise ValueError(f"remote_workflow_overrides.{step}: {key!r} is not an execution setting; change graph/data settings in the workflow recipe")
@@ -791,7 +790,7 @@ def _rsync_download_tree(
                         path = os.path.join(root, name)
                         try:
                             valid = validation._existing_outputs_are_reusable(
-                                [path], check_validity=True, validity_check_grid_size=0,
+                                [path], check_validity=True, validity_raster_grid=255,
                                 log_to_console=True, step="download",
                             )
                         except Exception:
@@ -1078,50 +1077,6 @@ def _print_slurm_status_text(raw_status_text: str) -> None:
     print(raw_status_text)
 
 
-def _fetch_workflow_progress(slurm_data):
-    from .progress import validate_progress_snapshot
-
-    filename = slurm_data.get("remote_workflow_config")
-    if not filename or not slurm_data.get("submitted_job_id"):
-        return None
-    result = _run_ssh(slurm_data, f"cat {_remote_quote(filename + '.progress.json')}", check=False)
-    if result.returncode:
-        return None
-    try:
-        data = validate_progress_snapshot(json.loads(result.stdout))
-    except (ValueError, TypeError):
-        return None
-    if data.get("job_id") and str(data["job_id"]) != str(slurm_data["submitted_job_id"]):
-        return None  # A resubmitted job must never show an earlier job's progress.
-    return data
-
-
-def get_slurm_progress(config: str | Path | Mapping[str, Any]) -> ProgressSnapshot | None:
-    """Fetch a workflow progress snapshot over SSH without printing or editing files.
-
-    Args:
-        config: Staged HPC YAML filename or its already-loaded mapping.
-
-    Returns:
-        The public progress snapshot, or None when absent, malformed, unsupported
-        or from another job. SSH connection errors propagate to the caller.
-    """
-    data = config if isinstance(config, Mapping) else _load_yaml_file(config)
-    return _fetch_workflow_progress(data)
-
-
-def _print_workflow_progress(data):
-    if data is None:
-        return
-    from .workflow.progress_terminal import TerminalProgressDisplay
-
-    print(f"\nWorkflow progress: {data.get('status', 'unknown')} · {data.get('updated_at', '')}")
-    # Print every row once; a status command never starts the live terminal UI.
-    display = TerminalProgressDisplay(stream=sys.stdout)
-    display.update(data)
-    display.print_snapshot()
-
-
 def _status_from_text(raw_status_text: str) -> str:
     match = re.search(r"\bJobState=([A-Za-z_]+)", raw_status_text)
     if not match:
@@ -1149,8 +1104,6 @@ def update_status_slurm_file(config: str) -> Dict[str, Any]:
     slurm_data["remote_slurm_log_paths"] = log_paths
     slurm_data["raw_slurm_log_text"] = log_texts
     slurm_data["status"] = _status_from_text(raw_status_text)
-    progress = get_slurm_progress(slurm_data)
-    slurm_data["workflow_progress"] = progress
     _write_staged_hpc_file(config, slurm_data)
     counts = Counter(result.get("status", "unknown")
                      for result in slurm_data.get("upload_results", {}).values())
@@ -1158,7 +1111,6 @@ def update_status_slurm_file(config: str) -> Dict[str, Any]:
                              if counts else "no recorded results"))
     _print_slurm_log_texts(log_paths, log_texts)
     _print_slurm_status_text(raw_status_text)
-    _print_workflow_progress(progress)
     return slurm_data
 
 
@@ -1277,7 +1229,7 @@ def download_slurm_outputs(config: str) -> None:
                     reusable = validation._existing_outputs_are_reusable(
                         [str(local_path)],
                         check_validity=mode == "validate",
-                        validity_check_grid_size=0,
+                        validity_raster_grid=255,
                         log_to_console=True,
                         step="download",
                     )

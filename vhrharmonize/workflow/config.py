@@ -42,14 +42,15 @@ DEFAULT_SHARED = {
     "output_metadata_path": None,
     "delete_final_json_first": True,
     "run_from_existing": True,
-    "check_validity": True,
-    "validity_check_grid_size": 2048,
+    "check_validity": "before_reuse",
+    "validity_raster_grid": 255,
+    "validity_raster_check_stop": "readable",
+    "validity_writing_postfix": "_writing",
     "delete_temp_dir": False,
     "delete_temp_steps_proactively": True,
     "cleanup_dirs": [],
     "log_to_console": True,
     "show_progress": True,
-    "report_progress": False,
     "save_statistics_path": "statistics.jsonl",
     "load_statistics_path": "statistics.jsonl",
     "concurrent_processing": 1,
@@ -65,14 +66,12 @@ BOOLEANS = {
     "delete_final_json_first",
     "run",
     "reuse",
-    "check_validity",
     "calculate_overviews",
     "run_from_existing",
     "delete_temp_dir",
     "delete_temp_steps_proactively",
     "log_to_console",
     "show_progress",
-    "report_progress",
 }
 
 
@@ -163,10 +162,18 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError("core:processing_direction must be horizontal or vertical")
             if name == "worker_error_case" and value not in ("error", "remove_instence", "remove_and_restart"):
                 raise ValueError("core:worker_error_case must be error, remove_instence, or remove_and_restart")
-            if name == "validity_check_grid_size" and (
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            if name == "check_validity" and value is not False and value not in ("around", "before_reuse"):
+                raise ValueError("core:check_validity must be around, before_reuse, or false")
+            if name == "validity_raster_grid" and value is not False and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 1
             ):
-                raise ValueError("core:validity_check_grid_size must be a non-negative integer")
+                raise ValueError("core:validity_raster_grid must be a positive integer or false")
+            if name == "validity_raster_check_stop" and value not in ("has_valid_data", "readable"):
+                raise ValueError("core:validity_raster_check_stop must be has_valid_data or readable")
+            if name == "validity_writing_postfix" and value is not None and (
+                not isinstance(value, str) or any(c in value for c in ("/", "\\", "\0"))
+            ):
+                raise ValueError("core:validity_writing_postfix must be a filename suffix string or null")
 
 
 def _uses_returned(value):

@@ -321,7 +321,7 @@ def test_removed_scene_scope_is_rejected():
 def test_discovery_cutoff_keeps_existing_graph_and_validation(monkeypatch, tmp_path):
     source = tmp_path / 'raw.txt'
     source.write_text('raw')
-    config = {'settings': shared(**{'const:root': str(tmp_path), 'core:report_progress': True}),
+    config = {'settings': shared(**{'const:root': str(tmp_path), 'core:show_progress': True}),
               'import': importer(source),
               'copy': {'plugin': 'file_source', 'core:run': True, 'core:require_outputs': True,
                        'param:input_path': 'var:raw', 'param:output_path': str(tmp_path / 'result.txt')}}

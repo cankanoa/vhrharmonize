@@ -65,7 +65,16 @@ class ImageTrackingExecutor:
     def submit(self, function, /, *args, **kwargs):
         image_ids = self._identify(function, args, kwargs)
         future = self._executor.submit(function, *args, **kwargs)
+        return self._track(future, image_ids)
 
+    def submit_output(self, function, args, kwargs, policy, outputs):
+        from .output_files import _run_output_job
+
+        image_ids = self._identify(function, args, kwargs)
+        future = self._executor.submit(_run_output_job, function, args, kwargs, policy, outputs)
+        return self._track(future, image_ids)
+
+    def _track(self, future, image_ids):
         def completed(job):
             if not job.cancelled():
                 exc = job.exception()

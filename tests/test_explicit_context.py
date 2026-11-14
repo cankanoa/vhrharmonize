@@ -156,6 +156,7 @@ def test_partial_scene_load_keeps_other_scenes_metadata_dependencies(monkeypatch
 
     def measure(image, output):
         calls.append(Path(image).stem)
+        Path(output).write_text("measured")
         return 9
 
     install_function(monkeypatch, "measure", measure, input_paths=("image",), output_paths=("output",))

@@ -43,7 +43,7 @@ after publishing a final `failed` snapshot.
 ## Request a snapshot
 
 ```python
-from vhrharmonize import load_workflow, read_progress_snapshot
+from vhrharmonize import load_workflow
 
 workflow = load_workflow("workflow.yml")
 # In an application worker thread:
@@ -51,62 +51,18 @@ workflow.run(progress_callback=updates.put)
 # From another thread during execution, or after it finishes:
 snapshot = workflow.get_progress()
 
-# From another process:
-snapshot = read_progress_snapshot("workflow.yml.progress.json")
 ```
 
 `get_progress()` returns an independent snapshot, or `None` before a reported run
 or when reporting is disabled. It retains the final snapshot after success or
 failure. Dry runs do not publish execution progress.
 
-For reporting to a file without a display or Python callback:
+Progress is available through Python callbacks and `Workflow.get_progress()` in
+memory. No progress JSON file is written. `core:show_progress` controls the terminal
+display. HPC status fetches scheduler status and job logs.
 
-```yaml
-shared:
-  plugin: shared
-  core:run: true
-  core:report_progress: true
-  core:show_progress: false
-```
-
-Either control enables collection. When loading a YAML file, reporting writes
-`<workflow.yml>.progress.json`. An explicit `progress_path="/path/status.json"`
-on `run_workflow`, `run_plugin`, or `Workflow.run` also enables reporting and
-overrides this destination. In-memory configurations have no default file.
-The destination's parent directory must exist. Snapshots are replaced atomically
-at most once per second, plus initial and final updates. File-write failures are
-recorded as messages and do not stop processing. Messages are collected even with
-the display off; usual core/plugin logging controls determine which messages
-are emitted.
-
-`read_progress_snapshot()` raises `FileNotFoundError` before a file exists, and
-`ValueError` for invalid data or an unsupported schema version.
-
-## HPC and rendering
-
-```python
-from prompt_toolkit import print_formatted_text
-from vhrharmonize import get_slurm_progress, render_progress
-
-snapshot = get_slurm_progress("configs/1.staged.hpc.yml")
-if snapshot is not None:
-    print_formatted_text(render_progress(snapshot), end="")
-```
-
-`get_slurm_progress()` fetches one snapshot over SSH, without printing, fetching
-Slurm logs, or modifying the staged YAML. It accepts a staged YAML path or its
-loaded mapping. It returns `None` when no snapshot is available, its data/version
-is invalid, or its job ID belongs to another Slurm job. SSH execution errors
-propagate. Apps can poll this function at their own interval.
-
-`vhr hpc-progress --config configs/1.staged.hpc.yml` prints just the JSON snapshot
-when available. `hpc-status` uses the same fetch API, retains the snapshot in its
-staged YAML, and displays it through the same `prompt_toolkit` renderer as local execution.
-`render_progress(snapshot, width=120, ascii_only=False)` returns `FormattedText`
-and never starts a live display. Use `prompt_toolkit.formatted_text.to_plain_text()`
-to obtain an unstyled string. `hpc-status` and redirected workflow output omit
-terminal escape sequences; terminals without Unicode support use ASCII borders.
-These consumers use numeric ETAs from the snapshot; they do not recalculate work.
+`render_progress(snapshot, width=120, ascii_only=False)` produces formatted text
+without starting a live display.
 
 Interactive workflow runs keep the original terminal screen and scrollback.
 Messages are printed once as ordinary terminal lines, using `prompt_toolkit`'s

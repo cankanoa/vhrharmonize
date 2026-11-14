@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import json
 import math
-from pathlib import Path
 from typing import TypedDict
 
 
@@ -169,16 +168,6 @@ def validate_progress_snapshot(data: Mapping) -> ProgressSnapshot:
     return result
 
 
-def read_progress_snapshot(path: str | Path) -> ProgressSnapshot:
-    """Read one atomic snapshot file without importing a frontend or starting a UI.
-
-    FileNotFoundError means no snapshot has been published at this path yet.
-    Invalid JSON, malformed snapshots and unsupported versions raise ValueError.
-    """
-    with Path(path).open(encoding="utf-8") as stream:
-        return validate_progress_snapshot(json.load(stream))
-
-
 def render_progress(snapshot: ProgressSnapshot, *, width=120, ascii_only=False):
     """Build prompt_toolkit formatted text for a static snapshot, without starting a UI.
 
@@ -193,5 +182,5 @@ def render_progress(snapshot: ProgressSnapshot, *, width=120, ascii_only=False):
 
 
 __all__ = ["PROGRESS_VERSION", "ProgressRow", "ActiveOperation", "ProgressSnapshot", "MessageHistory",
-           "ProgressCallback", "TimingEvent", "TimingCallback", "read_progress_snapshot",
+           "ProgressCallback", "TimingEvent", "TimingCallback",
            "validate_progress_snapshot", "render_progress"]

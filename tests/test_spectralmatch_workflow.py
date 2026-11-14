@@ -259,7 +259,7 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
         "defaults": {
             **example["shared"],
             "core:log_to_console": False,
-            "core:validity_check_grid_size": 0,
+            "core:validity_raster_grid": False,
             "param:custom_nodata_value": -9999,
             "param:output_dtype": "float32",
             "param:epsg": 4326,

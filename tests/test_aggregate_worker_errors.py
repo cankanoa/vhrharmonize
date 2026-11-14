@@ -44,6 +44,8 @@ def aggregate_recipe(monkeypatch, tmp_path, *, policy="remove_and_restart", reus
                                input_paths={"input_paths"}, output_paths={"output_paths"},
                                executor_parameter="executor")
     adapter.worker_image_paths = lambda function, args, kwargs: args[0] if function is copy_job else ()
+    adapter.worker_output_parameters = lambda params: {"output_paths"}
+    adapter.worker_output_paths = lambda function, args, kwargs: [args[1]] if function is copy_job else ()
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:worker_error_case": policy,
                    "core:show_progress": False, "core:log_to_console": False,
@@ -86,7 +88,7 @@ def test_restart_rebuilds_inputs_and_keeps_native_reuse_optional(monkeypatch, tm
     assert [record["id"] for record in records] == ["good", "other"]
     assert attempts == [(("good", "bad", "other"), reuse), (("good", "other"), reuse)]
     for name in ("good", "other"):
-        assert (tmp_path / f"{name}.out").read_text().splitlines() == [name] * (1 if reuse else 2)
+        assert (tmp_path / f"{name}.out").read_text().splitlines() == [name]  # Each attempt writes a fresh file before publication.
     assert workflow.context["const"]["final_products"] == [str(tmp_path / f"{name}.out") for name in ("good", "other")]
     assert len(json.loads((tmp_path / "metadata.json").read_text())) == 2
     assert [(e["step"], e["image_id"], e["error_type"]) for e in workflow.errors] == [("aggregate", "bad", "ValueError")]
@@ -119,7 +121,7 @@ def test_restart_respects_core_reuse_without_forcing_reexecution(monkeypatch, tm
     workflow = Workflow(config, config_dir=tmp_path)
     assert [record["id"] for record in workflow.run()] == ["good", "other"]
     assert len(attempts) == (1 if core_reuse else 2)
-    assert (tmp_path / "good.out").read_text().splitlines() == ["good"] * len(attempts)
+    assert (tmp_path / "good.out").read_text().splitlines() == ["good"]
 
 
 @pytest.mark.parametrize("policy", ["error", "remove_instence"])

@@ -20,7 +20,7 @@ from vhrharmonize.io.progress import current_callback, progress, reports_progres
 from vhrharmonize.workflow.engine import Workflow
 from vhrharmonize.workflow.progress import ProgressState, StepProgress, TaskProgress, WorkflowProgress
 from vhrharmonize.workflow.progress_terminal import COLORS, TerminalProgressDisplay, _bar
-from vhrharmonize.progress import read_progress_snapshot, render_progress, validate_progress_snapshot
+from vhrharmonize.progress import render_progress, validate_progress_snapshot
 from workflow_helpers import copy_step, import_settings, install_function
 
 
@@ -115,18 +115,17 @@ def test_discovery_only_honors_show_progress(tmp_path, dashboards, capsys):
     context = tmp_path / "context.json"
     config["files"].update({"core:save_context": {str(context): "all"},
                             "core:load_context": {str(context): "all"}})
-    snapshot_path = tmp_path / "progress.json"
     for _ in range(2):  # Fresh discovery and subsequent context loading.
         snapshots = []
         workflow = load_workflow(config, config_dir=tmp_path, run_to_step="files")
-        workflow.run(progress_callback=snapshots.append, progress_path=snapshot_path)
+        workflow.run(progress_callback=snapshots.append)
         assert len(workflow.records) == 3
         assert context.exists()
         assert dashboards[-1].test_display is not None
         assert snapshots[-1]["rows"] == []
         assert snapshots[-1]["status"] == "completed"
         assert workflow.get_progress()["status"] == "completed"
-        assert snapshots[-1] == read_progress_snapshot(snapshot_path)
+        assert snapshots[-1]["total"] == workflow.get_progress()["total"]
         output = dashboards[-1].test_display.stream.getvalue()
         assert "[workflow] Discovered 3 input records" in output
         assert "[core:cleanup] Start" in output
@@ -393,14 +392,14 @@ def test_progress_snapshot_is_readable_during_work_and_after_completion(tmp_path
     from vhrharmonize.workflow.api import run_workflow
 
     filename = tmp_path / "recipe.yml"
-    snapshot = Path(str(filename) + ".progress.json")
+    snapshots = []
     observed = []
 
     def measure(value, progress_callback=None):
         progress_callback(n=1, total=2, prefix="processing tiles", unit="tiles", elapsed=1, rate=1)
         deadline = monotonic() + 5
         while monotonic() < deadline:
-            data = json.loads(snapshot.read_text())
+            data = snapshots[-1]
             if any(task["stats"].get("prefix") == "processing tiles" for task in data["active"]):
                 observed.append(data)
                 break
@@ -413,14 +412,14 @@ def test_progress_snapshot_is_readable_during_work_and_after_completion(tmp_path
     config = recipe(tmp_path)
     config["measure"] = {"plugin": "measure_snapshot", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     filename.write_text(yaml.safe_dump(config, sort_keys=False))
-    run_workflow(filename)
-    final = json.loads(snapshot.read_text())
+    run_workflow(filename, progress_callback=snapshots.append)
+    final = snapshots[-1]
     assert observed and observed[0]["status"] == "running"
     assert final["status"] == "completed" and not final["active"]
-    restored = read_progress_snapshot(snapshot)
+    restored = final
     assert restored["total"]["done"] == restored["total"]["run"] == 6
     assert restored["rows"][0]["unused"] == 1
-    assert not list(tmp_path.glob("*.progress.json.*.tmp"))
+    assert not list(tmp_path.glob("*.progress.json*"))
 
 
 def test_phase_only_plugin_is_labeled_but_explicit_callbacks_are_supported(tmp_path, monkeypatch, dashboards):
@@ -545,13 +544,15 @@ def test_headless_hpc_reporting_and_failed_run_publish_final_snapshot(tmp_path, 
 
     install_function(monkeypatch, "fail_api", fail)
     config = recipe(tmp_path)
-    config["shared"].update({"core:show_progress": False, "core:report_progress": True})
+    config["shared"].update({"core:show_progress": False})
     config["failure"] = {"plugin": "fail_api", "core:run": True, "core:require_outputs": True, "param:value": "var:basename"}
     filename = tmp_path / "headless.yml"
     filename.write_text(yaml.safe_dump(config, sort_keys=False))
+    snapshots = []
     with pytest.raises(RuntimeError, match="processing failed"):
-        run_workflow(filename)
-    snapshot = read_progress_snapshot(str(filename) + ".progress.json")
+        run_workflow(filename, progress_callback=snapshots.append)
+    snapshot = snapshots[-1]
+    assert not list(tmp_path.glob("*.progress.json*"))
     assert snapshot["status"] == snapshot["total"]["status"] == "failed"
     assert snapshot["rows"][-1]["done"] == 0
     assert snapshot["rows"][-1]["status"] == "failed"
@@ -560,7 +561,7 @@ def test_headless_hpc_reporting_and_failed_run_publish_final_snapshot(tmp_path, 
     assert any("processing failed" in m for m in snapshot["messages"])
 
 
-def test_callback_failure_is_isolated_and_explicit_path_enables_reporting(tmp_path):
+def test_callback_failure_is_isolated_and_callback_enables_reporting(tmp_path):
     from vhrharmonize import run_workflow
 
     config = recipe(tmp_path)
@@ -572,10 +573,10 @@ def test_callback_failure_is_isolated_and_explicit_path_enables_reporting(tmp_pa
         calls.append(snapshot)
         raise RuntimeError("app disconnected")
 
-    filename = tmp_path / "progress.json"
-    run_workflow(config, progress_callback=broken, progress_path=filename)
+    workflow = Workflow(config)
+    workflow.run(progress_callback=broken)
     assert len(calls) == 1
-    snapshot = read_progress_snapshot(filename)
+    snapshot = workflow.get_progress()
     assert snapshot["status"] == "completed" and snapshot["total"]["done"] == 3
     assert any("app disconnected" in m for m in snapshot["messages"])
     with pytest.raises(ValueError, match="Unsupported"):

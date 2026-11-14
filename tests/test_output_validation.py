@@ -47,7 +47,7 @@ def test_json_output_reuse_checks_syntax_only_when_enabled(tmp_path, contents, v
     assert validation._existing_outputs_are_reusable(
         [str(output_path)],
         check_validity=check_validity,
-        validity_check_grid_size=0,
+        validity_raster_grid=False,
         log_to_console=False,
         step="fetch_atmosphere",
     ) is (valid or not check_validity)

@@ -356,8 +356,8 @@ These are Python adapter attributes, not YAML parameters. Each contains a set or
 | `output_parent_creation_paths` | Create parents of selected destinations before invocation. | Always. |
 | `output_collision_check_paths` | Reject duplicate destinations when either declaration selects collision checking. | Always. |
 | `output_reuse_paths` | Allow skipping a function when its requested products already exist. Every requested product must be selected for reuse. | Plugin `core:reuse`; default `shared.core:run_from_existing: true`. |
-| `output_validation_paths` | Validate selected products during reuse and after invocation. Reuse always checks existence; format checks apply only to this selection. | Plugin/shared `core:check_validity: true`; `shared.core:validity_check_grid_size: 2048`. |
-| `output_invalid_removal_paths` | Inspect and remove corrupt selected products before regeneration. No missing-file error or post-call check is implied. | Runs before processing, independently of reuse/validation selections. |
+| `output_validation_paths` | Validate selected products before reuse, and after invocation with `around`. This selection also declares outputs for writing-postfix publication. Reuse always checks existence. | Plugin/shared `core:check_validity: before_reuse` (or `around`); `shared.core:validity_raster_grid: 255`. |
+| `output_invalid_removal_paths` | Inspect and remove corrupt selected products before regeneration. No missing-file error or post-call check is implied. | Runs before processing, independently of path selections; obeys the enabled validation mode. |
 | `output_overview_calculation_paths` | Build overviews on selected TIFF outputs after processing. | Plugin `core:calculate_overviews: false`; requires `shared.param:window_scales` when enabled. |
 | `output_temporary_cleanup_paths` | Remove selected regular files inside declared temporary roots, with associated sidecars, after required consumers succeed. Only applies under populated temporary roots; explicitly required products are retained. | Shared `core:delete_temp_steps_proactively: true` / `core:delete_temp_dir: false`. |
 | `input_hpc_staging_paths` | Rewrite and upload selected inputs needed by processing steps. | HPC remote reference directory and upload settings. |
@@ -433,14 +433,15 @@ Shared runner controls are:
 | `output_metadata_path` | `null` (disabled) |
 | `delete_final_json_first` | `true` |
 | `run_from_existing` | `true` |
-| `check_validity` | `true` |
-| `validity_check_grid_size` | `2048` |
+| `check_validity` | `"before_reuse"` |
+| `validity_raster_grid` | `255` |
+| `validity_raster_check_stop` | `"readable"` |
+| `validity_writing_postfix` | `"_writing"` |
 | `cleanup_dirs` | `[]` (explicit `const:`/`var:` cleanup-root references) |
 | `delete_temp_dir` | `false` |
 | `delete_temp_steps_proactively` | `true` |
 | `log_to_console` | `true` |
 | `show_progress` | `true` |
-| `report_progress` | `false` |
 | `save_statistics_path` | `statistics.jsonl` |
 | `load_statistics_path` | `statistics.jsonl` |
 | `processing_direction` | `vertical` |
@@ -479,7 +480,7 @@ shared:
   core:show_progress: true
 ```
 
-Set `core:show_progress: false` to disable the `prompt_toolkit` frontend. `core:report_progress: true` collects progress and writes snapshots without a display; `show_progress: true` implies reporting. With both controls disabled and no Python reporting callback, explicit snapshot path or statistics file, ordinary console logging is used. Logging controls remain independent: `core:log_to_console` controls core messages, while plugin messages follow `param:log_to_console`.
+Set `core:show_progress: false` to disable the terminal frontend. Python callbacks and statistics can still collect progress in memory. Logging controls remain independent.
 
 In an interactive terminal, logs stay in the original terminal session and scrollback. `prompt_toolkit` redraws one live box below new output, titled **VHRHarmonize Workflow Progress**, with a single divider between the workflow table and active operations. Both tables place Progress in the rightmost column. The display uses no alternate screen or mouse capture: use the terminal’s normal scrolling, selection and copy controls. Scrolling back can move the progress box out of view. Rows use the **configured step name**, including repeated uses of the same plugin. Core-generated overviews have a separate `<step name> / overviews` row. `(no cb)` beside a name means detailed worker callbacks are unavailable; core still tracks that step's starts, completions and elapsed time. On smaller terminals, active steps take priority and an omitted-row count appears; the total always includes every row. Very short terminals show a compact total and first active operation. Widen the terminal to see all columns. On exit, pending log lines are flushed and one final summary remains without repeating messages already printed. Redirected output (including Slurm log files), noninteractive input and `TERM=dumb` receive a single final summary without terminal animation. Redirected output has no escape sequences, and ASCII-only streams use simple borders.
 
@@ -492,7 +493,7 @@ The columns are:
 
 The active-operation panel uses one row per operation, with **Step, ID, Status, Elapsed, ETA, Progress** columns. Elapsed is shown in seconds; unknown ETAs show `TBD`. Status is the callback's status when provided, otherwise `starting` or `working`. The bar uses tqdm-style tile, band, point or image progress; backends without measurable progress use an indeterminate bar. Static/HPC displays include every active operation; small live terminals show a count of additional operations when space runs out. Worker processes send events to core rather than creating their own terminal displays. See [function progress callbacks](../api/io-logging.md) for the Python interface.
 
-When running a YAML file with reporting enabled, core writes `<workflow.yml>.progress.json` beside that file. The snapshot is replaced atomically at most once per second, with initial and final updates on success or failure. `vhr hpc-status --config <staged.hpc.yml>` fetches the snapshot through `get_slurm_progress()` and gives it to the same `prompt_toolkit` frontend for a static display. This works while Slurm output is redirected. Snapshots from a different Slurm job ID are ignored, and the displayed timestamp identifies the last update. The staged HPC YAML retains the fetched data under `workflow_progress`. Apps can receive the same versioned data through a Python callback, `Workflow.get_progress()`, the JSON file, or the HPC accessor; see the [progress API](../api/progress.md).
+Progress remains in memory, available through callbacks and `Workflow.get_progress()`. HPC status retrieves scheduler status and logs. No progress JSON files are written.
 
 Proactive cleanup applies to **`output_temporary_cleanup_paths` regular-file outputs under selected temporary roots** (`core:cleanup_dirs` or plugin declarations). It waits for all required consumers to succeed and protects imported inputs, reference files and their aliases. Explicitly required products and terminal temporary results are retained. `delete_temp_dir` performs this cleanup at the end and removes emptied subdirectories; it does not recursively erase the root. Earlier temporary outputs are retained across runtime scene replacements because future consumers were not yet known. Undeclared plugin caches and directory outputs are not automatically removed. Private diagnostic files remain the function’s responsibility. The individual SpectralMatch steps expose their intermediate raster paths to core cleanup.
 
@@ -689,3 +690,33 @@ after its local cutoff by default, controlled by `steps_after_prepare` in the HP
 YAML. `core:run: false` still fully disables a step and its assignments.
 `core:scope: var` selects per-record execution. Without initialized records, default-scope functions can run
 once with constants, while explicit `var` scope and `var:` access are rejected.
+
+### Output validation and publication
+
+`core:check_validity: before_reuse` (default) validates existing products before
+reusing them. `around` also validates declared file inputs before invocation and
+new outputs before publishing them. `false` disables format checks; existence
+checks still apply. TIFF metadata/byte ranges, JSON syntax and GeoPackage
+integrity/readability are checked independently of raster sampling.
+
+`core:validity_raster_grid: 255` reads a pixel every 255 pixels on each axis in
+each band, including masks. `1` reads every base-resolution pixel in bounded
+windows; `false` disables pixel reads, retaining structural checks.
+`core:validity_raster_check_stop: readable` reads the full grid, allowing NoData;
+`has_valid_data` stops at the first finite unmasked non-NoData sample and fails if
+none are found. Sampling can miss corruption between sampled locations.
+
+`core:validity_writing_postfix: "_writing"` writes `image_writing.tif`, builds any
+requested overviews, validates it when using `around`, then renames it to
+`image.tif`. SpectralMatch image workers publish each completed image separately.
+Interrupted writing files are never reused as final products. `null` or `""`
+disables this naming behavior. The final rename is on the destination filesystem;
+it cannot prevent storage failures. GDAL mask/overview sidecars follow the rename.
+
+Aggregate adapters can implement `worker_output_parameters(params)` to identify
+output parameters written by image jobs, and `worker_output_paths(function, args,
+kwargs)` to identify each job's destinations. The core wraps those jobs, validates
+and publishes their outputs before returning the worker result, and preserves
+image attribution if validation fails. SpectralMatch adapters implement these
+hooks for their image jobs. Other declared file outputs are published when the
+plugin call completes.

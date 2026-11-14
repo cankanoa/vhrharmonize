@@ -93,6 +93,8 @@ class Substeps:
                 continue
             stats = dict(job.get('stats') or dict(n=0, total=None, prefix='starting', unit='it', elapsed=0, rate=None))
             stats['elapsed'] = (stats.get('elapsed') or 0) + max(0, now - job.get('updated', now))
+            if stats.get('prefix') == 'Accepted tie pairs':
+                stats['rate'] = stats['n'] / stats['elapsed'] if stats['n'] and stats['elapsed'] else None
             rate, total = stats.get('rate'), stats.get('total')
             eta = max(0, total - stats['n']) / rate if total is not None and rate and rate > 0 else None
             result.append(dict(task_id=task_id + ':' + identity, step=step, scene=job.get('scene', ''), stats=stats, eta_seconds=eta))

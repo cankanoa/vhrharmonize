@@ -17,7 +17,7 @@ def recipe(tmp_path):
     source.write_text("source")
     return {
         "shared": {"plugin": 'shared', "core:run": True, "core:log_to_console": False, "core:show_progress": False, "core:save_statistics_path": None, "core:load_statistics_path": None,
-                   "core:cleanup_dirs": ["const:temp_dir"]},
+                   "core:cleanup_dirs": ["const:temp_dir"], "core:validity_writing_postfix": None, "core:check_validity": "around"},
         "import_files": import_settings(source, tmp_path),
     }
 

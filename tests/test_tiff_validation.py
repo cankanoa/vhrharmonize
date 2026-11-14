@@ -70,9 +70,10 @@ def test_tiff_bounds_allow_sparse_blocks_and_trailing_bytes(tmp_path, bigtiff):
     with path.open("ab") as stream:
         stream.write(b"extra metadata after image data")
 
-    # An entirely sparse NoData raster is structurally sound but fails default sampling.
-    assert validation._gdal_raster_is_valid(str(path), validity_check_grid_size=0) == (True, None)
-    assert validation._gdal_raster_is_valid(str(path)) == (
+    # NoData is readable; only has_valid_data requires a finite unmasked sample.
+    assert validation._gdal_raster_is_valid(str(path), validity_raster_grid=False) == (True, None)
+    assert validation._gdal_raster_is_valid(str(path)) == (True, None)
+    assert validation._gdal_raster_is_valid(str(path), validity_raster_check_stop="has_valid_data") == (
         False, "no finite valid pixels found in validity sample"
     )
 

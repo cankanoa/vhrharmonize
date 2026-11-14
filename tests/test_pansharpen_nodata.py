@@ -150,7 +150,7 @@ def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, i
         'shared': {
             'plugin': 'shared', 'core:run': True, 'core:tile_threads': 2,
             'core:concurrent_processing': 1, 'core:show_progress': False,
-            'core:validity_check_grid_size': 1,
+            'core:validity_raster_grid': 1,
             'core:log_to_console': False, 'core:save_statistics_path': None,
             'core:load_statistics_path': None, 'param:window_scales': [2, 4],
         },

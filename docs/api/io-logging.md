@@ -42,7 +42,7 @@ align_image_pair(
 )
 ```
 
-A callback is a Python callable, not a YAML expression or CLI option. With `core:report_progress: true`, `core:show_progress: true`, or an application progress callback, core supplies the reporting context automatically. It exposes a [public workflow snapshot API](progress.md); the optional `prompt_toolkit` frontend consumes those snapshots. Functions remain independent of the frontend. Python messages from each workflow worker are routed back to the snapshot's recent messages. Unmanaged backend console bars are disabled when the backend accepts `log_to_console`.
+A callback is a Python callable, not a YAML expression or CLI option. With `core:show_progress: true`, or an application progress callback, core supplies the reporting context automatically. It exposes a [public workflow snapshot API](progress.md); the optional `prompt_toolkit` frontend consumes those snapshots. Functions remain independent of the frontend. Python messages from each workflow worker are routed back to the snapshot's recent messages. Unmanaged backend console bars are disabled when the backend accepts `log_to_console`.
 
 Messages use ordinary Python text output: `print()`, `sys.stdout` / `sys.stderr`
 (`write`, `writelines`, and `flush`), and standard `logging.StreamHandler` output.

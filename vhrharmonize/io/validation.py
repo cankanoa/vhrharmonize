@@ -36,52 +36,41 @@ def _tiff_truncation_reason(path: str) -> str | None:
     return None
 
 
-def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 2048) -> tuple[bool, str | None]:
-    """Check raster readability and TIFF strip/tile bounds.
-    Args:
-        path: Raster path to validate.
-        validity_check_grid_size: Pixel sampling grid size; defaults to 2048. 0 disables pixel validity sampling.
-    Returns:
-        Tuple of validity and optional reason.
+def _gdal_raster_is_valid(
+    path: str, *, validity_raster_grid: int | bool = 255,
+    validity_raster_check_stop: str = "readable",
+) -> tuple[bool, str | None]:
+    """Inspect metadata and optionally read a regular pixel grid in every band.
+
+    False disables data/mask reads. One reads every pixel in bounded windows;
+    N > 1 reads pixels at (0, N, 2N, ...) along both axes. ``readable`` visits
+    the entire grid, including masks, allowing NoData. ``has_valid_data`` stops
+    at the first finite, unmasked, non-NoData sample and rejects an empty grid.
+    TIFF byte ranges (including overview IFDs) are checked in either mode.
     """
     if not os.path.exists(path):
         return False, "missing"
     dataset = None
     try:
-        dataset = gdal.OpenEx(path, gdal.OF_RASTER)
-        if dataset is None:
-            return False, "GDAL open failed"
-        if dataset.GetDriver().ShortName == "GTiff":
-            reason = _tiff_truncation_reason(path)
-            if reason:
-                return False, reason
-        band_count = dataset.RasterCount
-        width = dataset.RasterXSize
-        height = dataset.RasterYSize
-        if band_count < 1 or width < 1 or height < 1:
-            return False, f"invalid raster shape bands={band_count} size={width}x{height}"
-
-        read_w = min(width, 256)
-        read_h = min(height, 256)
-        offsets = [
-            (0, 0),
-            (max(0, width - read_w), max(0, height - read_h)),
-        ]
-        for band_index in range(1, band_count + 1):
-            band = dataset.GetRasterBand(band_index)
-            if band is None:
-                return False, f"missing band {band_index}"
-            for xoff, yoff in offsets:
-                data = band.ReadRaster(xoff, yoff, read_w, read_h)
-                if data is None:
-                    return False, f"GDAL ReadRaster failed for band {band_index}"
-        if validity_check_grid_size > 0 and not _gdal_raster_has_valid_sample(
-            dataset,
-            width,
-            height,
-            validity_check_grid_size,
-        ):
-            return False, "no finite valid pixels found in validity sample"
+        with gdal.ExceptionMgr(useExceptions=True):
+            dataset = gdal.OpenEx(path, gdal.OF_RASTER)
+            if dataset is None:
+                return False, "GDAL open failed"
+            if dataset.GetDriver().ShortName == "GTiff":
+                reason = _tiff_truncation_reason(path)
+                if reason:
+                    return False, reason
+            width, height, bands = dataset.RasterXSize, dataset.RasterYSize, dataset.RasterCount
+            if min(width, height, bands) < 1:
+                return False, f"invalid raster shape bands={bands} size={width}x{height}"
+            for index in range(1, bands + 1):
+                if dataset.GetRasterBand(index) is None:
+                    return False, f"missing band {index}"
+            if validity_raster_grid is not False:
+                found = _read_raster_grid(dataset, width, height, validity_raster_grid,
+                                          validity_raster_check_stop)
+                if validity_raster_check_stop == "has_valid_data" and not found:
+                    return False, "no finite valid pixels found in validity sample"
     except Exception as exc:
         return False, str(exc)
     finally:
@@ -89,32 +78,17 @@ def _gdal_raster_is_valid(path: str, *, validity_check_grid_size: int = 2048) ->
     return True, None
 
 
-def _gdal_raster_has_valid_sample(dataset: gdal.Dataset, width: int, height: int, grid_size: int) -> bool:
-    """Return whether any sampled raster pixel is finite and non-nodata."""
-    if grid_size < 1:
-        return True
-    block_size = 512 if grid_size == 1 else grid_size
-    for band_index in range(1, dataset.RasterCount + 1):
-        band = dataset.GetRasterBand(band_index)
-        if band is None:
-            continue
-        for yoff in range(0, height, block_size):
-            read_h = min(block_size, height - yoff)
-            sample_y = 0 if grid_size == 1 else min(grid_size // 2, read_h - 1)
-            for xoff in range(0, width, block_size):
-                read_w = min(block_size, width - xoff)
-                sample_x = 0 if grid_size == 1 else min(grid_size // 2, read_w - 1)
-                window_xoff = xoff if grid_size == 1 else xoff + sample_x
-                window_yoff = yoff if grid_size == 1 else yoff + sample_y
-                window_w = read_w if grid_size == 1 else 1
-                window_h = read_h if grid_size == 1 else 1
-                if _gdal_band_window_has_valid_pixel(
-                    band,
-                    window_xoff,
-                    window_yoff,
-                    window_w,
-                    window_h,
-                ):
+def _read_raster_grid(dataset, width, height, spacing, stop):
+    """Read all requested samples unless the caller explicitly permits early success."""
+    stride = 512 if spacing == 1 else spacing
+    for index in range(1, dataset.RasterCount + 1):
+        band = dataset.GetRasterBand(index)
+        for y in range(0, height, stride):
+            for x in range(0, width, stride):
+                w, h = (min(512, width - x), min(512, height - y)) if spacing == 1 else (1, 1)
+                valid = _gdal_band_window_has_valid_pixel(band, x, y, w, h,
+                                                         check_values=stop == "has_valid_data")
+                if stop == "has_valid_data" and valid:
                     return True
     return False
 
@@ -125,18 +99,21 @@ def _gdal_band_window_has_valid_pixel(
     yoff: int,
     read_w: int,
     read_h: int,
+    *, check_values: bool = True,
 ) -> bool:
     """Return whether a sampled band window has a finite non-nodata pixel."""
-    struct_format = _gdal_data_type_struct_format(band.DataType)
-    if struct_format is None:
-        return True
-    data = band.ReadRaster(xoff, yoff, read_w, read_h)
-    if data is None:
-        return False
+    struct_format = "=d"
+    data = band.ReadRaster(xoff, yoff, read_w, read_h, buf_type=gdal.GDT_Float64)
+    if data is None or len(data) != read_w * read_h * 8:
+        raise IOError(f"Incomplete raster read at ({xoff}, {yoff})")
     mask = None
     mask_band = band.GetMaskBand()
     if mask_band is not None:
         mask = mask_band.ReadRaster(xoff, yoff, read_w, read_h, buf_type=gdal.GDT_Byte)
+        if mask is None or len(mask) != read_w * read_h:
+            raise IOError(f"Incomplete mask read at ({xoff}, {yoff})")
+    if not check_values:
+        return True
 
     nodata = band.GetNoDataValue()
     item_size = struct.calcsize(struct_format)
@@ -153,26 +130,6 @@ def _gdal_band_window_has_valid_pixel(
         if _sample_pixel_is_valid(value, nodata, mask_value):
             return True
     return False
-
-
-def _gdal_data_type_struct_format(data_type: int) -> str | None:
-    """Return a struct format for scalar GDAL data types."""
-    formats = {
-        gdal.GDT_Byte: "=B",
-        gdal.GDT_UInt16: "=H",
-        gdal.GDT_Int16: "=h",
-        gdal.GDT_UInt32: "=I",
-        gdal.GDT_Int32: "=i",
-        gdal.GDT_Float32: "=f",
-        gdal.GDT_Float64: "=d",
-    }
-    if hasattr(gdal, "GDT_Int8"):
-        formats[getattr(gdal, "GDT_Int8")] = "=b"
-    if hasattr(gdal, "GDT_UInt64"):
-        formats[getattr(gdal, "GDT_UInt64")] = "=Q"
-    if hasattr(gdal, "GDT_Int64"):
-        formats[getattr(gdal, "GDT_Int64")] = "=q"
-    return formats.get(data_type)
 
 
 def _sample_pixel_is_valid(value: object, nodata: float | int | None, mask_value: int = 255) -> bool:
@@ -206,7 +163,8 @@ def _existing_output_failures(
     output_paths: List[str],
     *,
     check_validity: bool,
-    validity_check_grid_size: int,
+    validity_raster_grid: int | bool = 255,
+    validity_raster_check_stop: str = "readable",
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -224,8 +182,11 @@ def _existing_output_failures(
         elif _is_gdal_raster_path(output_path):
             is_valid, reason = _gdal_raster_is_valid(
                 output_path,
-                validity_check_grid_size=validity_check_grid_size,
+                validity_raster_grid=validity_raster_grid,
+                validity_raster_check_stop=validity_raster_check_stop,
             )
+        elif os.path.splitext(output_path)[1].lower() == ".gpkg":
+            is_valid, reason = _gpkg_is_valid(output_path)
         else:
             continue
         if not is_valid:
@@ -239,7 +200,8 @@ def _existing_outputs_are_reusable(
     output_paths: List[str],
     *,
     check_validity: bool,
-    validity_check_grid_size: int,
+    validity_raster_grid: int | bool = 255,
+    validity_raster_check_stop: str = "readable",
     log_to_console: bool,
     step: str,
     scene_basename: str | None = None,
@@ -248,9 +210,42 @@ def _existing_outputs_are_reusable(
     return bool(output_paths) and not _existing_output_failures(
         output_paths,
         check_validity=check_validity,
-        validity_check_grid_size=validity_check_grid_size,
+        validity_raster_grid=validity_raster_grid,
+        validity_raster_check_stop=validity_raster_check_stop,
         log_to_console=log_to_console,
         step=step,
         scene_basename=scene_basename,
     )
 
+
+
+def _gpkg_is_valid(path: str) -> tuple[bool, str | None]:
+    """Check SQLite integrity and the feature tables referenced by GeoPackage metadata."""
+    import sqlite3
+    from contextlib import closing
+    from pathlib import Path
+
+    try:
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            results = db.execute("PRAGMA quick_check").fetchall()
+            if results != [("ok",)]:
+                return False, f"GeoPackage integrity check failed: {results}"
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for name, in db.execute("SELECT table_name FROM gpkg_contents"):
+                if name not in tables:
+                    return False, f"GeoPackage missing table: {name}"
+        with gdal.ExceptionMgr(useExceptions=True):
+            ds = gdal.OpenEx(path, gdal.OF_VECTOR)
+            if ds is None or ds.GetLayerCount() < 1:
+                return False, "GeoPackage has no readable vector layers"
+            for layer in ds:
+                layer.GetFeatureCount()
+                layer.ResetReading()
+                for feature in layer:
+                    geometry = feature.GetGeometryRef()
+                    if geometry is not None:
+                        geometry.ExportToWkb()
+            ds = None
+    except Exception as exc:
+        return False, str(exc)
+    return True, None

@@ -131,7 +131,7 @@ def test_failed_consumer_preserves_intermediate(pipeline, monkeypatch):
     run = FileSource.run
 
     def fail(self, **kwargs):
-        if kwargs["params"]["output_path"].endswith("cloudmasked.tif"):
+        if kwargs["params"]["output_path"].endswith("cloudmasked_writing.tif"):
             raise RuntimeError("failed")
         return run(self, **kwargs)
 

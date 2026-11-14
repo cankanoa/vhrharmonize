@@ -252,6 +252,10 @@ class TerminalProgressDisplay:
         lines = [_line(headers, widths, right=(3, 4), gap=gap)]
         for task, status in zip(shown, statuses):
             stats, size = task["stats"], widths[-1]
+            label = ""
+            if stats.get("unit") == "pairs" and stats["total"] is not None:
+                label = f"{int(stats['n'])}/{int(stats['total'])} pairs "
+                size = max(1, size - get_cwidth(label))
             if stats["total"] is None:
                 phase = int(monotonic() * 4) % 6
                 colors = ["done" if (i - phase) % 6 < 3 else "run" for i in range(size)]
@@ -259,6 +263,8 @@ class TerminalProgressDisplay:
                 done = round(size * min(1, stats["n"] / max(stats["total"], 1)))
                 colors = ["done"] * done + ["run"] * (size - done)
             bar = [(f"fg:{COLORS[key]}", "#" if self.ascii_only else "▬") for key in colors]
+            if label:
+                bar.insert(0, ("", label))
             cells = [[("", task["step"])], [("", str(stats.get("scene", task["scene"])))],
                      [("", status)], [("", f"{stats['elapsed']:.0f}s")], [("", _duration(task["eta_seconds"]))], bar]
             lines.append(_line(cells, widths, right=(3, 4), gap=gap))

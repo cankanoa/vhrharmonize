@@ -9,11 +9,13 @@ shared:
   # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
   core:worker_error_case: remove_and_restart # error | remove_instence | remove_and_restart; default: error. Remove failed images; remove_and_restart also retries attributable aggregate failures. Reuse settings still apply.
   # core:run_from_existing: true # true | false; default: true.
-  # core:check_validity: true # true | false; default: true.
+  # core:check_validity: before_reuse # around | before_reuse | false; default: before_reuse.
+  # core:validity_raster_grid: 255 # false disables pixel reads; 1 reads every pixel; N samples every Nth pixel on both axes.
+  # core:validity_raster_check_stop: readable # readable scans the whole grid; has_valid_data stops at the first valid sample.
+  # core:validity_writing_postfix: "_writing" # Write image_writing.tif, then rename on success; null or "" disables.
   param:custom_nodata_value: 0
   # core:log_to_console: true # true | false; default: true.
   # core:show_progress: true # true | false; default: true. Live prompt_toolkit dashboard; one final summary in redirected logs.
-  # core:report_progress: false # true | false; default: false. Publish progress snapshots without a display; show_progress also enables this.
   # core:save_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Append raw timings; null disables saving.
   # core:load_statistics_path: statistics.jsonl # path | null; default: statistics.jsonl beside this YAML. Seed ETAs from past timings; null disables loading.
   core:cleanup_dirs: [const:temp_dir] # Cleanup roots; default: []. Requested outputs and sources stay protected.

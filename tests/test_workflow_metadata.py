@@ -52,7 +52,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     config["discover_inputs"].update(
         {"var:relative_output_dir": str(tmp_path / "output"), "const:temp_dir": str(tmp_path / "temp")}
     )
-    config["shared"]["core:validity_check_grid_size"] = 0
+    config["shared"]["core:validity_raster_grid"] = False
     config["discover_inputs"]["param:search_glob"] = str(bundle["mul_tif"])
     for suffix in ["cloudmasked", "cloudmasked_mask"]:
         make_test_raster(

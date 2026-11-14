@@ -33,6 +33,7 @@ from .registry import load_plugin
 from .paths import DIRECTORY_FEATURES, directory_values, directory_bindings
 from .metadata import FinalMetadataWriter
 from .temp_files import TempFileSwap, TempFileSwapError
+from .output_files import OutputPolicy, OutputExecutor, writing_path
 from .context_io import ContextFiles, LOAD_CONTROLS, SAVE_CONTROLS
 from .values import (
     Pending,
@@ -240,15 +241,39 @@ class ConstantBindings:
 
 def _execute(payload, *, executor=None):
     plugin_name, params, shared, *reporters = payload
-    swap = reporters.pop(0) if reporters and isinstance(reporters[0], TempFileSwap) else None
+    options = []
+    while reporters and isinstance(reporters[0], (TempFileSwap, OutputPolicy)):
+        options.append(reporters.pop(0))
+    swap = next((v for v in options if isinstance(v, TempFileSwap)), None)
+    policy = next((v for v in options if isinstance(v, OutputPolicy)), None)
     plugin = load_plugin(plugin_name)
-    if executor is not None:
-        params = {**params, plugin.executor_parameter: executor}
+
     def invoke():
-        if swap is None:
+        if policy is None:
+            if executor is not None:
+                params[plugin.executor_parameter] = executor
+            if swap is not None:
+                with swap.apply(params) as (local_params, originals):
+                    return remap_paths(plugin.run(params=local_params, shared=shared), originals)
             return plugin.run(params=params, shared=shared)
-        with swap.apply(params) as (local_params, originals):
-            return remap_paths(plugin.run(params=local_params, shared=shared), originals)
+        features = plugin.file_features()
+        writing_names = features["output_validation_paths"] | features["output_overview_calculation_paths"]
+        worker_names = (plugin.worker_output_parameters(params) & writing_names) if executor is not None else set()
+        # Explicit local-file swapping owns its copy-back; stage that destination
+        # outside the swap so a transfer failure cannot expose a partial final file.
+        if swap is not None:
+            worker_names = worker_names - set(swap.names)
+        worker_outputs = [p for name in worker_names for p in _paths(params.get(name))]
+        outputs = [p for name in writing_names - worker_names
+                   for p in _paths(params.get(name))]
+        def call(params):
+            if executor is not None:
+                params = {**params, plugin.executor_parameter: OutputExecutor(executor, plugin, policy, worker_outputs)}
+            if swap is None:
+                return plugin.run(params=params, shared=shared)
+            with swap.apply(params) as (local_params, originals):
+                return remap_paths(plugin.run(params=local_params, shared=shared), originals)
+        return policy.run(call, kwargs={"params": params}, outputs=outputs)
 
     if not reporters:
         return invoke()
@@ -439,7 +464,8 @@ class Workflow:
                     bool(outputs) and not any(os.path.isdir(filename) for filename in outputs)
                     and not _existing_output_failures(outputs,
                         check_validity=step.get("check_validity", self.controls["check_validity"]),
-                        validity_check_grid_size=self.controls["validity_check_grid_size"], log_to_console=False,
+                        validity_raster_grid=self.controls["validity_raster_grid"],
+                        validity_raster_check_stop=self.controls["validity_raster_check_stop"], log_to_console=False,
                         step=step["name"])
                     and step.get("reuse", self.controls["run_from_existing"])
                 )
@@ -1050,7 +1076,8 @@ class Workflow:
                 if check_validity is None
                 else check_validity
             ),
-            validity_check_grid_size=self.controls["validity_check_grid_size"],
+            validity_raster_grid=self.controls["validity_raster_grid"],
+            validity_raster_check_stop=self.controls["validity_raster_check_stop"],
             log_to_console=False,
             step=node.step["name"],
         )
@@ -1064,7 +1091,11 @@ class Workflow:
             bool(filenames)
             and not any(os.path.isdir(p) for p in filenames)
             and not self._failures(node, filenames, check_validity=False)
-            and not self._failures(node, filenames & set(node.paths("output_validation_paths")))
+            and not self._failures(
+                node, filenames & set(node.paths("output_validation_paths")),
+                check_validity=node.step.get("check_validity", self.controls["check_validity"])
+                if node.step.get("reuse", self.controls["run_from_existing"]) or not self._runs(node) else False,
+            )
         )
 
     def _is_protected(self, filename):
@@ -1354,8 +1385,14 @@ class Workflow:
                 raise RuntimeError(f"{node.step['name']} input belongs to a removed image: {filename}")
             if not os.path.exists(filename):
                 raise FileNotFoundError(f"{node.step['name']} input does not exist: {filename}")
+        mode = node.step.get("check_validity", self.controls["check_validity"])
+        if mode == "around":
+            failures = self._failures(node, [*node.paths("input_existence_check_paths"), *node.requirements])
+            if failures:
+                raise RuntimeError(f"{node.step['name']} has invalid inputs: {failures}")
         failures = self._failures(
-            node, node.paths("output_invalid_removal_paths"), check_validity=True
+            node, node.paths("output_invalid_removal_paths"),
+            check_validity=mode if mode == "around" or node.step.get("reuse", self.controls["run_from_existing"]) else False,
         )
         remove_output_files(
             [p for p, reason in failures.items() if reason != "missing"],
@@ -1367,7 +1404,25 @@ class Workflow:
         if node.step["plugin"] is not None:
             plugin = load_plugin(node.step["plugin"])
             params = {**params, **plugin.runtime_parameters(tile_threads=self.controls["tile_threads"])}
-        payload = node.step["plugin"], params, shared
+        scales = None
+        overview_paths = node.paths("output_overview_calculation_paths") if node.step.get("calculate_overviews", False) else []
+        if overview_paths:
+            scales = self._resolve(self.shared.get("window_scales"), self._runtime_context(node))
+            if not scales:
+                raise ValueError("core:calculate_overviews requires shared.param:window_scales")
+        policy = OutputPolicy(
+            postfix=self.controls["validity_writing_postfix"], check_validity=mode,
+            raster_grid=self.controls["validity_raster_grid"], check_stop=self.controls["validity_raster_check_stop"],
+            validation_paths=tuple(node.paths("output_validation_paths")), overview_paths=tuple(overview_paths),
+            overview_scales=scales, log_to_console=self.controls["log_to_console"], step=node.step["name"],
+        )
+        if policy.postfix:
+            reserved = {p for n in self.nodes for p in n.paths(*INPUT_PATH_FEATURES, *OUTPUT_PATH_FEATURES)}
+            for filename in owned:
+                temporary = writing_path(filename, policy.postfix)
+                if temporary in reserved or self._is_protected(temporary):
+                    raise ValueError(f"Writing path aliases a workflow input/output: {temporary}")
+        payload = node.step["plugin"], params, shared, policy
         if node.step.get("swap_for_temp_file"):
             if self.controls["swap_temp_dir"] is None:
                 raise ValueError("core:swap_temp_dir must be set in shared when core:swap_for_temp_file is used")
@@ -1393,20 +1448,7 @@ class Workflow:
         )
         values = {k: updates[k] for k in node.dynamic_names}
         values = json.loads(json.dumps(values, allow_nan=False))
-        overview_paths = node.paths("output_overview_calculation_paths")
-        if node.step.get("calculate_overviews", False) and overview_paths:
-            from vhrharmonize.io.geospatial import calculate_raster_overviews
-
-            scales = self._resolve(self.shared.get("window_scales"), self._runtime_context(node))
-            if not scales:
-                raise ValueError("core:calculate_overviews requires shared.param:window_scales")
-            for filename in overview_paths:
-                if Path(filename).suffix.lower() in {".tif", ".tiff"}:
-                    with self._progress.overview(node, filename) if self._progress else nullcontext():
-                        calculate_raster_overviews(
-                            filename, scales, log_to_console=self.controls["log_to_console"]
-                        )
-        failures = self._failures(node, node.paths("output_validation_paths"))
+        failures = self._failures(node, node.paths("output_validation_paths"), check_validity=False)
         if failures:
             raise RuntimeError(
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
@@ -2024,7 +2066,7 @@ class Workflow:
                     except RuntimeWarning:
                         pass  # A caller's warnings-as-errors filter must not abort processing.
 
-    def run(self, *, progress_callback=None, progress_path=None, event_callback=None):
+    def run(self, *, progress_callback=None, event_callback=None):
         """Execute with optional snapshot and unthrottled timing-event callbacks.
 
         core:save_statistics_path appends raw timings; core:load_statistics_path
@@ -2063,7 +2105,7 @@ class Workflow:
                 self._emit_timing(kind, name, start, duration, status=status, attributes=attributes)
             outcome, attributes = "completed", {}
             try:
-                return self._run_with_progress(progress_callback=progress_callback, progress_path=progress_path)
+                return self._run_with_progress(progress_callback=progress_callback)
             except BaseException as exc:
                 outcome, attributes = "failed", {"error.type": type(exc).__name__}
                 raise
@@ -2086,18 +2128,17 @@ class Workflow:
                 if self.controls["log_to_console"]:
                     print(f"[core:done] Exit code: {0 if outcome == 'completed' else 1}")
 
-    def _run_with_progress(self, *, progress_callback=None, progress_path=None):
+    def _run_with_progress(self, *, progress_callback=None):
         """Execute the workflow, optionally publishing snapshots to a parent callback.
 
-        Callbacks, explicit snapshot paths, saved/loaded timings, report_progress
-        or show_progress enable reporting. Only show_progress starts the UI.
+        Callbacks, saved/loaded timings or show_progress enable reporting. Only show_progress starts the UI.
         """
         if progress_callback is not None and not callable(progress_callback):
             raise TypeError("progress_callback must be callable")
         self.plan()
         self._last_progress_snapshot = None
-        if not (self.controls["show_progress"] or self.controls["report_progress"]
-                or progress_callback is not None or progress_path is not None or self._timing_callbacks
+        if not (self.controls["show_progress"]
+                or progress_callback is not None or self._timing_callbacks
                 or self._historical_timings):
             return self._run()
         from contextlib import ExitStack
@@ -2114,7 +2155,6 @@ class Workflow:
                 callbacks.append(progress_callback)
             reporter = WorkflowProgress(
                 self, callbacks=callbacks,
-                snapshot_path=progress_path if progress_path is not None else getattr(self, "progress_path", None),
             )
             self._progress = reporter
             try:

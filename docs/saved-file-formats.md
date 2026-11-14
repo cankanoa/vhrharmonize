@@ -135,28 +135,6 @@ is replaced atomically; raw history stays unchanged. Load it with
 `pandas.read_json(path, orient="table")`. Use the raw JSONL, not this report, as
 `load_statistics_path`.
 
-## Progress snapshot: `<workflow.yml>.progress.json`
-
-This VHR-specific JSON object is replaced atomically as execution progresses:
-
-| Field | Structure |
-| --- | --- |
-| `version` | `2` |
-| `run_id`, `updated_at`, `job_id`, `status` | Run ID, UTC timestamp, nullable Slurm job ID, run status. |
-| `total` | One progress row for the whole workflow. |
-| `rows` | Array of progress rows for configured steps and core overview steps. |
-| `active` | Array of `{task_id, step, scene, stats, eta_seconds}` objects. |
-| `messages` | Last five message strings. |
-| `message_history` | `{sequence, messages}`: cumulative sequence number and last 1,000 messages; optional in older snapshots. |
-
-Each row contains `name`, `unused`, `reused`, `done`, `run`, `all`, `percentages`,
-`fraction_done`, `active`, `pending`, `worker_progress`, `status` and `eta_seconds`.
-`percentages` maps the five count keys to percentages of `all`; `fraction_done`
-is Done/Run or `null`. ETAs are seconds or `null`. An active operation's `stats`
-contains tqdm-style `n`, `total`, `prefix`, `unit`, `elapsed`, `rate`, with optional
-`operation`, `status` and `scene`. Historical estimates do not change this schema.
-See [the progress API](api/progress.md) and `validate_progress_snapshot()`.
-
 ## Final metadata JSON
 
 `core:output_metadata_path` writes an array of completed contexts:

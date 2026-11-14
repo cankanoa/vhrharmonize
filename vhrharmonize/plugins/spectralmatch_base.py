@@ -29,6 +29,18 @@ class SpectralMatchPlugin(FunctionPlugin):
             return [str(output)]
         return super().run(params=params, shared=shared)
 
+    def worker_output_parameters(self, params):
+        if params.get("skip_single_image") and len(params.get("input_images", [])) == 1 and not params.get("fixed_images"):
+            return frozenset()
+        return frozenset({"output_images", "output_vectors", "output_image_paths"})
+
+    def worker_output_paths(self, function, args, kwargs):
+        if (getattr(function, "__module__", None) == "spectralmatch.utils_logging"
+                and getattr(function, "__name__", None) == "_run_logged_image" and len(args) >= 3):
+            from vhrharmonize.workflow.output_files import paths
+            return paths(args[2])
+        return ()
+
     def worker_image_paths(self, function, args, kwargs):
         if (getattr(function, "__module__", None) == "spectralmatch.utils_logging"
                 and getattr(function, "__name__", None) == "_run_logged_image" and len(args) >= 2):
