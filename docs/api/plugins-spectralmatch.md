@@ -100,6 +100,15 @@ a group and replaces the polygon file only after success.
 
 ## markov_triangles
 
+The adapter uses bounded raster sampling inside SpectralMatch's node workers.
+Each requested window is average-resampled with GDAL's chunked warper using a
+32 MiB warp budget and a separate 32 MiB sample cache. This avoids coarse warped
+VRT reads expanding to nearly an entire full-resolution, multiband source in RAM.
+The native grid, band selection, NoData handling, fallback sampling and both
+default cost terms are retained. The budgets exclude GDAL's separate block cache
+and the mesh/solver arrays. The override runs in serial, process-pool and supplied
+executor workers without changing the installed SpectralMatch files.
+
 ::: vhrharmonize.plugins.markov_triangles
 
 ## mask_rasters

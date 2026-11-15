@@ -1,4 +1,4 @@
-"""markov_triangles: thin adapter for the installed SpectralMatch function."""
+"""markov_triangles: SpectralMatch adapter with bounded raster sampling."""
 
 from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
@@ -13,11 +13,13 @@ def _upstream():
 @reports_progress
 def markov_triangles(*args, **kwargs):
     """Call SpectralMatch's markov_triangles with its native parameters."""
+    from ._markov_sampling import bounded_markov_sampling
 
     for name in ("dask_scheduler",):
         if isinstance(kwargs.get(name), list):
             kwargs[name] = tuple(kwargs[name])
-    return call_with_progress(_upstream(), *args, **kwargs)
+    with bounded_markov_sampling():
+        return call_with_progress(_upstream(), *args, **kwargs)
 
 
 markov_triangles.__parameter_sources__ = (_upstream,)
