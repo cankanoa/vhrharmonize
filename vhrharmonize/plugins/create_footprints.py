@@ -27,6 +27,13 @@ class CreateFootprints(SpectralMatchPlugin):
     executor_parameter = "executor"
     removes_scenes = True
 
+    def can_reuse_outputs(self, *, params):
+        """Allow normal core reuse of completed footprint and coverage files."""
+        import os
+
+        output = params.get("output_polygons")
+        return isinstance(output, str) and not os.path.exists(output + ".incomplete")
+
     def scene_ids_to_remove(self, *, params, returned, scene_ids):
         """Remove images absent from the written footprints after this step runs."""
         import os
@@ -70,5 +77,5 @@ class CreateFootprints(SpectralMatchPlugin):
     output_temporary_cleanup_paths = output_path_resolution_paths
     output_hpc_staging_paths = output_path_resolution_paths
     output_hpc_download_paths = output_path_resolution_paths
-    # SpectralMatch checks streaming completeness before applying native resume.
-    output_reuse_paths = frozenset()
+    # can_reuse_outputs rejects unfinished streaming outputs.
+    output_reuse_paths = output_path_resolution_paths

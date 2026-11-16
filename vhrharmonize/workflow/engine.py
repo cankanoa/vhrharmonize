@@ -1144,8 +1144,16 @@ class Workflow:
         return self
 
     def _plan_nodes(self):
+        reuse_allowed = {}
+
+        def may_reuse(node):
+            if node.index not in reuse_allowed:
+                plugin = load_plugin(node.step["plugin"])
+                reuse_allowed[node.index] = plugin.can_reuse_outputs(params=node.params)
+            return reuse_allowed[node.index]
+
         for node in self.nodes:
-            node.loaded = self._valid(node, node.paths("output_reuse_paths"))
+            node.loaded = self._valid(node, node.paths("output_reuse_paths")) and may_reuse(node)
 
         def require(node, requested_paths=None, requested_values=()):
             requested = set(
@@ -1170,7 +1178,7 @@ class Workflow:
                 values_ready and bool(node.demanded_values) and not node.demanded_paths
                 or self._valid(node, node.demanded_paths)
             )
-            reusable = node.demanded_paths <= set(node.paths("output_reuse_paths"))
+            reusable = node.demanded_paths <= set(node.paths("output_reuse_paths")) and may_reuse(node)
             if ready and values_ready and reuse and reusable:
                 node.status = "loaded"
                 return

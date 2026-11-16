@@ -80,6 +80,15 @@ class FunctionPlugin:
     output_hpc_staging_paths = frozenset()
     output_hpc_download_paths = frozenset()
 
+    def can_reuse_outputs(self, *, params):
+        """Allow core reuse after file checks, or require this invocation to run.
+
+        This read-only planning hook can reject unfinished products or parameters
+        that require recomputation. It must not process inputs or remove scenes.
+        Core still controls reuse and validates the requested output paths.
+        """
+        return True
+
     def worker_image_paths(self, function, args, kwargs):
         """Identify a submitted aggregate job's source images, or return ().
 

@@ -166,6 +166,18 @@ No function must implement every shared parameter. The engine owns scheduling an
 
 There is one adapter class: `FunctionPlugin`. If custom execution is needed, override `run(self, *, params, shared)`. All resolved arguments—including input paths and output paths—are in `params`. The independent file-feature declarations determine what core does with each argument. Leave core reuse, validation, invalid-removal or overview selections empty for operations the function handles itself. Core never skips an invocation merely because its output directory exists.
 
+For outputs that are reusable only under some parameters, declare
+`output_reuse_paths` and override `can_reuse_outputs(self, *, params)` to return
+`False` when recomputation is required. Core calls this read-only hook at most
+once per node in each planning pass, in addition to its normal file checks and
+reuse controls. The hook must not process images or change files or scenes.
+`create_footprints` uses it to reject `.incomplete` outputs. Completed raw
+footprints and ranked, outlined, or buffered coverage use the same core reuse
+checks as other file outputs. Set `core:reuse: false` to recompute coverage after
+changing inputs or ranking settings; core does not compare parameter histories.
+Core reuse is independent of `param:resume_from_outputs`, which applies only
+when the processing function is actually called.
+
 ## Removing scenes during execution
 
 A processing adapter can opt into runtime scene removal:
