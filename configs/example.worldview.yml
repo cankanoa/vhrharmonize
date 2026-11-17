@@ -44,7 +44,7 @@
 #   core:requires: [] # path/list; default: []. Extra file dependencies, not function arguments.
 #   core:calculate_overviews: false # true | false; default: false. Selected raster outputs; requires shared.param:window_scales.
 #   core:reuse: true # true | false; default: shared.core:run_from_existing.
-#   core:check_validity: before_reuse # around | before_reuse | false; default: before_reuse.
+#   core:check_validity: null # around | before_reuse | null | false; default: null (disabled).
 #   core:require_outputs: false # false | true | param:name | [param:name, ...]; default: false. Request these outputs regardless of their directory.
 # core:require_outputs selects deliverables. A valid cached downstream output stops
 # upstream recomputation; missing intermediate temporary files do not prevent resume.
@@ -75,7 +75,8 @@ shared:
   # core:concurrent_processing_backend: process_pool # process_pool | dask; default: process_pool.
   core:worker_error_case: remove_and_restart # error | remove_instence | remove_and_restart; default: error. Remove failed images; remove_and_restart also retries attributable aggregate failures. Reuse settings still apply.
   core:tile_threads: 1 # positive integer | cpu | null; default: 1. Threads within each image.
-  core:concurrent_processing: 1 # positive integer | num_cpu; default: 1. Concurrent scene/image jobs; must be 1 for Dask.
+  core:concurrent_processing: 5 # positive integer | num_cpu; default: 1. Concurrent scene/image jobs; must be 1 for Dask.
+  core:threads_balance: true # default: false. Share idle local image-worker slots with tile threads.
   # Dask uses a running scheduler; search "When dask is enabled" in the Slurm template.
   # core:dask_scheduler: [file, ~/koa_scratch/vhrharmonize/run_{run_id}/logs/{run_id}_dask_scheduler.json] # [file, path] | [address, URL] | null; default: null.
 
@@ -83,9 +84,9 @@ shared:
   # core:delete_temp_steps_proactively: true # true | false; default: true. Clean completed intermediates during processing.
   # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
   # core:run_from_existing: true # true | false; default: true. Reuse required outputs at each step.
-  # core:check_validity: before_reuse # around | before_reuse | false; default: before_reuse.
+  # core:check_validity: null # around | before_reuse | null | false; default: null (disabled).
   # core:validity_raster_grid: 255 # false disables pixel reads; 1 reads every pixel; N samples every Nth pixel on both axes.
-  # core:validity_raster_check_stop: readable # readable scans the whole grid; has_valid_data stops at the first valid sample.
+  # core:validity_raster_check_stop: has_valid_data # default: has_valid_data; stops at the first valid sample. readable scans the whole grid.
   # core:validity_writing_postfix: "_writing" # Write image_writing.tif, then rename on success; null or "" disables.
   # core:log_to_console: true # true | false; default: true.
   # core:show_progress: true # true | false; default: true. Live prompt_toolkit dashboard; one final summary in redirected logs.
@@ -631,6 +632,7 @@ mask_mosaic_coverage:
 # Jointly register overlapping imagery before matching.
 joint_coregistration:
   plugin: joint_coregistration
+  # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
   # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
   # param:tie_min_samples: "1000crs" # Minimum: one accepted pair per 1000 x 1000 CRS-unit square; PIF matching still requires at least 3. Use "Ncnt" for a fixed count.
@@ -685,6 +687,7 @@ joint_coregistration:
 # Global radiometric regression between overlapping images.
 global_regression:
   plugin: global_regression
+  # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
   # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
   # param:tie_min_samples: "1000crs" # Minimum: one accepted pair per 1000 x 1000 CRS-unit square; PIF matching still requires at least 3. Use "Ncnt" for a fixed count.

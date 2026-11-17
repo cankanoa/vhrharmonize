@@ -2,6 +2,7 @@
 # Adapt the glob, metadata keys and band indices to the product you receive.
 shared:
   plugin: shared
+  core:threads_balance: true # default: false. Share idle local image-worker slots with tile threads.
   core:run: true # true | false; default: false. Apply workflow-wide defaults.
   # core:protect_source_files: true # true | false; default: true. Protect imported originals and companion files.
   core:output_metadata_path: expr:var.relative_output_dir & '/processing_metadata.json' # path/expression | null; default: null. Append final const/var snapshots to this JSON array.
@@ -9,9 +10,9 @@ shared:
   # core:processing_direction: vertical # horizontal | vertical; default: vertical. Advance each scene until a synchronization point; horizontal runs by step.
   core:worker_error_case: remove_and_restart # error | remove_instence | remove_and_restart; default: error. Remove failed images; remove_and_restart also retries attributable aggregate failures. Reuse settings still apply.
   # core:run_from_existing: true # true | false; default: true.
-  # core:check_validity: before_reuse # around | before_reuse | false; default: before_reuse.
+  # core:check_validity: null # around | before_reuse | null | false; default: null (disabled).
   # core:validity_raster_grid: 255 # false disables pixel reads; 1 reads every pixel; N samples every Nth pixel on both axes.
-  # core:validity_raster_check_stop: readable # readable scans the whole grid; has_valid_data stops at the first valid sample.
+  # core:validity_raster_check_stop: has_valid_data # default: has_valid_data; stops at the first valid sample. readable scans the whole grid.
   # core:validity_writing_postfix: "_writing" # Write image_writing.tif, then rename on success; null or "" disables.
   param:custom_nodata_value: 0
   # core:log_to_console: true # true | false; default: true.

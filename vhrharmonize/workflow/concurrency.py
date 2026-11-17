@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from concurrent.futures import Future, ProcessPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from multiprocessing import get_context
 from time import monotonic
@@ -109,8 +109,54 @@ class DaskExecutor:
         return result
 
 
+def balanced_tile_threads(base, workers, remaining):
+    """Share idle image slots equally; never expand an explicit all-CPU budget."""
+    if base is None or base in ("cpu", "num_cpu"):
+        return base
+    active = max(1, min(workers, remaining))
+    return int(base) + (workers - active) // active
+
+
+@dataclass
+class ImageThreadBudget:
+    """Picklable phase counter shared with image workers for later tile phases."""
+    remaining: object
+    workers: int
+    base: object
+
+    def tile_threads_for_jobs(self, value, unused=None):
+        if value is None or self.base is None or self.base in ("cpu", "num_cpu"):
+            return value
+        return balanced_tile_threads(self.base, self.workers, self.remaining.value)
+
+    def completed(self):
+        # Only the parent coordinator changes the counter.
+        self.remaining.value = max(0, self.remaining.value - 1)
+
+
+class BalancedImageExecutor:
+    """Expose an optional per-image allocation protocol to processing libraries."""
+
+    def __init__(self, executor, workers, manager=None, tile_threads=1):
+        self._executor = executor
+        self.image_worker_limit = workers
+        self._manager = manager
+        self._tile_threads = tile_threads
+
+    def __getattr__(self, name):
+        return getattr(self._executor, name)
+
+    def tile_threads_for_jobs(self, base, remaining):
+        return balanced_tile_threads(base, self.image_worker_limit, remaining)
+
+    def image_thread_budget(self, total):
+        if self._manager is None:
+            return None
+        return ImageThreadBudget(self._manager.Value("i", total), self.image_worker_limit, self._tile_threads)
+
+
 @contextmanager
-def image_executor(workers, backend, scheduler=None):
+def image_executor(workers, backend, scheduler=None, *, threads_balance=False, tile_threads=1):
     """Own an image pool while the aggregate coordinator runs in the parent."""
     if backend == "dask":
         if workers != 1:
@@ -122,8 +168,9 @@ def image_executor(workers, backend, scheduler=None):
             finally:
                 client.cancel(executor._jobs)
     else:
-        with interruptible_pool(ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))) as executor:
-            yield executor
+        with (get_context("spawn").Manager() if threads_balance else nullcontext()) as manager:
+            with interruptible_pool(ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))) as executor:
+                yield BalancedImageExecutor(executor, workers, manager, tile_threads) if threads_balance else executor
 
 
 def _resolve_concurrent_processing(value: object) -> int:

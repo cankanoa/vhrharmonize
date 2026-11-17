@@ -27,7 +27,7 @@ def test_planning_checks_each_output_once_and_discards_cache(tmp_path, monkeypat
         return original(path)
     monkeypatch.setattr(validation, '_json_file_is_valid', check)
     workflow = Workflow({
-        'settings': {'plugin': 'shared', 'core:run': True,
+        'settings': {'plugin': 'shared', 'core:run': True, 'core:check_validity': 'before_reuse',
                      'core:save_statistics_path': None, 'core:load_statistics_path': None},
         'write': {'plugin': 'cached_writer', 'core:run': True, 'core:require_outputs': True,
                   'param:output_path': str(output)},
@@ -141,5 +141,6 @@ def test_parallel_raster_read_error_is_not_ignored(tmp_path, make_test_raster, m
             raise IOError('bad tile at end of raster')
         return original(band, x, y, *args, **kwargs)
     monkeypatch.setattr(validation, '_gdal_band_window_has_valid_pixel', check)
-    valid, reason = validation._gdal_raster_is_valid(file, validity_raster_grid=2, tile_threads=3)
+    valid, reason = validation._gdal_raster_is_valid(
+        file, validity_raster_grid=2, tile_threads=3, validity_raster_check_stop="readable")
     assert not valid and 'bad tile at end' in reason

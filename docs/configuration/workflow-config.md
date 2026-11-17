@@ -433,9 +433,9 @@ Shared runner controls are:
 | `output_metadata_path` | `null` (disabled) |
 | `delete_final_json_first` | `true` |
 | `run_from_existing` | `true` |
-| `check_validity` | `"before_reuse"` |
+| `check_validity` | `null` (disabled) |
 | `validity_raster_grid` | `255` |
-| `validity_raster_check_stop` | `"readable"` |
+| `validity_raster_check_stop` | `"has_valid_data"` |
 | `validity_writing_postfix` | `"_writing"` |
 | `cleanup_dirs` | `[]` (explicit `const:`/`var:` cleanup-root references) |
 | `delete_temp_dir` | `false` |
@@ -447,6 +447,7 @@ Shared runner controls are:
 | `processing_direction` | `vertical` |
 | `concurrent_processing` | `1` |
 | `tile_threads` | `1` |
+| `threads_balance` | `false` |
 | `concurrent_processing_backend` | `process_pool` |
 | `dask_scheduler` | `null`; `[file, path]` or `[address, URL]` |
 
@@ -565,6 +566,22 @@ images complete successfully. Removing a scene does not delete its source files.
 An aggregate uses `param:input_images: collect:current_image_paths` or `param:metadata_records: collect:footprint_metadata`. Collection reads scene variables at that position in the workflow. Aggregate `const:` assignments become available to subsequent scene and aggregate steps. Repeated invocations use separate unique step names selecting the same `plugin:`. Counts, explicit context operations and execution order identify those names, such as `orthorectify_mul` and `orthorectify_pan`.
 
 Scene steps can process records concurrently. `core:concurrent_processing` accepts a positive integer or `num_cpu`. Dask requires `core:concurrent_processing: 1` plus a scheduler address/file when work must run. Horizontal processing completes each step before the next begins; vertical processing advances scenes independently between synchronization points. SpectralMatch aggregate functions coordinate in the parent and submit image/pair jobs to a workflow-owned executor using the same core worker count and backend. The executor is never sent to a worker or stored in YAML. `core:tile_threads` controls threads within each image (positive integer, `cpu`/`num_cpu`, or `null`; default `1`). Only plugins declaring `tile_threads_parameter` receive this setting. Executor injection likewise requires `executor_parameter`; argument names alone do not opt in. See [adding plugins](../getting-started/adding-plugins.md) for the mapping contract. Standalone Python APIs retain their native worker parameters; the SpectralMatch adapters override their legacy parameters during workflow execution, so omit `param:image_threads`, `param:tile_threads`, `param:concurrent_processing`, `param:concurrent_processing_backend`, and `param:dask_scheduler` from these workflow recipes. Image-level executor support requires the updated SpectralMatch checkout.
+
+`core:threads_balance: true` shares idle **local** image-worker slots among the
+remaining jobs. With C image workers, T tile threads and N remaining jobs, each
+job gets `T + floor((C - min(C, N)) / min(C, N))` tile threads. For C=8 and T=2,
+two jobs get five each, and one job gets nine. The default is `false`; the example
+recipes enable it. `tile_threads: null` and `cpu`/`num_cpu` retain their explicit
+behavior. Dask retains cluster-owned scheduling and does not use local balancing.
+
+Scene steps receive their allocation at dispatch, counting remaining scenes
+rather than cached outputs. Updated SpectralMatch image/pair phases use their
+actual unfinished task counts, including a shared counter for running workers.
+They refresh counts before subsequent GDAL/tile operations; an already-running
+GDAL operation or tile pool keeps its allocation until it finishes. A single-file
+mosaic is one job regardless of how many images it merges. Algorithms without
+tile parallelism cannot use the extra threads. Image pools remain workflow-owned;
+this option does not add nested image pools.
 
 See [Adding plugins](../getting-started/adding-plugins.md) for registration and [HPC execution](../cli/hpc.md) for staging.
 
@@ -691,12 +708,14 @@ YAML. `core:run: false` still fully disables a step and its assignments.
 `core:scope: var` selects per-record execution. Without initialized records, default-scope functions can run
 once with constants, while explicit `var` scope and `var:` access are rejected.
 
+
 ### Output validation and publication
 
-`core:check_validity: before_reuse` (default) validates existing products before
-reusing them. `around` also validates declared file inputs before invocation and
-new outputs before publishing them. `false` disables format checks; existence
-checks still apply. TIFF metadata/byte ranges, JSON syntax and GeoPackage
+`core:check_validity: null` (default) disables format checks; existence checks
+still apply. `before_reuse` validates existing products before reusing them.
+`around` also validates declared file inputs before invocation and new outputs
+before publishing them. `false` is also accepted to disable format checks. When
+validation is enabled, TIFF metadata/byte ranges, JSON syntax and GeoPackage
 integrity/readability are checked independently of raster sampling.
 
 Planning reports `[core:validation]` with a percentage of files checked.
@@ -710,9 +729,10 @@ same output twice. The cache is discarded before execution or scene discovery.
 `core:validity_raster_grid: 255` reads a pixel every 255 pixels on each axis in
 each band, including masks. `1` reads every base-resolution pixel in bounded
 windows; `false` disables pixel reads, retaining structural checks.
-`core:validity_raster_check_stop: readable` reads the full grid, allowing NoData;
-`has_valid_data` stops at the first finite unmasked non-NoData sample and fails if
-none are found. Sampling can miss corruption between sampled locations.
+`core:validity_raster_check_stop: has_valid_data` (default) stops at the first
+finite unmasked non-NoData sample and fails if none are found. `readable` reads
+the full grid, allowing NoData. Sampling can miss corruption between sampled
+locations.
 
 `core:validity_writing_postfix: "_writing"` writes `image_writing.tif`, builds any
 requested overviews, validates it when using `around`, then renames it to

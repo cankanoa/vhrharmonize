@@ -72,8 +72,8 @@ def test_tiff_bounds_allow_sparse_blocks_and_trailing_bytes(tmp_path, bigtiff):
 
     # NoData is readable; only has_valid_data requires a finite unmasked sample.
     assert validation._gdal_raster_is_valid(str(path), validity_raster_grid=False) == (True, None)
-    assert validation._gdal_raster_is_valid(str(path)) == (True, None)
-    assert validation._gdal_raster_is_valid(str(path), validity_raster_check_stop="has_valid_data") == (
+    assert validation._gdal_raster_is_valid(str(path), validity_raster_check_stop="readable") == (True, None)
+    assert validation._gdal_raster_is_valid(str(path)) == (
         False, "no finite valid pixels found in validity sample"
     )
 

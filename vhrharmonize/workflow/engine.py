@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from .concurrency import _make_dask_client, image_executor, ImageTrackingExecutor, interruptible_pool
+from .concurrency import _make_dask_client, image_executor, ImageTrackingExecutor, interruptible_pool, balanced_tile_threads
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import inspect
 import os
@@ -1847,6 +1847,20 @@ class Workflow:
             print(f"Error: {error['error_type']}: {error['error']}")
             print(error["traceback"], end="" if error["traceback"].endswith("\n") else "\n")
 
+    def _balanced_payload(self, payload, remaining):
+        """Allocate spare local image slots just before a job is submitted."""
+        if not self.controls["threads_balance"] or self.controls["concurrent_processing_backend"] == "dask":
+            return payload
+        workers = self.controls["concurrent_processing"]
+        workers = (os.cpu_count() or 1) if workers == "num_cpu" else int(workers)
+        threads = balanced_tile_threads(self.controls["tile_threads"], workers, remaining)
+        plugin_name, params, shared, *options = payload
+        plugin = load_plugin(plugin_name)
+        params = {**params, **plugin.runtime_parameters(tile_threads=threads)}
+        options = [replace(option, tile_threads=threads) if isinstance(option, OutputPolicy) else option
+                   for option in options]
+        return plugin_name, params, shared, *options
+
     def _run_horizontal_step(self, step_index, workers, backend):
         self._prepare_constants(step_index)
         nodes = [node for node in self.nodes if node.step_index == step_index and node.needed]
@@ -1878,7 +1892,8 @@ class Workflow:
             for node, payload in dispatches():
                 failures = []
                 with self._worker_error_case(node, worker_failures=failures):
-                    with image_executor(workers, backend, self.controls.get("dask_scheduler")) as executor:
+                    with image_executor(workers, backend, self.controls.get("dask_scheduler"),
+                                        **({"threads_balance": True, "tile_threads": self.controls["tile_threads"]} if self.controls["threads_balance"] else {})) as executor:
                         tracked = ImageTrackingExecutor(executor, self._aggregate_job_images(node, plugin), failures)
                         self._finish(node, _execute(payload, executor=tracked))
                 if node.status == "failed":
@@ -1904,20 +1919,30 @@ class Workflow:
             with interruptible_pool(ProcessPoolExecutor(
                 max_workers=min(workers, len(pending)), mp_context=get_context("spawn")
             )) as executor:
-                futures = {
-                    executor.submit(_execute, payload): node for node, payload in dispatches()
-                }
+                futures = {}
+                jobs = iter(dispatches())
+                finished = 0
                 try:
-                    for future in as_completed(futures):
-                        with self._worker_error_case(futures[future]):
-                            self._finish(futures[future], future.result())
+                    while finished < len(payloads):
+                        while len(futures) < workers:
+                            job = next(jobs, None)
+                            if job is None:
+                                break
+                            node, payload = job
+                            payload = self._balanced_payload(payload, len(payloads) - finished)
+                            futures[executor.submit(_execute, payload)] = node
+                        future = next(as_completed(futures))
+                        node = futures.pop(future)
+                        with self._worker_error_case(node):
+                            self._finish(node, future.result())
+                        finished += 1
                 finally:
                     for future in futures:
                         future.cancel()
         else:
             for node, payload in dispatches():
                 with self._worker_error_case(node):
-                    self._finish(node, _execute(payload))
+                    self._finish(node, _execute(self._balanced_payload(payload, 1)))
         self._cleanup()
         self._advance_var_records(step_index)
 
@@ -1996,6 +2021,10 @@ class Workflow:
                     else:
                         with self._worker_error_case(node):
                             payload = self._payload(node)
+                            remaining_scenes = {node.record}
+                            remaining_scenes.update(n.record for n in waiting.values() if n.status == "processing")
+                            remaining_scenes.update(n.record for n in running.values())
+                            payload = self._balanced_payload(payload, len(remaining_scenes))
                             started[node.step_index] += 1
                             self._log_node_start(
                                 node, started[node.step_index], totals[node.step_index],

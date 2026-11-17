@@ -40,7 +40,7 @@ def _tiff_truncation_reason(path: str) -> str | None:
 
 def _gdal_raster_is_valid(
     path: str, *, validity_raster_grid: int | bool = 255,
-    validity_raster_check_stop: str = "readable",
+    validity_raster_check_stop: str = "has_valid_data",
     tile_threads: int | str | None = 1,
 ) -> tuple[bool, str | None]:
     """Inspect metadata and optionally read a regular pixel grid in every band.
@@ -210,9 +210,9 @@ def _json_file_is_valid(path: str) -> tuple[bool, str | None]:
 def _existing_output_failures(
     output_paths: List[str],
     *,
-    check_validity: bool,
+    check_validity: bool | None = None,
     validity_raster_grid: int | bool = 255,
-    validity_raster_check_stop: str = "readable",
+    validity_raster_check_stop: str = "has_valid_data",
     tile_threads: int | str | None = 1,
     log_to_console: bool,
     step: str,
@@ -249,9 +249,9 @@ def _existing_output_failures(
 def _existing_outputs_are_reusable(
     output_paths: List[str],
     *,
-    check_validity: bool,
+    check_validity: bool | None = None,
     validity_raster_grid: int | bool = 255,
-    validity_raster_check_stop: str = "readable",
+    validity_raster_check_stop: str = "has_valid_data",
     tile_threads: int | str | None = 1,
     log_to_console: bool,
     step: str,

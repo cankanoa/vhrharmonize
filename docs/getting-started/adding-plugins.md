@@ -340,3 +340,18 @@ the collection. Plugins declare `var_records_return`, `var_records_mode`,
 `var_id_return`, and `var_path_return`. The former `scene` scope and `scene_*`
 declarations are rejected. Return-field names are selected by those declarations
 and belong to the function's data schema.
+
+### Balancing tile threads
+
+Plugins declaring `tile_threads_parameter` receive balanced per-scene values when
+`core:threads_balance` is enabled. Use that runtime value rather than a fixed
+worker count. Native operations already in flight retain their thread counts.
+
+Local borrowed executors optionally expose `image_worker_limit`,
+`tile_threads_for_jobs(base, remaining)` and `image_thread_budget(total)`.
+Libraries can use this protocol without importing VHR: the budget exposes
+`tile_threads_for_jobs(value)` and parent-only `completed()`. Count actual
+unfinished tasks (after reuse), update once per completed job, and keep each
+budget scoped to its phase. SpectralMatch propagates the picklable budget to image
+workers and refreshes native thread options before later tile operations.
+Plain executors and Dask do not need to implement this optional protocol.

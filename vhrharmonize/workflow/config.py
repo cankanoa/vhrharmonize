@@ -42,9 +42,9 @@ DEFAULT_SHARED = {
     "output_metadata_path": None,
     "delete_final_json_first": True,
     "run_from_existing": True,
-    "check_validity": "before_reuse",
+    "check_validity": None,
     "validity_raster_grid": 255,
-    "validity_raster_check_stop": "readable",
+    "validity_raster_check_stop": "has_valid_data",
     "validity_writing_postfix": "_writing",
     "delete_temp_dir": False,
     "delete_temp_steps_proactively": True,
@@ -55,6 +55,7 @@ DEFAULT_SHARED = {
     "load_statistics_path": "statistics.jsonl",
     "concurrent_processing": 1,
     "tile_threads": 1,
+    "threads_balance": False,
     "concurrent_processing_backend": "process_pool",
     "processing_direction": "vertical",
     "worker_error_case": "error",
@@ -62,6 +63,7 @@ DEFAULT_SHARED = {
 }
 SHARED_CONTROLS = set(DEFAULT_SHARED) | {"dask_scheduler"}
 BOOLEANS = {
+    "threads_balance",
     "protect_source_files",
     "delete_final_json_first",
     "run",
@@ -162,8 +164,8 @@ def _validate_settings(settings, *, shared=False, context_only=False):
                 raise ValueError("core:processing_direction must be horizontal or vertical")
             if name == "worker_error_case" and value not in ("error", "remove_instence", "remove_and_restart"):
                 raise ValueError("core:worker_error_case must be error, remove_instence, or remove_and_restart")
-            if name == "check_validity" and value is not False and value not in ("around", "before_reuse"):
-                raise ValueError("core:check_validity must be around, before_reuse, or false")
+            if name == "check_validity" and value is not None and value is not False and value not in ("around", "before_reuse"):
+                raise ValueError("core:check_validity must be around, before_reuse, null, or false")
             if name == "validity_raster_grid" and value is not False and (
                 not isinstance(value, int) or isinstance(value, bool) or value < 1
             ):

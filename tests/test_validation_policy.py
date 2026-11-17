@@ -78,11 +78,35 @@ def test_invalid_validation_settings_are_rejected(setting, value):
 def test_validation_defaults():
     assert {k: DEFAULT_SHARED[k] for k in ('check_validity', 'validity_raster_grid',
             'validity_raster_check_stop', 'validity_writing_postfix')} == {
-        'check_validity': 'before_reuse', 'validity_raster_grid': 255,
-        'validity_raster_check_stop': 'readable', 'validity_writing_postfix': '_writing'}
+        'check_validity': None, 'validity_raster_grid': 255,
+        'validity_raster_check_stop': 'has_valid_data', 'validity_writing_postfix': '_writing'}
 
 
-@pytest.mark.parametrize('mode,accepts', [('around', False), ('before_reuse', True), (False, True)])
+@pytest.mark.parametrize('settings', [{}, {'core:check_validity': None}])
+def test_default_or_null_validation_reuses_without_opening_contents(tmp_path, monkeypatch, settings):
+    output = tmp_path / 'output.json'
+    output.write_text('{incomplete')
+    def unexpected(*args, **kwargs):
+        pytest.fail('Disabled validation must not read file contents')
+    monkeypatch.setattr(validation, '_json_file_is_valid', unexpected)
+    install_function(monkeypatch, 'unchecked_writer', unexpected, output_paths=('output_path',))
+    config = {
+        'settings': {'plugin': 'shared', 'core:run': True,
+                     'core:show_progress': False, 'core:save_statistics_path': None,
+                     'core:load_statistics_path': None, **settings},
+        'write': {'plugin': 'unchecked_writer', 'core:run': True, 'core:require_outputs': True,
+                  'param:output_path': str(output)},
+    }
+    validate_config(config)
+    workflow = Workflow(config)
+    workflow.run()
+    assert workflow.nodes[0].status == 'loaded'
+    assert output.read_text() == '{incomplete'
+    assert OutputPolicy().check_validity is None
+    assert OutputPolicy().check_stop == 'has_valid_data'
+
+
+@pytest.mark.parametrize('mode,accepts', [('around', False), ('before_reuse', True), (False, True), (None, True)])
 def test_new_output_validation_happens_before_rename_only_in_around(tmp_path, mode, accepts):
     output = str(tmp_path / 'result.json')
     policy = OutputPolicy(check_validity=mode, validation_paths=(output,))

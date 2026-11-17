@@ -50,10 +50,10 @@ def companions(filename):
 @dataclass(frozen=True)
 class OutputPolicy:
     postfix: str | None = "_writing"
-    check_validity: str | bool = "before_reuse"
+    check_validity: str | bool | None = None
     tile_threads: int | str | None = 1
     raster_grid: int | bool = 255
-    check_stop: str = "readable"
+    check_stop: str = "has_valid_data"
     validation_paths: tuple[str, ...] = ()
     overview_paths: tuple[str, ...] = ()
     overview_scales: object = None
