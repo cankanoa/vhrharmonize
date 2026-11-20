@@ -71,7 +71,7 @@ def test_samples_match_native_reader_with_masks_edges_and_band_order(tmp_path, g
 def test_cache_is_bounded_and_repeated_samples_reuse_tiles(tmp_path, monkeypatch):
     path, crs = raster(tmp_path / 'source.tif')
     sampler = sampling.BoundedRasterSampler(crs)
-    sampler.cache_bytes = 256 * 256 * 8
+    sampler.cache_bytes = 8  # One coarse sampled pixel, to exercise eviction.
     calls = []
     original = gdal.Warp
 
@@ -85,6 +85,40 @@ def test_cache_is_bounded_and_repeated_samples_reuse_tiles(tmp_path, monkeypatch
             sampler.sample(path, np.array([point]), (1,), 1)
             assert sampler.tile_bytes <= sampler.cache_bytes
         assert calls == ['VRT', 'MEM', 'MEM', 'MEM']
+    finally:
+        sampler.close()
+
+
+def test_coarse_reads_use_tight_windows_and_only_extend_uncached_strips(tmp_path, monkeypatch):
+    path, crs = raster(tmp_path / 'source.tif')
+    sampler = sampling.BoundedRasterSampler(crs)
+    calls = []
+    original = gdal.Warp
+
+    def warp(*args, **kwargs):
+        if kwargs.get('format') == 'MEM':
+            calls.append((kwargs['width'], kwargs['height']))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gdal, 'Warp', warp)
+    try:
+        # The same coarse bin grows from a point to a 3x3 window. Repeated
+        # requests must not average the original pixel again.
+        sampler.sample(path, np.array([[50., 230.]]), (1,), 10)
+        assert calls == [(1, 1)]
+        coordinates = np.array([[40., 240.], [60., 220.], [50., 230.]])
+        actual = sampler.sample(path, coordinates, (1,), 10)
+        assert sum(w*h for w,h in calls) == 9
+        assert all(w <= 3 and h <= 3 for w,h in calls)
+        count = len(calls)
+        np.testing.assert_array_equal(sampler.sample(path, coordinates, (1,), 10), actual)
+        assert len(calls) == count
+        native = sampling._native._RasterSampler(crs)
+        try:
+            np.testing.assert_allclose(actual, native.sample(path, coordinates, (1,), 10),
+                                       rtol=1e-8, atol=1e-8, equal_nan=True)
+        finally:
+            native.close()
     finally:
         sampler.close()
 
@@ -180,3 +214,46 @@ print('added_mib', added_mib)
     result = subprocess.run([sys.executable, '-c', script, path], env=env,
                             cwd=Path(__file__).parents[1], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_adjacent_coarse_bins_share_one_warp(tmp_path, monkeypatch):
+    path, crs = raster(tmp_path / 'adjacent.tif')
+    sampler = sampling.BoundedRasterSampler(crs)
+    calls = []
+    original = gdal.Warp
+    def warp(*args, **kwargs):
+        if kwargs.get('format') == 'MEM':
+            calls.append((kwargs['width'], kwargs['height']))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(gdal, 'Warp', warp)
+    coordinates = np.array([[159., 180.], [160., 180.]])
+    native = sampling._native._RasterSampler(crs)
+    try:
+        actual = sampler.sample(path, coordinates, (1,2), 10)
+        assert calls == [(2,1)]
+        np.testing.assert_allclose(actual, native.sample(path, coordinates, (1,2), 10), equal_nan=True)
+    finally:
+        native.close(); sampler.close()
+
+
+def test_worker_cache_reuses_arrays_and_invalidates_changed_sources(tmp_path, monkeypatch):
+    path, crs = raster(tmp_path / 'cache.tif')
+    calls = []
+    original = sampling.BoundedRasterSampler._read_window
+    def read(self, *args, **kwargs):
+        calls.append(1)
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(sampling.BoundedRasterSampler,'_read_window',read)
+    point=np.array([[100.,180.]])
+    for _ in range(2):
+        sampler=sampling.BoundedRasterSampler(crs)
+        sampler.sample(path,point,(1,),10);sampler.close()
+    assert len(calls)==1
+    with gdal.Open(path,gdal.GA_Update) as ds:
+        ds.GetRasterBand(1).WriteArray(np.full((10,10),3000,dtype=np.int16),100,100)
+    stamp=os.stat(path).st_mtime_ns
+    os.utime(path,ns=(stamp,stamp+1000000000))  # Deterministic on coarse-timestamp filesystems.
+    sampler=sampling.BoundedRasterSampler(crs)
+    sampler.sample(path,point,(1,),10);sampler.close()
+    assert len(calls)==2
+    assert sampling._worker_tile_bytes <= sampling._worker_cache_limit
