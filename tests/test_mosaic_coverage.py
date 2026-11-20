@@ -36,6 +36,7 @@ def test_worldview_caches_vectors_then_recalculates_seamline_footprints():
     assert early["param:input_images"] == "collect:polygonized_footprint_path"
     assert "param:input_vectors" not in early
     assert "{stat:area_crs}" in early["param:image_rank_function"]
+    assert "{stat:gap_coverage_fraction}" in early["param:image_rank_function"]
     assert recipe["polygonize_images"]["core:scope"] == "var"
     assert "var:current_image_paths" not in recipe["polygonize_images"]
     assert names.index("cloud_mask") < names.index("polygonize_images") < names.index("standardize_mosaic_coverage")
@@ -166,6 +167,32 @@ def test_vhr_passes_min_polygon_area_to_spectralmatch(tmp_path, minimum, expecte
         min_polygon_area=minimum,
     )
     assert len(gpd.read_file(output)) == expected
+
+
+def test_worldview_gap_score_prefers_one_whole_hole_filler_from_saved_vectors(tmp_path):
+    recipe = load_config("configs/example.worldview.yml")["standardize_mosaic_coverage"]
+    expression = recipe["param:image_rank_function"]
+    hole = box(200, 200, 800, 800)
+    shapes = [box(0, 0, 1000, 1000).difference(hole), box(200, 200, 680, 800), hole]
+    paths = []
+    for name, angle, geometry in zip("abc", [0., 10., 30.], shapes):
+        vector = tmp_path / f"{name}.gpkg"
+        gpd.GeoDataFrame({"image": [name], "image_path": [f"/unavailable/{name}.tif"],
+                          "view_zenith": [angle], "solar_zenith": [0.]},
+                         geometry=[geometry], crs=3857).to_file(vector, layer="footprints")
+        paths.append(str(vector))
+    output = create_footprints(
+        paths, str(tmp_path / "coverage.gpkg"), footprint_source="vector_bounds",
+        vector_layer="footprints", image_rank_function=expression,
+        min_polygon_area=recipe["param:min_polygon_area"],
+        extrude_distance=recipe["param:extrude_distance"],
+    )
+    result = gpd.read_file(output)
+    assert result.image.tolist() == ["a", "c"]
+    assert result.geometry.iloc[0].equals(shapes[0])
+    assert result.geometry.iloc[1].equals(hole)
+    assert result.weighted_score.iloc[0] == pytest.approx(5 * math.log2(.64))
+    assert result.weighted_score.iloc[1] == pytest.approx(200 + 5 * math.log2(.36) - 30)
 
 
 def test_saved_vector_bounds_are_staged_and_read_without_raster_pixels(tmp_path):

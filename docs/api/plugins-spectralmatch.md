@@ -69,6 +69,7 @@ The initial coverage recipe ranks each connected polygon component using:
 ```yaml
 param:image_rank_function: >-
   5 * log(max({stat:area_crs}, 1) / 1000000) / log(2)
+  + 200 * {stat:gap_coverage_fraction}
   - ({var:view_zenith} + {var:solar_zenith})
 ```
 
@@ -79,7 +80,27 @@ component's area offsets five degrees of worse combined view/solar zenith.
 MultiPolygons are ranked as separate components with the same image ID and metadata,
 so a small island cannot borrow a larger component's area bonus. The statistic is
 not a table field; `var:area_crs` remains an ordinary arbitrary column reference.
-Ranking without a geometry-statistic reference continues to operate per image.
+Ranking without an area-statistic reference continues to operate per image.
+
+`stat:gap_coverage_fraction` enables iterative gap filling in `create_footprints`.
+It is zero for the first selection, which therefore uses the existing area/angle
+preference. After each owner is chosen, the algorithm finds the largest connected
+gap in the remaining available coverage and recomputes candidate scores. The
+fraction is the candidate's intersection area with that gap divided by the gap's
+area, from 0 to 1. Candidates that cover none of the gap are excluded from that
+selection. A selected candidate owns all of its still-uncovered geometry, which
+can also fill other gaps. The goal excludes outline areas with no source coverage.
+
+At weight 200, covering 20 percentage points more of a gap adds 40 score points,
+offsetting 40 degrees of worse combined zenith when the other terms are equal.
+The area term remains each original clipped component's area, and image summaries
+remain fixed across selections. Buffering happens after ownership and cannot
+change gap scores. `weighted_score` records the score at selection and
+`weighted_rank` records selection order; scores need not decrease across ranks.
+This is a weighted tradeoff, not a guarantee of the fewest images. Expressions
+without the gap statistic retain the existing one-time ranking. The gap statistic
+requires a SpectralMatch version supporting it and is unavailable to weighted
+seamlines and Markov image-quality ranking, which lack this coverage context.
 
 Raw defaults preserve overlaps; outline/ranking/buffering recomputes coverage as
 a group and replaces the polygon file only after success.
