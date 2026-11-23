@@ -15,7 +15,6 @@ class SpectralMatchPlugin(FunctionPlugin):
     def run(self, *, params, shared):
         """Optionally pass a one-image group through a matching-only step."""
         from pathlib import Path
-        import shutil
 
         params = dict(params)
         skip = params.pop("skip_single_image", False)
@@ -35,7 +34,18 @@ class SpectralMatchPlugin(FunctionPlugin):
             _, finalizer = current_output_context()
             with output_context(params.get("validity_writing_postfix"), finalizer):
                 with writing_outputs(str(output)) as (destination,):
-                    shutil.copy2(source, destination)
+                    from osgeo import gdal
+                    from vhrharmonize.io.compression import validate_compression
+                    compression = validate_compression(params.get("compression", True))
+                    dataset = gdal.Translate(
+                        destination, str(source), format="GTiff",
+                        creationOptions=["TILED=YES", "BIGTIFF=IF_SAFER",
+                                         "COMPRESS=DEFLATE" if compression else "COMPRESS=NONE"],
+                    )
+                    if dataset is None:
+                        raise RuntimeError(f"Could not write single-image output: {output}")
+                    dataset.FlushCache()
+                    dataset = None
             return [str(output)]
         return super().run(params=params, shared=shared)
 

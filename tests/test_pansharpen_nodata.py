@@ -38,15 +38,16 @@ def write_inputs(tmp_path, inputs, dtype, *, cropped=False):
     return paths
 
 
+@pytest.mark.parametrize("compression", [True, False])
 @pytest.mark.parametrize("dtype,nodata", [
     ("int16", -9999), ("int16", 0), ("uint16", 65535),
     ("float32", -9999), ("float32", float("nan")), ("int16", None),
 ])
-def test_real_pansharpen_writes_valid_nodata_without_reopening_output(tmp_path, monkeypatch, inputs, dtype, nodata):
+def test_real_pansharpen_writes_valid_nodata_without_reopening_output(tmp_path, monkeypatch, inputs, dtype, nodata, compression):
     module = importlib.import_module("vhrharmonize.plugins.pansharpen")
     ms, pan = write_inputs(tmp_path, inputs, dtype)
     baseline, output = tmp_path / "baseline.tif", tmp_path / "output.tif"
-    module.pansharpen_image(str(ms), str(pan), str(baseline))
+    module.pansharpen_image(str(ms), str(pan), str(baseline), compression=compression)
     original_open = rasterio.open
     output_opens = []
 
@@ -57,7 +58,7 @@ def test_real_pansharpen_writes_valid_nodata_without_reopening_output(tmp_path, 
 
     with monkeypatch.context() as patch:
         patch.setattr(rasterio, "open", record_open)
-        module.pansharpen_image(str(ms), str(pan), str(output), custom_nodata_value=nodata)
+        module.pansharpen_image(str(ms), str(pan), str(output), custom_nodata_value=nodata, compression=compression)
     assert output_opens == ["w"]
     with rasterio.open(baseline) as reference, rasterio.open(output) as result:
         expected_nodata = reference.nodata if nodata is None else nodata
@@ -70,8 +71,9 @@ def test_real_pansharpen_writes_valid_nodata_without_reopening_output(tmp_path, 
         invalid = result.read()[~valid]
         assert np.isnan(invalid).all() if np.isnan(expected_nodata) else (invalid == expected_nodata).all()
         for key in ("transform", "crs", "height", "width", "count", "dtype", "compress", "tiled"):
-            assert result.profile[key] == reference.profile[key]
+            assert result.profile.get(key) == reference.profile.get(key)
         assert result.colorinterp == reference.colorinterp
+        assert (result.compression is not None) == compression
 
 
 def test_custom_nodata_preserves_orthority_cropped_output_grid(tmp_path, inputs):
@@ -141,7 +143,8 @@ def test_pansharpen_honors_thread_control_and_never_builds_native_overviews(
     assert module.Pansharpen().runtime_parameters(tile_threads=threads) == {'tile_threads': threads}
 
 
-def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, inputs):
+@pytest.mark.parametrize("compression", [True, False])
+def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, inputs, compression):
     from vhrharmonize.workflow.engine import Workflow
     from workflow_helpers import import_settings
     ms, pan = write_inputs(tmp_path, inputs, 'int16')
@@ -163,6 +166,7 @@ def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, i
             'param:input_high_resolution_path': str(pan),
             'param:output_image_path': str(output),
             'param:custom_nodata_value': -9999,
+            'param:compression': compression,
         },
     })
     workflow.run()
@@ -170,3 +174,7 @@ def test_workflow_can_still_build_core_overviews_after_pansharpening(tmp_path, i
         assert result.overviews(1) == [2, 4]
         assert result.nodata == -9999
         assert result.res == (.5, .5)
+    import tifffile
+    with tifffile.TiffFile(output) as tif:
+        assert len(tif.pages) == 3
+        assert all((int(page.compression) != 1) == compression for page in tif.pages)

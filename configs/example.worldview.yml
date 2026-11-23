@@ -314,6 +314,7 @@ fetch_atmosphere:
 # Py6S atmospheric correction. Geometry, band order and radiance calibration come from mapped JSON.
 py6s_atmospheric_correction:
   plugin: py6s_atmospheric_correction
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:swap_for_temp_file: [input_raster] # File parameters to process through local UUID copies.
   # core:require_outputs: param:output_raster # Default: false. Uncomment to request this output explicitly.
@@ -439,6 +440,7 @@ py6s_atmospheric_correction:
 # Orthorectify multispectral imagery with the source RPC model and a DEM.
 orthorectify_mul:
   plugin: orthorectification
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   param:input_image_path: var:current_image_paths # path; required.
@@ -461,6 +463,7 @@ orthorectify_mul:
 
 orthorectify_pan:
   plugin: orthorectification
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   core:requires: var:pan_companions # path list; default: []. External PAN RPC sidecars.
@@ -474,6 +477,7 @@ orthorectify_pan:
 # Pansharpen corrected multispectral data with orthorectified PAN data.
 pansharpen:
   plugin: pansharpen
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_image_path # Default: false. Uncomment to request this output explicitly.
   param:input_low_resolution_path: var:current_image_paths # path; required.
@@ -489,6 +493,7 @@ pansharpen:
 # Predict clouds on orthorectified MUL imagery and mask the pansharpened raster. Band indices are one-based.
 cloud_mask:
   plugin: cloud_mask
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:swap_for_temp_file: [input_image_path, inference_image_path, output_raster_path, output_mask_path] # File parameters to process through local UUID copies.
   # core:require_outputs: [param:output_raster_path, param:output_mask_path] # Requested deliverables; upstream steps run as needed.
@@ -534,6 +539,7 @@ cloud_mask:
 # Install the updated SpectralMatch checkout with its elastix extra first.
 # lidar_joint_coregistration:
 #   plugin: joint_coregistration
+#   param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
 #   core:run: true # Anchor images to the configured reference_path.
 #   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
 #   core:scope: var # One image + one LiDAR reference per scene; workflow workers run pairs concurrently.
@@ -558,6 +564,7 @@ cloud_mask:
 # with metre units; align_rasters preserves the input CRS. The _30m suffix distinguishes test outputs.
 # test_low_resolution_run:
 #   plugin: align_rasters
+#   param:compression: false # Uncompressed intermediate rasters.
 #   core:run: true # true | false; default: false. Enable when this block is uncommented.
 #   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
 #   core:scope: aggregate # scene | aggregate; default: aggregate. Process all current scene rasters.
@@ -572,6 +579,7 @@ cloud_mask:
 # Polygonize each processed image once; keep its valid-data outline beside the raster.
 polygonize_images:
   plugin: create_footprints
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # One polygon file per scene, reusable on later workflow runs.
   core:scope: var
   # core:require_outputs: param:output_polygons
@@ -596,6 +604,7 @@ polygonize_images:
 # This invokes the same plugin as the later valid-data footprint step.
 standardize_mosaic_coverage:
   plugin: create_footprints
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Reduce the area processed by SpectralMatch.
   param:input_images: collect:polygonized_footprint_path # Saved per-image vectors; original image IDs and attributes are read from each file.
   param:vector_layer: const:spectralmatch.polygon_layer
@@ -624,6 +633,7 @@ standardize_mosaic_coverage:
 # Crop once; all following steps consume these smaller rasters and retain their masks.
 mask_mosaic_coverage:
   plugin: mask_rasters
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Apply initial coverage before joint coregistration.
   param:input_images: collect:current_image_paths # path list; required. Only scenes retained by standardize_mosaic_coverage.
   var:suffix: expr:var.suffix & '_coverage'
@@ -635,6 +645,7 @@ mask_mosaic_coverage:
 # Jointly register overlapping imagery before matching.
 joint_coregistration:
   plugin: joint_coregistration
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
   # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
@@ -643,6 +654,7 @@ joint_coregistration:
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
+  param:input_footprints: const:coverage_mask # path | path list | null; default: null. Exact current valid-data polygons; null preserves raster-only reads.
   var:suffix: _coreg
   var:current_image_paths: expr:const.temp_dir & '/joint_coregistration/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Folder (writes '$_Coregistered.tif'), '$' basename template, or list[str] matching input order and length; output paths must be unique and differ from inputs.
@@ -687,9 +699,39 @@ joint_coregistration:
   # param:debug_logs: false # true | false; default: false. bool, default False; print processing details. Inherits shared.param:debug_logs when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". 'no' (default) overwrites, 'yes' reuses existing outputs, or 'validate' reuses outputs that pass validation. Inherits shared.param:resume_from_outputs when set.
 
+# Alignment changes geometry. Rebuild exact valid-data footprints once here;
+# global/local radiometry reuse this file because they preserve the pixel grid.
+create_aligned_footprints:
+  plugin: create_footprints
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
+  core:run: true # true | false; default: false. Calculate actual footprints for final seamlines.
+  # core:require_outputs: param:output_polygons # Default: false. Uncomment to retain the polygon file.
+  param:input_images: collect:current_image_paths # path list; required. Current rasters in scene order.
+  param:metadata_records: collect:footprint_metadata # JSON object list | null; default: null. Flat attributes and optional GeoJSON geometry in image order; mutually exclusive with metadata_csv.
+  const:footprints: expr:const.temp_dir & '/create_aligned_footprints/footprints.gpkg'
+  param:output_polygons: const:footprints # path; required. Reuse through global/local matching and seamline preparation.
+  param:output_layer: const:spectralmatch.polygon_layer # layer name; default: "footprints".
+  param:image_field_name: const:spectralmatch.image_field_name # field name; default: "image". Aligned raster stem; later radiometric suffixes retain this identifier.
+  # param:metadata_csv: null # path | null; default: null. Alternative CSV attributes; omit metadata_records when using this.
+  # param:metadata_image_field_name: "image" # field name; default: "image". CSV join field.
+  param:footprint_source: calculate_bounds # Recalculate from the current aligned and matched raster masks.
+  # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". CRS of metadata geometry.
+  # param:epsg: null # EPSG integer | null; default: null. Inherits shared.param:epsg; null preserves the source CRS.
+  # param:band: 1 # positive integer; default: 1. Raster band whose GDAL validity mask is polygonized.
+  # param:eight_connected: true # true | false; default: true. Preserve diagonally connected valid pixels.
+  # param:outline_path: null # path | null; default: null. Optional goal-area polygon; omitted here to retain raw valid-data footprints.
+  # param:outline_layer: null # layer name | null; default: null. First layer when null.
+  # param:image_rank_function: null # expression | null; default: null. Preserve overlapping footprints for the final seamline solver.
+  # param:image_rank_descending: true # true | false; default: true. Larger scores own overlaps when ranking is enabled.
+  # param:extrude_distance: 0.0 # nonnegative number; default: 0.0. Buffer owned coverage in projected output CRS units, clipped to source footprints.
+  # param:debug_logs: false # true | false; default: false. Inherits shared.param:debug_logs when set.
+  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Native raw-footprint reuse; coverage options always recompute.
+
+
 # Global radiometric regression between overlapping images.
 global_regression:
   plugin: global_regression
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
   # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
@@ -699,6 +741,7 @@ global_regression:
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
+  param:input_footprints: const:footprints # path | path list | null; default: null. Exact current valid-data polygons; null preserves raster-only reads.
   var:suffix: expr:var.suffix & '_global'
   var:current_image_paths: expr:const.temp_dir & '/global_regression/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
@@ -740,10 +783,12 @@ global_regression:
 # Local radiometric adjustment; block counts and method control spatial correction.
 local_block_adjustment:
   plugin: local_block_adjustment
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
   param:input_images: collect:current_image_paths # path list; required. Previous enabled image step.
+  param:input_footprints: const:footprints # path | path list | null; default: null. Exact current valid-data polygons; null preserves raster-only reads.
   var:suffix: expr:var.suffix & '_local'
   var:current_image_paths: expr:const.temp_dir & '/local_block_adjustment/' & var.basename & var.suffix & '.tif'
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
@@ -768,36 +813,10 @@ local_block_adjustment:
   # save_block_maps uses [reference_tif, local_tif_template]; $ is expanded by SpectralMatch.
   # load_block_maps uses [reference_tif_or_null, [local_tifs]_or_null].
   # Add existing load files to core:requires for HPC; diagnostic output templates are backend-managed.
-# Recalculate valid-data footprints after alignment and matching, immediately before seamline postprocessing.
-create_seamline_footprints:
-  plugin: create_footprints
-  core:run: true # true | false; default: false. Calculate actual footprints for final seamlines.
-  # core:require_outputs: param:output_polygons # Default: false. Uncomment to retain the polygon file.
-  param:input_images: collect:current_image_paths # path list; required. Current rasters in scene order.
-  param:metadata_records: collect:footprint_metadata # JSON object list | null; default: null. Flat attributes and optional GeoJSON geometry in image order; mutually exclusive with metadata_csv.
-  const:footprints: expr:const.temp_dir & '/create_seamline_footprints/footprints.gpkg'
-  param:output_polygons: const:footprints # path; required. Input to the final seamline solver.
-  param:output_layer: const:spectralmatch.polygon_layer # layer name; default: "footprints".
-  param:image_field_name: const:spectralmatch.image_field_name # field name; default: "image". Current raster stem; later suffixes retain this identifier.
-  # param:metadata_csv: null # path | null; default: null. Alternative CSV attributes; omit metadata_records when using this.
-  # param:metadata_image_field_name: "image" # field name; default: "image". CSV join field.
-  param:footprint_source: calculate_bounds # Recalculate from the current aligned and matched raster masks.
-  # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". CRS of metadata geometry.
-  # param:epsg: null # EPSG integer | null; default: null. Inherits shared.param:epsg; null preserves the source CRS.
-  # param:band: 1 # positive integer; default: 1. Raster band whose GDAL validity mask is polygonized.
-  # param:eight_connected: true # true | false; default: true. Preserve diagonally connected valid pixels.
-  # param:outline_path: null # path | null; default: null. Optional goal-area polygon; omitted here to retain raw valid-data footprints.
-  # param:outline_layer: null # layer name | null; default: null. First layer when null.
-  # param:image_rank_function: null # expression | null; default: null. Preserve overlapping footprints for the final seamline solver.
-  # param:image_rank_descending: true # true | false; default: true. Larger scores own overlaps when ranking is enabled.
-  # param:extrude_distance: 0.0 # nonnegative number; default: 0.0. Buffer owned coverage in projected output CRS units, clipped to source footprints.
-  # param:debug_logs: false # true | false; default: false. Inherits shared.param:debug_logs when set.
-  # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Native raw-footprint reuse; coverage options always recompute.
-
-
 # Optional footprint cleanup. Distances require a suitable projected CRS and image-specific tuning.
 postprocess_footprints:
   plugin: postprocess_footprints
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_polygons # Default: false. Uncomment to request this output explicitly.
   param:input_polygons: const:footprints # path; required. Current footprints.
@@ -861,12 +880,14 @@ postprocess_footprints:
 # Markov mesh seamlines. Raster costs and image quality determine the selected polygons.
 markov_triangles:
   plugin: markov_triangles
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_mask # Default: false. Uncomment to request this output explicitly.
   const:spectralmatch.mask: expr:const.temp_dir & '/markov_triangles/markov_triangles.gpkg'
   param:input_images: collect:current_image_paths # path list | glob/folder; required. Raster folder, glob or path list; basenames without extensions must be unique.
   param:output_mask: const:spectralmatch.mask # string; required. Output GeoPackage path, distinct from input vectors; stores image identifiers, image_path and raw quality_score.
-  param:input_polygons: const:footprints # string | null; default: null. Optional valid-data footprints; None polygonizes band-1 GDAL masks, while supplied polygons must match every image and are never regenerated.
+  param:input_footprints: const:footprints # string | null; default: null. Optional valid-data footprints; None polygonizes band-1 GDAL masks, while supplied polygons must match every image and are never regenerated.
+  # param:input_polygons: null # path | null; default: null. Legacy alias for input_footprints; do not pass both.
   param:input_layer: const:spectralmatch.polygon_layer # string; default: "footprints". Input footprint layer name; None selects the first layer.
   # param:output_layer: "seamlines" # string; default: "seamlines". Output polygon layer name; defaults to "seamlines".
   param:image_field_name: const:spectralmatch.image_field_name # string; default: "image". Footprint field containing each input basename without extension as a substring; matching pieces are dissolved using first-match attributes; defaults to "image". Explicit setup value.
@@ -889,6 +910,7 @@ markov_triangles:
 # Clip rasters using the selected seamlines. The explicit requires link tracks the compound vector_mask file.
 mask_rasters:
   plugin: mask_rasters
+  param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_images # Default: false. Uncomment to request this output explicitly.
   # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.
@@ -911,6 +933,7 @@ mask_rasters:
 # This example writes one GeoTIFF with VHR overviews. For tiled output, choose a folder and configure tile settings explicitly.
 merge_rasters:
   plugin: merge_rasters
+  param:compression: true # Keep the final mosaic and its overviews compressed.
   core:run: true # true | false; default: false. Enable this step.
   # core:require_outputs: param:output_image_path # Requested deliverables; upstream steps run as needed.
   # core:calculate_overviews: true # true | false; default: false. VHR builds overviews using shared.param:window_scales.

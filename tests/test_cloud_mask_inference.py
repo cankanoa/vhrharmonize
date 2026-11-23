@@ -16,8 +16,9 @@ from vhrharmonize.workflow.engine import Workflow
 from workflow_helpers import copy_step, import_settings
 
 
+@pytest.mark.parametrize("compression", [True, False])
 def test_separate_inference_raster_preserves_target_bands_and_grid(
-    monkeypatch, tmp_path, make_test_raster,
+    monkeypatch, tmp_path, make_test_raster, compression,
 ):
     mul = make_test_raster(tmp_path / "mul.tif", count=3, width=2, height=2, fill=17)
     with rasterio.open(mul, "r+") as ds:
@@ -32,14 +33,16 @@ def test_separate_inference_raster_preserves_target_bands_and_grid(
     result = cloudmask_raster(
         str(pan), str(tmp_path / "masked.tif"), str(tmp_path / "mask.tif"),
         inference_image_path=str(mul), red_band_index=1, green_band_index=2,
-        nir_band_index=3, inference_resolution_m=None,
+        nir_band_index=3, inference_resolution_m=None, compression=compression,
     )
     assert result.mask_pixel_count == 1
     with rasterio.open(result.output_mask_path) as mask:
+        assert (mask.compression is not None) == compression
         assert mask.shape == (2, 2)
         assert mask.transform == from_origin(0, 4, 2, 2)
     with rasterio.open(result.output_raster_path) as output, rasterio.open(pan) as source:
-        assert output.profile == source.profile
+        assert output.profile == dict(source.profile, **({"compress": "deflate"} if compression else {}))
+        assert (output.compression is not None) == compression
         expected = source.read()
         expected[:, :2, 2:] = 0
         np.testing.assert_array_equal(output.read(), expected)

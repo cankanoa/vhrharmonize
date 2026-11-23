@@ -1,6 +1,7 @@
 """Py6S atmospheric correction with explicit spectral calibration."""
 
 from __future__ import annotations
+from vhrharmonize.io.compression import raster_profile, validate_compression
 
 import csv
 import os
@@ -220,10 +221,12 @@ def run_py6s(
     sixs_executable: str | None = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
+    compression: bool = True,
 ) -> Py6SRunResult:
     """Correct a raster using mapped variables and explicit spectral calibration.
 
     Args:
+        compression: Write compressed TIFFs (default True); False disables compression.
         input_raster: Input raster path.
         output_raster: Output corrected raster path.
         variables: Mapped JSON object; supplies geometry and omitted sensor fields.
@@ -257,6 +260,7 @@ def run_py6s(
         log_to_console: Emit processing logs.
         scene_basename: Optional scene name in logs.
     """
+    validate_compression(compression)
     if not output_raster:
         raise ValueError("output_raster must be an explicit output path")
     output_raster = str(output_raster)
@@ -322,6 +326,7 @@ class Py6SCorrector:
 
     def run(self, input_raster: str, output_raster: str, **kwargs: Any) -> str:
         """Run block-wise Py6S atmospheric correction for multispectral rasters."""
+        compression = validate_compression(kwargs.get("compression", True))
         required = (
             "solar_zenith",
             "solar_azimuth",
@@ -446,7 +451,7 @@ class Py6SCorrector:
             profile.update(
                 dtype=output_dtype,
                 nodata=nodata,
-                compress="lzw",
+                compress="lzw" if compression else "none",
                 BIGTIFF="IF_SAFER",
             )
             input_tags = src.tags()
@@ -463,7 +468,7 @@ class Py6SCorrector:
                 coeffs.append(coefficients)
 
             os.makedirs(os.path.dirname(output_raster) or ".", exist_ok=True)
-            with rasterio.open(output_raster, "w", **profile) as dst:
+            with rasterio.open(output_raster, "w", **raster_profile(profile, compression)) as dst:
                 if input_tags:
                     dst.update_tags(**input_tags)
                 if input_rpc_tags:

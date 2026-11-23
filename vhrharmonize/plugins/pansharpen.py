@@ -1,3 +1,4 @@
+from vhrharmonize.io.compression import raster_profile, validate_compression
 import os
 from typing import Optional
 from types import FunctionType, MethodType, SimpleNamespace
@@ -53,9 +54,11 @@ def pansharpen_image(
     log_to_console: bool = False,
     scene_basename: str | None = None,
     tile_threads: int | None = 1,
+    compression: bool = True,
 ) -> None:
     """Pansharpen a multispectral raster.
     Args:
+        compression: Write compressed TIFFs (default True); False disables compression.
         input_low_resolution_path: Input multispectral raster path.
         input_high_resolution_path: Input panchromatic raster path.
         output_image_path: Output pansharpened raster path.
@@ -67,6 +70,7 @@ def pansharpen_image(
     Returns:
         None.
     """
+    validate_compression(compression)
     if not output_image_path:
         raise ValueError("output_image_path must be an explicit output path")
     output_image_path = str(output_image_path)
@@ -76,7 +80,10 @@ def pansharpen_image(
     threads = _configure_pan_threads(pan_sharp, tile_threads)
     with rasterio.Env(GDAL_NUM_THREADS=threads):
         if custom_nodata_value is None:
-            pan_sharp.process(output_image_path, write_mask=False, overwrite=True, build_ovw=False)
+            pan_sharp.process(
+                output_image_path, write_mask=False, overwrite=True, build_ovw=False,
+                creation_options={"tiled": True, "compress": "deflate" if compression else "none", "bigtiff": "if_safer"},
+            )
         else:
             from orthority.common import create_profile
 
@@ -105,7 +112,7 @@ def pansharpen_image(
                 dtype=dtype.name, write_mask=False,
             )
             profile.update(crs=grid["crs"], transform=grid["transform"], nodata=nodata)
-            with rasterio.open(output_image_path, "w", **profile) as dst:
+            with rasterio.open(output_image_path, "w", **raster_profile(profile, compression)) as dst:
                 pan_sharp.process(dst, write_mask=False, overwrite=True, build_ovw=False)
     _log(
         f"Wrote output {os.path.basename(output_image_path)}",

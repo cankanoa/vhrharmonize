@@ -754,3 +754,18 @@ and publishes their outputs before returning the worker result, and preserves
 image attribution if validation fails. SpectralMatch uses its native writer hook
 instead, so reuse checks see unchanged paths. Other declared file outputs are
 published when the plugin call completes.
+
+
+## Raster compression
+
+Native TIFF-writing preprocessing plugins (`py6s_atmospheric_correction`,
+`orthorectification`, `pansharpen`, `cloud_mask`) and SpectralMatch raster steps
+accept `param:compression: true` (the default). Set it to `false` on intermediate
+steps to disable TIFF compression. The setting also controls core-created
+overviews. SpectralMatch propagates it to temporary TIFFs and image workers.
+The WorldView example uses uncompressed intermediates and a compressed final
+mosaic. Reused existing files retain their encoding.
+
+This option does not compress vector files or JSON, alter downloaded originals,
+or configure external ENVI/coregix writers. Compression does not change validity
+checking, output requirements or the writing-postfix lifecycle.

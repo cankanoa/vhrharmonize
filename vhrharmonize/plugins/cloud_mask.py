@@ -1,3 +1,4 @@
+from vhrharmonize.io.compression import raster_profile, validate_compression
 import os
 from dataclasses import dataclass
 from typing import Optional, Sequence
@@ -44,6 +45,7 @@ def cloudmask_raster(
     allow_mask_reprojection: bool = True,
     log_to_console: bool = False,
     scene_basename: str | None = None,
+    compression: bool = True,
 ) -> CloudMaskResult:
     """Create a cloud mask and apply it to ``input_image_path``.
 
@@ -53,6 +55,7 @@ def cloudmask_raster(
     uses ``input_image_path`` too. The saved mask stays on the inference grid and
     is resampled with nearest neighbor onto the application grid when needed.
     """
+    validate_compression(compression)
     if not output_raster_path:
         raise ValueError("output_raster_path must be an explicit output path")
     output_raster_path = str(output_raster_path)
@@ -77,6 +80,7 @@ def cloudmask_raster(
         inference_resolution_m=inference_resolution_m,
         log_to_console=log_to_console,
         scene_basename=scene_basename,
+        compression=compression,
     )
     apply_binary_cloud_mask_to_image(
         input_image_path,
@@ -87,6 +91,7 @@ def cloudmask_raster(
         allow_mask_reprojection=allow_mask_reprojection,
         log_to_console=log_to_console,
         scene_basename=scene_basename,
+        compression=compression,
     )
 
     mask_pixel_count = 0
@@ -188,6 +193,7 @@ def create_cloud_mask_with_omnicloudmask(
     inference_resolution_m: Optional[float] = 10.0,
     log_to_console: bool = False,
     scene_basename: str | None = None,
+    compression: bool = True,
 ) -> str:
     """
     Run OmniCloudMask on an input raster and write a binary cloud mask.
@@ -196,6 +202,7 @@ def create_cloud_mask_with_omnicloudmask(
     - 1: cloud/cloud-shadow (or buffered cloud zone)
     - 0: clear
     """
+    validate_compression(compression)
 
     if red_band_index < 1 or green_band_index < 1 or nir_band_index < 1:
         raise ValueError("Band indexes must be 1-based and >= 1.")
@@ -286,7 +293,7 @@ def create_cloud_mask_with_omnicloudmask(
         )
 
         _ensure_parent_dir(output_mask_path)
-        with rasterio.open(output_mask_path, "w", **rgbn_profile) as dst:
+        with rasterio.open(output_mask_path, "w", **raster_profile(rgbn_profile, compression)) as dst:
             dst.write(binary_mask, 1)
 
     return output_mask_path
@@ -308,10 +315,12 @@ def apply_binary_cloud_mask_to_image(
     allow_mask_reprojection: bool = True,
     log_to_console: bool = False,
     scene_basename: str | None = None,
+    compression: bool = True,
 ) -> str:
     """
     Apply a binary cloud mask to an image by assigning NoData to masked pixels.
     """
+    validate_compression(compression)
     with rasterio.open(input_image_path) as src, rasterio.open(cloud_mask_path) as mask_src:
         mask_reader = mask_src
         if (
@@ -357,7 +366,7 @@ def apply_binary_cloud_mask_to_image(
             BIGTIFF="IF_SAFER",
         )
         _ensure_parent_dir(output_image_path)
-        with rasterio.open(output_image_path, "w", **profile) as dst:
+        with rasterio.open(output_image_path, "w", **raster_profile(profile, compression)) as dst:
             for _, window in raster_windows(src, desc="Applying cloud mask"):
                 mask_block = mask_reader.read(1, window=window)
                 cloud_pixels = mask_block == cloud_mask_value

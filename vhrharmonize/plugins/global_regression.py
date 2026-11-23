@@ -28,7 +28,7 @@ class GlobalRegression(SpectralMatchPlugin):
     tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.global_regression:global_regression"
     scope = "aggregate"
-    input_dependency_paths = frozenset(["input_images", "load_adjustments", "pif_load_ties"])
+    input_dependency_paths = frozenset(["input_images", "input_footprints", "load_adjustments", "pif_load_ties"])
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths

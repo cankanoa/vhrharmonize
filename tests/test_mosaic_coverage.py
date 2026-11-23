@@ -28,10 +28,10 @@ def test_worldview_caches_vectors_then_recalculates_seamline_footprints():
     recipe = load_config("configs/example.worldview.yml")
     names = list(recipe)
     assert [name for name, step in recipe.items() if step.get("plugin") == "create_footprints"] == [
-        "polygonize_images", "standardize_mosaic_coverage", "create_seamline_footprints"
+        "polygonize_images", "standardize_mosaic_coverage", "create_aligned_footprints"
     ]
     assert names.index("standardize_mosaic_coverage") < names.index("mask_mosaic_coverage") < names.index("joint_coregistration")
-    early, later = recipe["standardize_mosaic_coverage"], recipe["create_seamline_footprints"]
+    early, later = recipe["standardize_mosaic_coverage"], recipe["create_aligned_footprints"]
     assert early["param:footprint_source"] == "vector_bounds"
     assert early["param:input_images"] == "collect:polygonized_footprint_path"
     assert "param:input_vectors" not in early
@@ -40,8 +40,9 @@ def test_worldview_caches_vectors_then_recalculates_seamline_footprints():
     assert recipe["polygonize_images"]["core:scope"] == "var"
     assert "var:current_image_paths" not in recipe["polygonize_images"]
     assert names.index("cloud_mask") < names.index("polygonize_images") < names.index("standardize_mosaic_coverage")
-    assert names.index("local_block_adjustment") < names.index("create_seamline_footprints")
-    assert names.index("create_seamline_footprints") + 1 == names.index("postprocess_footprints")
+    assert names.index("joint_coregistration") < names.index("create_aligned_footprints")
+    assert names.index("create_aligned_footprints") + 1 == names.index("global_regression")
+    assert names.index("local_block_adjustment") < names.index("postprocess_footprints")
     assert "setup_spectralmatch" not in recipe
     assert early["param:extrude_distance"] > 0
     assert later.get("param:footprint_source", "calculate_bounds") == "calculate_bounds"
@@ -131,7 +132,7 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
         "coverage": {**recipe["standardize_mosaic_coverage"], "param:outline_path": outline,
                      "param:image_rank_function": "{quality}", "param:extrude_distance": 1},
         "mask": recipe["mask_mosaic_coverage"],
-        "footprints": recipe["create_seamline_footprints"],
+        "footprints": recipe["create_aligned_footprints"],
         "inspect": {"plugin": "inspect_coverage", "core:run": True, "core:require_outputs": True,
                     "core:requires": "const:footprints",
                     "param:input_images": "collect:current_image_paths"},

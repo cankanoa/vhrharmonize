@@ -36,7 +36,7 @@ class LocalBlockAdjustment(SpectralMatchPlugin):
     tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.local_block_adjustment:local_block_adjustment"
     scope = "aggregate"
-    input_dependency_paths = frozenset(["input_images"])
+    input_dependency_paths = frozenset(["input_images", "input_footprints"])
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths

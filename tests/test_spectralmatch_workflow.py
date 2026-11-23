@@ -110,16 +110,21 @@ def test_worldview_selects_one_chain_and_inherits_function_settings():
     selected = [name for name in config if config[name].get("plugin") in FUNCTIONS and config[name]["core:run"]]
     assert selected == [
         "polygonize_images", "standardize_mosaic_coverage", "mask_mosaic_coverage",
-        "joint_coregistration", "global_regression", "local_block_adjustment",
-        "create_seamline_footprints", "postprocess_footprints", "markov_triangles", "mask_rasters", "merge_rasters",
+        "joint_coregistration", "create_aligned_footprints", "global_regression", "local_block_adjustment",
+        "postprocess_footprints", "markov_triangles", "mask_rasters", "merge_rasters",
     ]
     assert all(config[name]["core:run"] for name in selected)
     assert (
         list(config).index("joint_coregistration")
-        < list(config).index("create_seamline_footprints")
+        < list(config).index("create_aligned_footprints")
+        < list(config).index("global_regression")
         < list(config).index("markov_triangles")
     )
-    assert config["create_seamline_footprints"]["param:input_images"] == "collect:current_image_paths"
+    assert config["create_aligned_footprints"]["param:input_images"] == "collect:current_image_paths"
+    assert config["joint_coregistration"]["param:input_footprints"] == "const:coverage_mask"
+    for name in ("global_regression", "local_block_adjustment", "markov_triangles"):
+        assert config[name]["param:input_footprints"] == "const:footprints"
+        assert "input_footprints" in load_plugin(name).input_dependency_paths
     assert config["shared"]["param:window_scales"] == [2, 4, 8, 16, 32, 64, 128, 256, 512]
     assert not any(
         key.startswith("const:")
@@ -276,9 +281,9 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
         **{
             name: {**example[name], "core:run": True}
             for name in (
+                "create_aligned_footprints",
                 "global_regression",
                 "local_block_adjustment",
-                "create_seamline_footprints",
                 "markov_triangles",
                 "mask_rasters",
                 "merge_rasters",
@@ -316,8 +321,10 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
 
     @wraps(native)
     def markov(**kwargs):
-        footprints = gpd.read_file(kwargs["input_polygons"], layer=kwargs["input_layer"])
-        assert list(footprints[kwargs["image_field_name"]]) == kwargs["input_images"]
+        footprints = gpd.read_file(kwargs["input_footprints"], layer=kwargs["input_layer"])
+        from spectralmatch.seamline.footprints import _match_footprints
+        footprints = _match_footprints(footprints, kwargs["image_field_name"], kwargs["input_images"])
+        assert list(footprints["image_path"]) == kwargs["input_images"]
         footprints.to_file(kwargs["output_mask"], layer="seamlines", driver="GPKG")
         return kwargs["output_mask"]
 

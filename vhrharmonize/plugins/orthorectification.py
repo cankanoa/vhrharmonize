@@ -1,3 +1,4 @@
+from vhrharmonize.io.compression import validate_compression
 import json
 import os
 from osgeo import gdal
@@ -46,9 +47,11 @@ def gcp_refined_rpc_orthorectification(
     output_resolution: Union[float, Tuple[float, float], None] = None,
     log_to_console: bool = False,
     scene_basename: str | None = None,
+    compression: bool = True,
 ) -> None:
     """Orthorectify an image using RPC metadata.
     Args:
+        compression: Write compressed TIFFs (default True); False disables compression.
         input_image_path: Input raster path.
         output_image_path: Output orthorectified raster path.
         dem_image_path: DEM raster path.
@@ -62,6 +65,7 @@ def gcp_refined_rpc_orthorectification(
     Returns:
         None.
     """
+    validate_compression(compression)
     if not output_image_path:
         raise ValueError("output_image_path must be an explicit output path")
     output_image_path = str(output_image_path)
@@ -149,6 +153,7 @@ def gcp_refined_rpc_orthorectification(
 
     warp_options = gdal.WarpOptions(
         format="GTiff",
+        creationOptions=["TILED=YES", "BIGTIFF=IF_SAFER", "COMPRESS=" + ("DEFLATE" if compression else "NONE")],
         dstSRS=f"EPSG:{output_epsg}",
         rpc=True,
         xRes=x_res,

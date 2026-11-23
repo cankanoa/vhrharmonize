@@ -13,8 +13,9 @@ from osgeo import gdal
 ortho = importlib.import_module('vhrharmonize.plugins.orthorectification')
 
 
+@pytest.mark.parametrize('compression', [True, False])
 @pytest.mark.parametrize('refined', [False, True])
-def test_direct_rpc_warp_preserves_source_and_applies_output_options(tmp_path, monkeypatch, refined):
+def test_direct_rpc_warp_preserves_source_and_applies_output_options(tmp_path, monkeypatch, refined, compression):
     source, dem, output = (tmp_path / name for name in ('source.tif', 'dem.tif', 'ortho.tif'))
     data = np.arange(32 * 32, dtype='int16').reshape(32, 32) + 100
     data[:3] = -32768
@@ -52,12 +53,13 @@ def test_direct_rpc_warp_preserves_source_and_applies_output_options(tmp_path, m
     ortho.gcp_refined_rpc_orthorectification(
         str(source), str(output), str(dem), 4326,
         gcp_geojson_file_path='gcps.geojson' if refined else None,
-        custom_nodata_value=-9999, output_dtype='Float32', output_resolution=.00005,
+        custom_nodata_value=-9999, output_dtype='Float32', output_resolution=.00005, compression=compression,
     )
     assert formats == (['VRT'] if refined else [])
     assert hashlib.sha256(source.read_bytes()).digest() == digest
     with rasterio.open(output) as result:
         assert result.dtypes == ('float32',)
+        assert (result.compression is not None) == compression
         assert result.nodata == -9999
         assert result.crs.to_epsg() == 4326
         assert result.res == (.00005, .00005)

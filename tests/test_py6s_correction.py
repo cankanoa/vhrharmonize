@@ -317,3 +317,13 @@ def test_hpc_stages_and_remaps_response_csv_as_a_required_input(tmp_path,model):
     assert all(n.params['wavelengths_response_csv']==uploads[path] for n in nodes)
     workflow.run()
     assert (remote/'in_out.tif').exists() and (remote/'other_out.tif').exists()
+
+
+@pytest.mark.parametrize("compression", [True, False])
+def test_py6s_compression_preserves_values(tmp_path, model, compression):
+    source = write_raster(tmp_path / 'source.tif', [[.2, .3], [.4, .5]])
+    output = tmp_path / 'out.tif'
+    correct(source, output, compression=compression)
+    with rasterio.open(output) as result:
+        assert (result.compression is not None) == compression
+        np.testing.assert_allclose(result.read(1), [[.3, .4], [.5, .6]], rtol=1e-6)

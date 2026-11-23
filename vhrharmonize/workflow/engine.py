@@ -1445,6 +1445,7 @@ class Workflow:
             tile_threads=self.controls["tile_threads"],
             raster_grid=self.controls["validity_raster_grid"], check_stop=self.controls["validity_raster_check_stop"],
             validation_paths=tuple(node.paths("output_validation_paths")), overview_paths=tuple(overview_paths),
+            compression=params.get("compression", True),
             overview_scales=scales, log_to_console=self.controls["log_to_console"], step=node.step["name"],
         )
         if policy.postfix:

@@ -24,6 +24,7 @@ def calculate_raster_overviews(
     scene_basename: str | None = None,
     scene_index: int = 1,
     scene_total: int = 1,
+    compression: bool = True,
     ) -> str:
     """Build internal raster overviews.
     Args:
@@ -33,6 +34,8 @@ def calculate_raster_overviews(
     Returns:
         Input raster path after overview creation.
     """
+    from vhrharmonize.io.compression import validate_compression
+    validate_compression(compression)
     factors = []
     seen = set()
     for value in window_scales or []:
@@ -45,7 +48,7 @@ def calculate_raster_overviews(
     if not factors:
         return input_image_path
 
-    with rasterio.open(input_image_path, "r+") as dataset:
+    with rasterio.Env(COMPRESS_OVERVIEW="DEFLATE" if compression else "NONE"), rasterio.open(input_image_path, "r+") as dataset:
         with operation("Building overviews"):
             dataset.build_overviews(factors, rasterio.enums.Resampling[resampling])
         dataset.update_tags(ns="rio_overview", resampling=resampling)

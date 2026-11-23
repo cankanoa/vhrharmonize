@@ -57,6 +57,7 @@ class OutputPolicy:
     validation_paths: tuple[str, ...] = ()
     overview_paths: tuple[str, ...] = ()
     overview_scales: object = None
+    compression: bool = True
     log_to_console: bool = False
     step: str = "output"
     overview_reporters: dict = field(default_factory=dict)
@@ -96,7 +97,7 @@ class OutputPolicy:
             work = mapping.get(final, final)
             if final in self.overview_paths and Path(final).suffix.lower() in {".tif", ".tiff"}:
                 with self.overview(final):
-                    calculate_raster_overviews(work, self.overview_scales, log_to_console=self.log_to_console)
+                    calculate_raster_overviews(work, self.overview_scales, log_to_console=self.log_to_console, compression=self.compression)
         checked = [mapping.get(p, p) for p in outputs if p in self.validation_paths]
         failures = _existing_output_failures(
             checked, check_validity=self.check_validity == "around",

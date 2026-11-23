@@ -31,7 +31,7 @@ class JointCoregistration(SpectralMatchPlugin):
     tile_threads_parameter = "tile_threads"
     target = "vhrharmonize.plugins.joint_coregistration:joint_coregistration"
     scope = "aggregate"
-    input_dependency_paths = frozenset(["input_images", "fixed_images", "tie_load_path"])
+    input_dependency_paths = frozenset(["input_images", "input_footprints", "fixed_images", "tie_load_path"])
     input_existence_check_paths = input_dependency_paths
     input_protection_paths = input_dependency_paths
     input_hpc_staging_paths = input_dependency_paths
