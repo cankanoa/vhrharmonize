@@ -731,6 +731,7 @@ create_aligned_footprints:
 # Global radiometric regression between overlapping images.
 global_regression:
   plugin: global_regression
+  param:pif_coregister: false # Default: false. Already joint-aligned; skip extra PIF alignment, retain seed matching and radiometric correction.
   param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
   # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
