@@ -924,7 +924,7 @@ mask_rasters:
   # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
   # param:cache: null # positive GB | null; default: null. Parallelization strategy at the window level within each image. Inherits shared.param:cache when set.
   # param:io_threads: null # cpu | positive integer | null; default: null. Parallelism for IO operations. Inherits shared.param:io_threads when set.
-  # param:include_touched_pixels: false # true | false; default: false.
+  param:include_touched_pixels: true # Retain seam-edge pixels to avoid NoData cracks when merging different grids.
   # param:custom_nodata_value: null # number | null; default: null. Overrides detected NoData value. Inherits shared.param:custom_nodata_value when set.
   # param:resume_from_outputs: "no" # no | yes | validate; default: "no". Inherits shared.param:resume_from_outputs when set.
 
