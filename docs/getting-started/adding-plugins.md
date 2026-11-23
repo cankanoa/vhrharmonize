@@ -210,6 +210,16 @@ adapter cannot also declare `var_records_return`. Disabled steps do not remove
 scenes. `create_footprints` implements this interface by comparing its input
 images with the `image_path` values in its saved output layer.
 
+`postprocess_footprints` also removes scenes when their entire footprint is
+eliminated. Its workflow input must preserve a `scene_id` attribute matching
+the imported scene IDs (the WorldView example supplies this through
+`metadata_records`). Both fresh and reused results select scenes from the
+output layer alone, so cleaned-up input footprints are not required for reuse.
+Removing some components keeps the scene if another component survives.
+One surviving scene proceeds normally; removing all coverage raises a clear
+error. Missing or unknown scene IDs raise an error rather than guessing from
+raster filenames.
+
 ## Creating or replacing scenes
 
 Any ordinary function can return a list of plain dictionaries and declare which returned field contains it:
