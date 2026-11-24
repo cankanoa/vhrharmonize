@@ -47,7 +47,11 @@ def stage_workflow(config, *, config_dir, remote_work_dir=None, path_mappings=No
     mappings = validate_path_mappings({} if path_mappings is None else path_mappings)
     workflow = workflow if workflow is not None else Workflow(config, config_dir=config_dir).plan()
     if workflow.barrier_index is not None:
-        raise ValueError("HPC staging requires known scenes and paths; use run_to_step_before_prepare to produce them first")
+        step = workflow.steps[workflow.barrier_index]
+        terminal_update = (workflow._updates_scenes(step)
+                           and not any(s["run"] for s in workflow.steps[workflow.barrier_index + 1:]))
+        if not terminal_update:
+            raise ValueError("HPC staging requires known scenes and paths; use run_to_step_before_prepare to produce them first")
     within = _cached_path_containment()
     staged = deepcopy(config)
     context_groups = [[workflow.initial_context, *[record["context"] for record in workflow.initial_records]]]

@@ -1,7 +1,7 @@
 """Small plugin contract: receive explicit paths, parameters and shared settings."""
 
 from __future__ import annotations
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from importlib import import_module
 import inspect
 import json
@@ -42,6 +42,21 @@ def json_value(value):
     elif hasattr(value, "to_dict"):
         value = value.to_dict()
     return json.loads(json.dumps(value, default=str, allow_nan=False))
+
+
+@dataclass
+class PluginResult:
+    """A normal return value plus optional replacement scenes after processing.
+
+    Each scene update has source_indices (invocation-order parent records), a
+    unique scene_id, and values to override inherited scene variables. One parent
+    can produce many updates; several parents can produce one. None leaves the
+    scene collection unchanged, while [] removes every scene. Plugins declaring
+    updates_scenes must return this object even when reusing native outputs.
+    """
+
+    value: object
+    scene_updates: list[dict] | None = None
 
 
 class FunctionPlugin:
@@ -88,6 +103,15 @@ class FunctionPlugin:
         Core still controls reuse and validates the requested output paths.
         """
         return True
+
+    def updates_scenes(self, *, settings):
+        """Whether this call can return PluginResult.scene_updates.
+
+        settings contains raw param:/var:/const: YAML settings. Return True if
+        uncertain: core waits for execution before planning downstream records.
+        This is an aggregate, runtime-only operation, never a discovery call.
+        """
+        return False
 
     def output_files(self, *, params):
         """Override actual file lists for outputs whose arguments are naming bases.
@@ -286,4 +310,7 @@ class FunctionPlugin:
 
         function = self.function()
         function = reports_progress(function)
-        return json_value(function(**self.arguments(function, params, shared)))
+        result = function(**self.arguments(function, params, shared))
+        if isinstance(result, PluginResult):
+            return PluginResult(json_value(result.value), json_value(result.scene_updates))
+        return json_value(result)

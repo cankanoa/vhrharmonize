@@ -141,6 +141,10 @@ def available_context(value):
 
 def remap_paths(value, mapping):
     """Rebase exact file paths and descendants of declared directories in JSON."""
+    from vhrharmonize.plugins.base import PluginResult
+
+    if isinstance(value, PluginResult):
+        return PluginResult(remap_paths(value.value, mapping), remap_paths(value.scene_updates, mapping))
     if isinstance(value, str):
         if value in mapping:
             return mapping[value]

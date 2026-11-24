@@ -264,6 +264,42 @@ The scene-setting function runs once with aggregate scope. Each dictionary becom
 
 `import_files` uses this same contract with `var_records_mode = "merge"` and `var_id_return = "scene_id"`; the function computes each returned ID from its ordinary `scene_id` parameter (configured as `param:scene_id` in YAML). The adapter only selects the returned field; it does not decide which input field or expression supplies the ID. Scene-setting functions run during planning, including dry-run and HPC preparation, once their required inputs and preceding work are available. HPC preparation limits calls to the explicitly selected local prefix; `core:execution_mode: only_planning` prevents discovery calls as well as ordinary processing calls. A scene setter depending on unfinished processing remains pending until execution supplies its inputs. Keep discovery functions lightweight: dry-run can invoke them, including their own file-writing behavior.
 
+### Reporting scene splits and merges from a processing result
+
+An aggregate processing plugin can override `updates_scenes(settings=...)` to
+return `True` when a call may change the scene collection. Core stops planning
+at that step until it executes successfully; it never executes this processing
+function during discovery or dry-run.
+
+Return `PluginResult(value=normal_result, scene_updates=[...])` from the function
+or adapter's `run`. YAML `returned:` mappings still see `normal_result`. Each
+scene update has exactly these fields:
+
+```python
+from vhrharmonize.plugins.base import PluginResult
+
+return PluginResult(output_paths, scene_updates=[
+    {"source_indices": [0], "scene_id": "image_1",
+     "values": {"current_image_paths": output_paths[0], "basename": "image_1"}},
+    {"source_indices": [0], "scene_id": "image_2",
+     "values": {"current_image_paths": output_paths[1], "basename": "image_2"}},
+])
+```
+
+`source_indices` refers to parent scene records in invocation order. Repeating
+one index across updates splits that parent; listing several indices in one
+update merges those parents. This list replaces the invocation's collection, so
+include an identity update for any parent that should remain. `scene_updates=None`
+keeps the current records; an empty list removes them all.
+
+Splits inherit the full parent variables before applying `values`. Merges inherit
+only equal variables shared by every parent, and retain all parent variables in
+`parent_records`; plugins provide new or conflicting values explicitly. Core adds
+`parent_scene_ids` (and `parent_scene_id` for a single parent), combines protected
+source paths, validates IDs/indices, and rebuilds downstream dependencies. The
+plugin must restore the mapping on native reuse, so core does not skip its call.
+Generated outputs remain temporary unless selected as required products.
+
 Optional declarations:
 
 To remove existing scenes after a processing step executes, use the runtime

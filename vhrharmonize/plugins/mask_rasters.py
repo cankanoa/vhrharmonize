@@ -2,7 +2,10 @@
 
 from functools import lru_cache
 import os
+from pathlib import Path
+import re
 
+from .base import PluginResult
 from .spectralmatch_base import SpectralMatchPlugin
 from vhrharmonize.io.progress import call_with_progress, reports_progress
 
@@ -35,6 +38,33 @@ def _numbered_outputs(inputs, outputs, vector_mask, fingerprints):
 
 
 class MaskRasters(SpectralMatchPlugin):
+    def updates_scenes(self, *, settings):
+        return settings.get("param:seperate_multipolygons", False) is not False
+
+    def run(self, *, params, shared):
+        outputs = super().run(params=params, shared=shared)
+        if not params.get("seperate_multipolygons", shared.get("seperate_multipolygons", False)):
+            # A dynamic option may have required a planning barrier even though
+            # the resolved call does not split; retain its original records.
+            return PluginResult(outputs) if "seperate_multipolygons" in params else outputs
+        if not outputs:
+            raise ValueError("No coverage remains after splitting the mask")
+        inputs, bases = params["input_images"], params["output_images"]
+        if not isinstance(inputs, list) or not isinstance(bases, list) or len(inputs) != len(bases):
+            raise ValueError("Scene splitting requires one explicit output base per input scene")
+        by_base = {str(Path(base).resolve()): i for i, base in enumerate(bases)}
+        updates = []
+        for filename in outputs:
+            p = Path(filename)
+            match = re.fullmatch(r"(.+)_([1-9][0-9]*)", p.stem)
+            base = str(p.with_name(match[1] + p.suffix).resolve()) if match else None
+            if base not in by_base:
+                raise ValueError(f"No source scene for mask output: {filename}")
+            updates.append({"source_indices": [by_base[base]], "scene_id": p.stem,
+                            "values": {"file_path": filename, "current_image_paths": filename,
+                                       "basename": p.stem, "suffix": ""}})
+        return PluginResult(outputs, scene_updates=updates)
+
     def output_files(self, *, params):
         """Track numbered rasters instead of their unnumbered naming bases."""
         from vhrharmonize.workflow.values import contains_pending

@@ -19,6 +19,8 @@ from uuid import uuid4
 import warnings
 
 from vhrharmonize.plugins.base import (
+    FunctionPlugin,
+    PluginResult,
     file_parameter_names,
     INPUT_PATH_FEATURES,
     OUTPUT_PATH_FEATURES,
@@ -380,6 +382,7 @@ class Workflow:
         self.preflight_steps = set()
         self._retained_protected_paths = set()
         self.completed_counts = {}
+        self._completed_scene_nodes = []
         self.start_index = 0
         self.context_files = ContextFiles(self)
         self.discovery_sources = set()
@@ -621,6 +624,11 @@ class Workflow:
             if not (plugin.var_records_return and key.startswith("var:")) and key not in discovered
         }
 
+    def _updates_scenes(self, step, plugin=None):
+        plugin = plugin or load_plugin(step["plugin"])
+        settings = {**{"param:" + key: value for key, value in self.shared.items()}, **step["settings"]}
+        return plugin.updates_scenes(settings=settings)
+
     def _register_directories(self, plugin):
         for role, name in DIRECTORY_FEATURES.items():
             for selector in getattr(plugin, name):
@@ -750,6 +758,10 @@ class Workflow:
         self.context = deepcopy(self.initial_context)
         producers = [{} for _ in self.records]
         constant_producers, paths, path_producers = {}, {}, {}
+        for completed in self._completed_scene_nodes:
+            checked = set(completed.paths("output_collision_check_paths"))
+            for filename in completed.paths(*OUTPUT_PATH_FEATURES):
+                paths[filename] = filename in checked
         self.step_names = [step["name"] for step in self.steps]
         for step_index in range(start_index, len(self.steps)):
             step = self.steps[step_index]
@@ -785,7 +797,7 @@ class Workflow:
             self._register_directories(plugin)
             input_names = file_parameter_names(features, "input")
             output_names = file_parameter_names(features, "output")
-            source = plugin.var_records_return is not None
+            source = plugin.var_records_return is not None or self._updates_scenes(step, plugin)
             if source and step.get("scope", "aggregate") != "aggregate":
                 raise ValueError("Scene-setting plugins run once with aggregate scope")
             initialized = "var" in self.context
@@ -875,7 +887,11 @@ class Workflow:
                 )
                 if scope == "var":
                     updates = {k: v for k, v in updates.items() if k not in constants}
-                for name in input_names | output_names:
+                inherited_names = input_names | output_names
+                if self._updates_scenes(step, plugin):
+                    from vhrharmonize.parameters import function_parameters
+                    inherited_names |= set(self.shared) & (set(function_parameters(plugin.function())) | plugin.options)
+                for name in inherited_names:
                     if name not in params:
                         if name in self.shared:
                             try:
@@ -1078,7 +1094,7 @@ class Workflow:
             for p in r["source_paths"]
             if self.controls["protect_source_files"]
         }
-        produced = {p for n in self.nodes for p in n.paths(*OUTPUT_PATH_FEATURES)}
+        produced = {p for n in [*self._completed_scene_nodes, *self.nodes] for p in n.paths(*OUTPUT_PATH_FEATURES)}
         self.protected_paths.update(
             p
             for n in self.nodes
@@ -1180,7 +1196,8 @@ class Workflow:
             node.needed = True
             plugin = load_plugin(node.step["plugin"])
             reuse = node.step.get("reuse", self.controls["run_from_existing"])
-            values_ready = not plugin.var_records_return and all(self._known(node.context, name) for name in node.demanded_values)
+            scene_update = self._updates_scenes(node.step, plugin)
+            values_ready = not (plugin.var_records_return or scene_update) and all(self._known(node.context, name) for name in node.demanded_values)
             unresolved = any(contains_pending(node.params.get(name)) for name in file_parameter_names(node.file_features, "output"))
             unresolved |= node.requirements_pending
             unresolved |= self.has_nonexecuting_steps and not node.parameter_overrides and (contains_pending(node.params) or contains_pending(node.requirements))
@@ -1211,7 +1228,7 @@ class Workflow:
         for node in self.nodes:
             # Even a plugin-only run needs the scene list before its selected
             # processing step can be planned. Unselected setters may only restore.
-            if not self._runs(node) and not load_plugin(node.step["plugin"]).var_records_return:
+            if not self._runs(node) and not (load_plugin(node.step["plugin"]).var_records_return or node.step_index == self.barrier_index):
                 continue
             targets = node.paths("output_target_paths")
             if (
@@ -1220,6 +1237,7 @@ class Workflow:
                 or self.selected_plugin is not None and node.step["plugin"] == self.selected_plugin
                 or self.selected_step == node.step["name"]
                 or load_plugin(node.step["plugin"]).var_records_return
+                or node.step_index == self.barrier_index
                 or load_plugin(node.step["plugin"]).removes_scenes
                 or node.step.get("execution_mode", "run") != "run" and (contains_pending(node.params) or node.requirements_pending)
             ):
@@ -1366,6 +1384,10 @@ class Workflow:
         file_names = file_parameter_names(node.file_features, "input") | file_parameter_names(
             node.file_features, "output"
         )
+        plugin = load_plugin(node.step["plugin"])
+        if self._updates_scenes(node.step, plugin):
+            from vhrharmonize.parameters import function_parameters
+            file_names |= set(shared) & (set(function_parameters(plugin.function())) | plugin.options)
         for name in file_names:
             if name not in params:
                 if name in shared:
@@ -1385,7 +1407,7 @@ class Workflow:
             filenames = value if isinstance(value, list) else [value]
             if any(not isinstance(filename, str) or not filename for filename in filenames):
                 raise ValueError(f"{node.step['name']}: output parameter {name} must resolve before execution")
-            for other in self.nodes if name not in known_outputs else ():
+            for other in [*self._completed_scene_nodes, *self.nodes] if name not in known_outputs else ():
                 if other is node:
                     continue
                 collisions = set(filenames) & set(other.paths(*OUTPUT_PATH_FEATURES))
@@ -1408,7 +1430,7 @@ class Workflow:
         # Naming bases can expand only after an upstream raster/mask exists.
         # Check those newly resolved destinations before any writer runs.
         for name, filenames in load_plugin(node.step["plugin"]).output_files(params=params).items():
-            for other in self.nodes:
+            for other in [*self._completed_scene_nodes, *self.nodes]:
                 if other is node:
                     continue
                 collisions = set(_paths(filenames)) & set(other.paths(*OUTPUT_PATH_FEATURES))
@@ -1488,6 +1510,15 @@ class Workflow:
         return payload
 
     def _finish(self, node, returned):
+        result = returned
+        plugin = load_plugin(node.step["plugin"])
+        changes_scenes = self._updates_scenes(node.step, plugin)
+        if changes_scenes and not isinstance(result, PluginResult):
+            raise ValueError("Scene-updating plugins must return PluginResult")
+        if isinstance(result, PluginResult):
+            if result.scene_updates is not None and not changes_scenes:
+                raise ValueError("Plugin returned scene updates without declaring updates_scenes")
+            returned = result.value
         _, updates, _, _ = self._evaluate(
             self._settings(node.step),
             node.runtime_base, path_scope=(node.step["name"], node.record),
@@ -1506,9 +1537,9 @@ class Workflow:
                 f"{node.step['name']} did not produce valid declared outputs: {failures}"
             )
         self._publish_values(node, values)
-        source = load_plugin(node.step["plugin"]).var_records_return
-        if source:
-            self._var_result = (node, returned)
+        source = plugin.var_records_return
+        if source or changes_scenes:
+            self._var_result = (node, result if changes_scenes else returned)
         if not load_plugin(node.step["plugin"]).var_records_return:
             self._save_node_context(node)
         node.status = "completed"
@@ -1534,7 +1565,9 @@ class Workflow:
             return
         if final:
             self._log_core_start("cleanup")
-        for node in self.nodes:
+        all_nodes = [*self._completed_scene_nodes, *self.nodes]
+        active_ids = {id(node) for node in self.nodes}
+        for node in all_nodes:
             if node.status not in {"completed", "loaded"}:
                 continue
             if node.status == "loaded" and node.index not in self._restored_nodes:
@@ -1542,11 +1575,11 @@ class Workflow:
             outputs = set(node.paths(*OUTPUT_PATH_FEATURES))
             consumers = [
                 n
-                for n in self.nodes
+                for n in all_nodes
                 if n.needed
                 and (
-                    node.index in n.dependencies
-                    or outputs.intersection(n.paths("input_protection_paths"))
+                    (id(node) in active_ids and id(n) in active_ids and node.index in n.dependencies)
+                    or outputs.intersection([*n.paths("input_dependency_paths", "input_protection_paths"), *n.requirements])
                 )
             ]
             # A temporary terminal result is retained for its caller.
@@ -1587,6 +1620,8 @@ class Workflow:
         if self.barrier_index is None:
             return
         node = next(n for n in self.nodes if n.step_index == self.barrier_index)
+        if self._updates_scenes(node.step):
+            return  # Processing must never run during discovery or dry-run.
         if node.step.get("execution_mode", "run") != "run":
             return
         # Advancing replaces the current graph. Preserve independent unfinished work too.
@@ -1678,6 +1713,58 @@ class Workflow:
             self._append_metadata(context)
         self._exported_nodes.add(key)
 
+    def _replace_processed_scenes(self, node, result, context):
+        """Apply plugin-reported split/merge provenance through the scene interface."""
+        current = [available_context(c)["var"] for c in self._record_values(node, after=True)]
+        updates = result.scene_updates
+        unchanged = updates is None
+        if unchanged:
+            updates = [{"source_indices": [i], "scene_id": record["id"], "values": {}}
+                       for i, record in enumerate(self.records)]
+        if not isinstance(updates, list):
+            raise ValueError("scene_updates must be a list or None")
+        scenes, seen = [], set()
+        for update in updates:
+            if not isinstance(update, dict) or set(update) != {"source_indices", "scene_id", "values"}:
+                raise ValueError("Each scene update needs source_indices, scene_id and values")
+            indices, scene_id, values = (update[k] for k in ("source_indices", "scene_id", "values"))
+            if (not isinstance(indices, list) or not indices
+                    or any(type(i) is not int or not 0 <= i < len(current) for i in indices)
+                    or len(set(indices)) != len(indices)):
+                raise ValueError("scene_updates source_indices must identify distinct invocation records")
+            if not isinstance(scene_id, str) or not scene_id.strip() or scene_id in seen:
+                raise ValueError("scene_updates must have unique nonempty scene_id values")
+            if not isinstance(values, dict):
+                raise ValueError("scene_updates values must be a variable dictionary")
+            seen.add(scene_id)
+            parents = [current[i] for i in indices]
+            # Splits inherit everything. Merges inherit only common values; keep
+            # every parent's metadata explicitly rather than arbitrarily choosing.
+            inherited = {k: deepcopy(v) for k, v in parents[0].items()
+                         if all(k in parent and parent[k] == v for parent in parents[1:])}
+            parent_ids = [self.records[i]["id"] for i in indices]
+            if not unchanged:
+                inherited["parent_scene_ids"] = parent_ids
+            if unchanged:
+                pass
+            elif len(indices) == 1:
+                inherited["parent_scene_id"] = parent_ids[0]
+            else:
+                inherited.pop("parent_scene_id", None)
+                inherited["parent_records"] = deepcopy(parents)
+            inherited.update(deepcopy(values))
+            inherited["scene_id"] = scene_id
+            inherited["source_paths"] = list(dict.fromkeys(
+                p for i in indices for p in self.records[i]["source_paths"]))
+            scenes.append(inherited)
+        # Validate before replacing any state, using the existing scene rebuild.
+        scenes = json.loads(json.dumps(scenes, allow_nan=False))
+        adapter = FunctionPlugin()
+        adapter.var_records_return = "scenes"
+        adapter.var_id_return = "scene_id"
+        adapter.source_file_protection_paths_return = "source_paths"
+        self._update_var_records(adapter, {**node.step, "settings": {}}, {"scenes": scenes}, context)
+
     def _advance_var_records(self, step_index):
         if step_index != self.barrier_index:
             return
@@ -1688,7 +1775,10 @@ class Workflow:
             # Carry actual completed/cached values across the planning boundary.
             for record, current in zip(self.records, self._record_values(node)):
                 record["context"] = available_context(current)
-        self._update_var_records(plugin, node.step, returned, context)
+        if self._updates_scenes(node.step, plugin):
+            self._replace_processed_scenes(node, returned, context)
+        else:
+            self._update_var_records(plugin, node.step, returned, context)
         self.discovery_sources.update(p for record in self.records for p in record["source_paths"])
         for filename in self.discovery_sources:
             self.discovery_source_steps.setdefault(filename, node.step["name"])
@@ -1701,6 +1791,9 @@ class Workflow:
             }
         )
         self._retained_protected_paths.update(self.protected_paths)
+        for completed in self.nodes:
+            if completed.status == "completed" or (completed.status == "loaded" and completed.index in self._restored_nodes):
+                self._completed_scene_nodes.append(replace(completed, status="completed"))
         self.nodes = []
         self._planned = False
         self._protected_keys = None

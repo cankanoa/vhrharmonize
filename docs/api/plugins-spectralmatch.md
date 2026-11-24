@@ -141,36 +141,36 @@ and follows polygon bounds in increasing coordinate order. Overlapping/touching
 mask features are dissolved before splitting; interior holes remain masked.
 An exclude mask splits the remaining raster area. The default is `false`.
 
-Splitting changes the number of files, so an output base is no longer a current
-image path. For a final masking step followed by an aggregate merge, collect the
-flat returned list into a constant and pass that list to the merge:
+The plugin reports the resulting scene changes directly to core. Each returned
+numbered file becomes an independent scene with its own `current_image_paths`,
+`file_path`, scene ID and basename, and an empty naming suffix. Parent metadata
+and protected source paths are inherited. No additional import step is needed.
 
 ```yaml
-mask_rasters:
+mask_mosaic_coverage:
   plugin: mask_rasters
   core:run: true
   param:input_images: collect:current_image_paths
-  var:masked_base: expr:const.temp_dir & '/mask_rasters/' & var.basename & '_masked.tif'
-  param:output_images: collect:masked_base
-  core:requires: const:spectralmatch.mask
-  param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name]
+  var:suffix: expr:var.suffix & '_coverage'
+  var:current_image_paths: expr:const.temp_dir & '/coverage/' & var.basename & var.suffix & '.tif'
+  param:output_images: collect:current_image_paths
+  core:requires: const:coverage_mask
+  param:vector_mask: [include, const:coverage_mask, const:spectralmatch.image_field_name]
   param:seperate_multipolygons: true
   param:resume_from_outputs: "yes"
-  const:masked_image_paths: returned:$
-
-merge_rasters:
-  plugin: merge_rasters
-  core:run: true
-  core:require_outputs: param:output_image_path
-  param:input_images: const:masked_image_paths
-  param:output_image_path: const:mosaic_path
 ```
 
-Core tracks the numbered files for validation, collisions, overviews, cleanup and
-transfers once the input rasters and mask exist. Native resume checks each numbered
-file separately. For further per-image processing, import the numbered rasters as
-new scene records first; splitting does not automatically expand existing records.
-It also does not trim narrow arms connected to a polygon.
+Downstream steps continue using `collect:current_image_paths` and `var:basename`.
+`returned:$` still exposes the ordinary flat output-path list if requested.
+Only actual returned outputs are used, so stale numbered files are ignored.
+Native reuse restores the same scene mapping without rewriting completed files.
+An empty component list raises a clear no-coverage error.
+
+Core tracks numbered files for validation, collisions, overviews, cleanup and
+transfers. Scene replacement happens after successful execution, never during
+planning. HPC preparation of a downstream suffix must first run through the
+splitting step with `run_to_step_before_prepare`; a terminal masking-only job can
+be staged directly. Connected narrow arms are not split off.
 
 ::: vhrharmonize.plugins.mask_rasters
 
