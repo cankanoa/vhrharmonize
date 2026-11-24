@@ -44,7 +44,7 @@ def test_direct_rpc_warp_preserves_source_and_applies_output_options(tmp_path, m
         return translate(*args, **kwargs)
     monkeypatch.setattr(gdal, 'Translate', translated)
     if refined:
-        import orthority
+        orthority = pytest.importorskip('orthority')
         with rasterio.open(source) as src:
             camera = src.rpcs
         monkeypatch.setattr(orthority, 'RpcCameras', SimpleNamespace(

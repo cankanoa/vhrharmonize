@@ -109,7 +109,8 @@ def test_workflow_collects_once_or_fetches_per_scene(aggregate, dem_request, mak
             "param:output_tif_path": "var:dem",
         })
     config = {
-        "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False},
+        "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
+                   "core:cleanup_dirs": ["const:temp_dir"]},
         "import": {**import_settings(tmp_path / "source/*.tif", tmp_path),
                    "var:current_image_paths": "returned:file_path"},
         "dem": step,

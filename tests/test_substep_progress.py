@@ -17,6 +17,8 @@ def collector():
     progress.state.tasks['task'] = TaskProgress('joint', 'all scenes', weight=3, started=monotonic())
     progress.run_id = 'test'
     progress.snapshot_status = 'running'
+    progress.removed_scenes = set()
+    progress.removed_by_step = {}
     return progress
 
 
@@ -114,7 +116,8 @@ def test_live_nested_pair_progress_survives_worker_transport(tmp_path, backend):
     from spectralmatch.utils_progress import operation
     from spectralmatch.utils_multiprocessing import _run_image_tasks
     from vhrharmonize.workflow.concurrency import image_executor
-    from distributed import LocalCluster
+    if backend == 'dask':
+        LocalCluster = pytest.importorskip('distributed').LocalCluster
     p = collector()
     ready = tmp_path / 'both_started'
     observed = []

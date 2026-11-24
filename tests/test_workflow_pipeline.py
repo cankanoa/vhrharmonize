@@ -71,6 +71,7 @@ def test_each_record_resumes_at_its_own_available_output(pipeline, make_test_ras
 
 def test_corrupt_output_is_regenerated_and_sources_preserved(pipeline):
     config, raw = pipeline
+    config['shared']['core:check_validity'] = 'before_reuse'
     original = raw.read_bytes()
     corrupt = Path(config["import_files"]["const:output_dir"], "cloudmasked.tif")
     corrupt.parent.mkdir()

@@ -290,6 +290,8 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
             )
         },
     }
+    recipe['merge_rasters']['core:require_outputs'] = 'param:output_image_path'
+    recipe['merge_rasters']['core:calculate_overviews'] = True
     calls = []
     for name in ("global_regression", "local_block_adjustment"):
         module = importlib.import_module("vhrharmonize.plugins." + name)
@@ -330,25 +332,20 @@ def test_worldview_function_chain_runs_stages_and_reuses_final_product(
 
     monkeypatch.setattr(module, "_upstream", lambda: markov)
 
-    # Verify the final invocation separately from the native mosaic algorithm
-    # (covered by test_standalone_merge_function_writes_real_raster).
+    # Inspect the final invocation while retaining the native writer's
+    # publication hook, where core validates and adds the requested overviews.
     module = importlib.import_module("vhrharmonize.plugins.merge_rasters")
     native = module._upstream()
 
     @wraps(native)
     def merge(**kwargs):
-        import rasterio
-
         assert kwargs["image_threads"] is None
         assert kwargs["concurrent_processing_backend"] is None
         assert kwargs["dask_scheduler"] is None
         assert kwargs["output_dtype"] == "float32"
         assert "build_overviews" not in kwargs
         assert kwargs["input_images"][0].endswith("_global_local_masked.tif")
-        with rasterio.open(kwargs["input_images"][0]) as source:
-            with rasterio.open(kwargs["output_image_path"], "w", **source.profile) as target:
-                target.write(source.read())
-        return kwargs["output_image_path"]
+        return native(**kwargs)
 
     monkeypatch.setattr(module, "_upstream", lambda: merge)
 

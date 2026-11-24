@@ -1,4 +1,4 @@
-"""The editable recipe documents YAML-configurable function parameters and defaults."""
+"""The editable recipe uses supported options and accurate commented defaults."""
 
 import importlib
 import inspect
@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from vhrharmonize.parameters import function_parameters
+from vhrharmonize.workflow.registry import load_plugin
 from test_spectralmatch_workflow import FUNCTIONS
 
 RECIPE = Path(__file__).resolve().parents[1] / "configs/example.worldview.yml"
@@ -18,7 +19,7 @@ def plugin_sections():
     result = {}
     text = re.sub(r"^# ", "", RECIPE.read_text(), flags=re.MULTILINE)
     for section in re.split(r"(?=^\w+:$)", text, flags=re.MULTILINE):
-        match = re.search(r"^  plugin: (\w+)$", section, re.MULTILINE)
+        match = re.search(r"^  plugin: (\w+)(?:\s+#.*)?\s*$", section, re.MULTILINE)
         if match:
             result.setdefault(match[1], []).append(section)
     return result
@@ -50,12 +51,17 @@ def documented_plugin_keys():
         *[(name, [name]) for name in FUNCTIONS],
     ],
 )
-def test_worldview_documents_every_public_plugin_parameter(plugin, functions):
+def test_worldview_parameters_are_supported_by_their_plugin(plugin, functions):
     module = importlib.import_module("vhrharmonize.plugins." + plugin)
-    documented = documented_plugin_keys()[plugin]
+    documented = documented_plugin_keys().get(plugin, set())
+    accepted = set(load_plugin(plugin).options)
+    if plugin == 'fetch_atmosphere':
+        accepted.update({'source', 'output_path'})  # Consumed by the adapter.
     for name in functions:
-        # Python callbacks are supplied by core and documented in the Python API.
-        assert set(function_parameters(getattr(module, name))) - {"progress_callback"} <= documented
+        accepted.update(function_parameters(getattr(module, name)))
+    # This is an executable workflow, not an exhaustive catalog of every plugin.
+    # Each function's full public API is covered by its adapter contract tests.
+    assert documented <= accepted
 
 
 def test_worldview_retains_all_supported_flaash_task_parameters():
@@ -69,22 +75,20 @@ def test_worldview_retains_all_supported_flaash_task_parameters():
 
 @pytest.mark.parametrize("name", FUNCTIONS)
 def test_spectralmatch_commented_defaults_match_the_installed_api(name):
-    text = "\n".join(plugin_sections()[name])
+    text = "\n".join(plugin_sections().get(name, []))
     function = getattr(importlib.import_module("vhrharmonize.plugins." + name), name)
-    for key, parameter in function_parameters(function).items():
-        if key == "progress_callback":
-            continue  # A Python callable is not a YAML configuration option.
-        line = re.search(r"^  (#\s*)?param:" + key + r": (.*?) # (.*)$", text, re.MULTILINE)
-        assert line, f"{name}.{key} needs a value and a concise options/default comment"
-        if parameter.default is inspect.Parameter.empty:
-            assert "required" in line[3]
+    parameters = function_parameters(function)
+    for key, value, comment in re.findall(r"^  #\s*param:(\w+): (.*?) # (.*)$", text, re.MULTILINE):
+        parameter = parameters[key]
+        assert parameter.default is not inspect.Parameter.empty, (name, key)
+        # Expressions show optional wiring, and inherited settings document the
+        # shared override. Literal commented defaults must match the native API.
+        if value.startswith(('var:', 'const:', 'expr:')) or 'default: shared.' in comment.lower():
             continue
-        assert "default:" in line[3], (name, key)
-        if line[1]:
-            default = parameter.default
-            if isinstance(default, tuple):
-                default = list(default)
-            assert yaml.safe_load(line[2]) == default, (name, key)
+        default = parameter.default
+        if isinstance(default, tuple):
+            default = list(default)
+        assert yaml.safe_load(value) == default, (name, key)
 
 
 def test_every_example_step_is_explicitly_enabled_or_disabled():

@@ -1,4 +1,4 @@
-"""VHR exposes the native opt-in skip without adding error handling in core."""
+"""VHR exposes native overlap skipping without adding error handling in core."""
 import importlib
 from pathlib import Path
 from unittest.mock import Mock
@@ -15,7 +15,7 @@ from vhrharmonize.workflow.registry import load_plugin
 def test_native_overlap_skip_option_is_exposed_and_forwarded(name, enabled, monkeypatch):
     module = importlib.import_module("vhrharmonize.plugins." + name)
     parameters = function_parameters(getattr(module, name))
-    assert parameters["skip_overlap_when_not_enough_matches"].default is False
+    assert parameters["skip_overlap_when_not_enough_matches"].default is True
     native = Mock(return_value=["out.tif"])
     monkeypatch.setattr(module, "_upstream", lambda: native)
     result = load_plugin(name).run(

@@ -48,21 +48,33 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
         )
     )
     filename.write_text(text.replace("END;", extra + "END;"))
-    config = load_config("configs/example.worldview.yml")
+    config_path = Path(__file__).parents[1] / 'configs/example.worldview.yml'
+    config = load_config(config_path)
+    # Test discovery and resume through the cloud checkpoint. Later seamline
+    # algorithms have their own complete recipe integration test.
+    names = list(config)
+    config = {name: config[name] for name in names[:names.index('cloud_mask') + 1]}
+    config['consume_cached'] = {
+        'plugin': 'file_source', 'core:run': True,
+        'core:require_outputs': 'param:output_path',
+        'param:input_path': 'var:current_image_paths',
+        'param:output_path': str(tmp_path / 'output/consumed.tif'),
+    }
     config["discover_inputs"].update(
         {"var:relative_output_dir": str(tmp_path / "output"), "const:temp_dir": str(tmp_path / "temp")}
     )
     config["shared"]["core:validity_raster_grid"] = False
     config["discover_inputs"]["param:search_glob"] = str(bundle["mul_tif"])
-    for suffix in ["cloudmasked", "cloudmasked_mask"]:
+    for suffix in ["cloudmasked", "cloudmask"]:
         make_test_raster(
             tmp_path / "output" / f"{bundle['basename']}_py6s_ortho_pansharpen_{suffix}.tif"
         )
-    workflow = Workflow(config)
+    workflow = Workflow(config, config_dir=config_path.parent)
     metadata = workflow.records[0]["context"]["var"]
     constants = workflow.records[0]["context"]["const"]
-    assert constants["band_wavelengths_um"] == config["discover_inputs"]["const:band_wavelengths_um"]
-    assert constants["calibration"]["WV03"]["BAND_C"] == [0.905, -8.604]
+    assert set(constants['spectral_response_csv']) == {'WV02', 'WV03'}
+    assert all(Path(path).is_file() for path in constants['spectral_response_csv'].values())
+    assert constants["calibration"]["WV03"]["BAND_C"] == config['discover_inputs']['const:calibration']['WV03']['BAND_C']
     assert (
         not {"band_order", "band_wavelengths_um", "calibration", "temp_dir"}
         & metadata.keys()
@@ -70,10 +82,12 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     assert metadata["relative_output_dir"] == str(tmp_path / "output")
     assert workflow.records[0]["id"] == metadata["scene_id"] == bundle["basename"]
     assert metadata["solar_zenith"] == 17
+    assert metadata['view_zenith'] == 25
     assert metadata["cloud_cover"] == 10
     assert metadata["day"] == 5
     assert metadata["month"] == 7
-    assert metadata["dn_to_radiance_factors"][:2] == pytest.approx([0.4525, 0.47])
+    gains = constants['calibration']['WV03']
+    assert metadata["dn_to_radiance_factors"][:2] == pytest.approx([gains['BAND_C'][0] / 2, gains['BAND_B'][0] / 2])
     assert workflow.records[0]["context"]["var"]["pan"] == str(bundle["pan_tif"])
     counts = workflow.counts()
     for step in [
@@ -85,8 +99,7 @@ def test_worldview_recipe_mappings_and_cached_cloudmask_plan(
     ]:
         assert counts[step]["processing"] == 0
     assert counts["cloud_mask"]["loaded"] == 1
-    assert counts["alignment"]["processing"] == 1
-    assert counts["create_aligned_footprints"]["processing"] == 1
+    assert counts['consume_cached']['processing'] == 1
 
 
 def test_planet_recipe_uses_same_runner(make_test_raster, tmp_path):

@@ -34,4 +34,4 @@ def test_worldview_mesh_defaults():
         assert 'param:mesh_spacing' not in params, path
         assert params['param:mesh_max_triangle_area'] == 10000, path
         assert params['param:mesh_min_triangle_angle'] == 20, path
-        assert params['param:input_polygons'] == 'const:footprints', path
+        assert params.get('param:input_footprints', params.get('param:input_polygons')) == 'const:footprints', path

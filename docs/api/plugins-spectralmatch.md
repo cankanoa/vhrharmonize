@@ -134,6 +134,44 @@ executor workers without changing the installed SpectralMatch files.
 
 ## mask_rasters
 
+`param:seperate_multipolygons: true` writes one cropped raster for each disconnected
+retained polygon. For an output base `scene_masked.tif`, files are
+`scene_masked_1.tif`, `scene_masked_2.tif`, etc. Numbering restarts for each input
+and follows polygon bounds in increasing coordinate order. Overlapping/touching
+mask features are dissolved before splitting; interior holes remain masked.
+An exclude mask splits the remaining raster area. The default is `false`.
+
+Splitting changes the number of files, so an output base is no longer a current
+image path. For a final masking step followed by an aggregate merge, collect the
+flat returned list into a constant and pass that list to the merge:
+
+```yaml
+mask_rasters:
+  plugin: mask_rasters
+  core:run: true
+  param:input_images: collect:current_image_paths
+  var:masked_base: expr:const.temp_dir & '/mask_rasters/' & var.basename & '_masked.tif'
+  param:output_images: collect:masked_base
+  core:requires: const:spectralmatch.mask
+  param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name]
+  param:seperate_multipolygons: true
+  param:resume_from_outputs: "yes"
+  const:masked_image_paths: returned:$
+
+merge_rasters:
+  plugin: merge_rasters
+  core:run: true
+  core:require_outputs: param:output_image_path
+  param:input_images: const:masked_image_paths
+  param:output_image_path: const:mosaic_path
+```
+
+Core tracks the numbered files for validation, collisions, overviews, cleanup and
+transfers once the input rasters and mask exist. Native resume checks each numbered
+file separately. For further per-image processing, import the numbered rasters as
+new scene records first; splitting does not automatically expand existing records.
+It also does not trim narrow arms connected to a polygon.
+
 ::: vhrharmonize.plugins.mask_rasters
 
 ## merge_rasters

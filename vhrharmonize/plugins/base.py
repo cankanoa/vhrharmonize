@@ -89,6 +89,16 @@ class FunctionPlugin:
         """
         return True
 
+    def output_files(self, *, params):
+        """Override actual file lists for outputs whose arguments are naming bases.
+
+        Keys are declared output parameter names. This read-only hook runs during
+        planning and execution; leave unresolved inputs out of the result. Function
+        arguments retain their original values. Core uses these files for validation,
+        reuse, collisions, cleanup, overviews and transfer.
+        """
+        return {}
+
     def worker_image_paths(self, function, args, kwargs):
         """Identify a submitted aggregate job's source images, or return ().
 

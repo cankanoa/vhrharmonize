@@ -8,6 +8,7 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from multiprocessing import get_context
+from threading import Event
 from time import monotonic
 
 
@@ -91,6 +92,7 @@ class DaskExecutor:
     def __init__(self, client):
         self._client = client
         self._jobs = []
+        self._completed = []
 
     def submit(self, function, /, *args, **kwargs):
         result = Future()
@@ -98,15 +100,27 @@ class DaskExecutor:
         result.set_running_or_notify_cancel()
         job = self._client.submit(function, *args, pure=False, **kwargs)
         self._jobs.append(job)
+        completed = Event()
+        self._completed.append(completed)
         def complete(job):
             try:
-                value = job.result()
-            except BaseException as exc:
-                result.set_exception(exc)
-            else:
-                result.set_result(value)
+                try:
+                    value = job.result()
+                except BaseException as exc:
+                    result.set_exception(exc)
+                else:
+                    result.set_result(value)
+            finally:
+                # Include local tracking/publication callbacks, which run after
+                # Future.result() can wake the aggregate coordinator.
+                completed.set()
         job.add_done_callback(complete)
         return result
+
+    def wait_for_jobs(self):
+        """Finish submitted work and callbacks before releasing remote results."""
+        for completed in self._completed:
+            completed.wait()
 
 
 def balanced_tile_threads(base, workers, remaining):
@@ -163,10 +177,18 @@ def image_executor(workers, backend, scheduler=None, *, threads_balance=False, t
             raise ValueError("Use concurrent_processing: 1 with Dask; the cluster controls worker capacity")
         with _make_dask_client(scheduler) as client:
             executor = DaskExecutor(client)
+            interrupted = False
             try:
                 yield executor
+            except KeyboardInterrupt:
+                interrupted = True
+                raise
             finally:
-                client.cancel(executor._jobs)
+                try:
+                    if not interrupted:
+                        executor.wait_for_jobs()
+                finally:
+                    client.cancel(executor._jobs)
     else:
         with (get_context("spawn").Manager() if threads_balance else nullcontext()) as manager:
             with interruptible_pool(ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))) as executor:

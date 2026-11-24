@@ -96,6 +96,7 @@ TLCTime = 2017-07-05T21:16:43.287350Z;
 meanSunAz = 75.2;
 meanSunEl = 73.0;
 meanSatAz = 79.7;
+meanSatEl = 65.0;
 meanOffNadirViewAngle = 22.0;
 meanProductRowGSD = 1.342;
 meanProductColGSD = 1.463;

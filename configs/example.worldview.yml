@@ -174,17 +174,17 @@ discover_inputs:
     mul_companions:
       path: literal:expr:$replace(var.file_path, '.TIF', '.{RPB,rpb}') # Sorted paths; [] if no matches.
     pan_companions:
-      path: literal:expr:$replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
+      path: literal:expr:$replace($replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.{RPB,rpb}')
     metadata:
       to_json: literal:expr:$replace(var.file_path, '.TIF', '.IMD') # IMD/JSON/GeoJSON/XML/YAML -> object; kept in memory.
     pan_metadata:
-      to_json: literal:expr:$replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.IMD')
+      to_json: literal:expr:$replace($replace($replace($replace(var.file_path, '_MUL/', '_PAN/'), '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-'), '.TIF', '.IMD')
   var:mul: returned:file_path # Original multispectral image; retained for source metadata.
   var:metadata_path: expr:$replace(var.mul, '.TIF', '.IMD') # Source metadata file; enables an individual HPC mapping.
   var:current_image_paths: returned:file_path # Current image for this scene; updated by enabled image steps.
   var:basename: expr:$replace($split(var.file_path, '/')[-1], /\.[^.]*$/, '') # Original filename without extension.
   var:suffix: "" # Naming state; enabled processing steps append their suffixes in YAML.
-  var:pan: expr:$replace($replace(var.mul, '_MUL/', '_PAN/'), '-M1BS-', '-P1BS-')
+  var:pan: expr:$replace($replace($replace(var.mul, '_MUL/', '_PAN/'), '/MUL/', '/PAN/'), '-M1BS-', '-P1BS-')
   var:sensor_id: var:metadata.IMAGE_1.satId
   var:wavelengths_response_csv: expr:$lookup(const.spectral_response_csv, var.sensor_id)
   var:acquisition_datetime_utc: expr:var.metadata.IMAGE_1.firstLineTime ?? var.metadata.IMAGE_1.TLCTime
@@ -612,7 +612,7 @@ standardize_mosaic_coverage:
   param:output_polygons: const:coverage_mask # path; required. Ranked coverage polygons; images with no retained area have no output polygon.
   param:output_layer: const:spectralmatch.polygon_layer # layer name; default: footprints.
   param:image_field_name: const:spectralmatch.image_field_name # field name; default: image. Current image stems match the coverage-cropped output suffixes.
-  # param:metadata_crs: "EPSG:4326" # Used only with footprint_source: metadata; saved vectors carry their own CRS.
+  # param:metadata_crs: "EPSG:4326" # CRS string; default: "EPSG:4326". Used only with footprint_source: metadata; saved vectors carry their own CRS.
   param:footprint_source: vector_bounds # Read saved polygon geometry without reopening raster pixels.
   # param:outline_path: null # path | null; default: null. Goal-area polygon file; null uses all image coverage. Example: path:/path/to/outline.gpkg.
   # param:outline_layer: null # layer name | null; default: null. First layer when null; requires outline_path.
@@ -641,13 +641,14 @@ mask_mosaic_coverage:
   param:output_images: collect:current_image_paths # path list; required. Cropped rasters used by subsequent processing.
   core:requires: const:coverage_mask
   param:vector_mask: [include, const:coverage_mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null.
+  # param:seperate_multipolygons: false # true | false; default: false. Export disconnected pieces as _1, _2, etc. See the mask_rasters API for collecting the resulting paths.
 
 # Jointly register overlapping imagery before matching.
 joint_coregistration:
   plugin: joint_coregistration
   param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
-  # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
+  # param:tie_sampling_method: overlap_spread # default: overlap_spread. grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
   # param:tie_min_samples: "1000crs" # Minimum: one accepted pair per 1000 x 1000 CRS-unit square; PIF matching still requires at least 3. Use "Ncnt" for a fixed count.
   # param:tie_max_attempts: null # Default search-center limit: max(100, 10 * resolved pair goal).
@@ -734,7 +735,7 @@ global_regression:
   param:pif_coregister: false # Default: false. Already joint-aligned; skip extra PIF alignment, retain seed matching and radiometric correction.
   param:compression: false # Default: true. Uncompressed intermediate TIFFs, including temporary rasters.
   # param:skip_overlap_when_not_enough_matches: true # Default: true. Skip insufficient-match overlaps; false raises an error.
-  # param:tie_sampling_method: overlap_spread # Library default; grid selects the regular search grid.
+  # param:tie_sampling_method: overlap_spread # default: overlap_spread. grid selects the regular search grid.
   # param:tie_max_samples: "500crs" # Goal: one accepted pair per 500 x 500 CRS-unit square of valid overlap. Use "Ncnt" for a fixed count.
   # param:tie_min_samples: "1000crs" # Minimum: one accepted pair per 1000 x 1000 CRS-unit square; PIF matching still requires at least 3. Use "Ncnt" for a fixed count.
   # param:tie_max_attempts: null # Default search-center limit: max(100, 10 * resolved pair goal).
@@ -921,6 +922,7 @@ mask_rasters:
   core:requires: const:spectralmatch.mask
   param:output_images: collect:current_image_paths # path list | template/folder; required. Defines output files from a template path, folder, or list of paths (with the same length as the input).
   param:vector_mask: [include, const:spectralmatch.mask, const:spectralmatch.image_field_name] # [include|exclude, path, optional_field] | null; default: null. Example: [include, /path/to/seamline_mask.gpkg, image].
+  # param:seperate_multipolygons: false # true | false; default: false. Export disconnected pieces as _1, _2, etc. See the mask_rasters API for collecting the resulting paths.
   # param:window_size: null # positive integer | null; default: null. Tile size for processing tiles. Inherits shared.param:window_size when set.
   # param:debug_logs: false # true | false; default: false. If True, prints progress. Inherits shared.param:debug_logs when set.
   # param:cache: null # positive GB | null; default: null. Parallelization strategy at the window level within each image. Inherits shared.param:cache when set.

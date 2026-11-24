@@ -178,6 +178,15 @@ changing inputs or ranking settings; core does not compare parameter histories.
 Core reuse is independent of `param:resume_from_outputs`, which applies only
 when the processing function is actually called.
 
+If an output argument is a naming base rather than a written file, override
+`output_files(self, *, params)` with a mapping from declared output parameter names
+to their actual flat file lists. Keep the original function arguments unchanged.
+The hook must be read-only and omit entries whose inputs are still unresolved.
+Core applies the declared file features to these lists and retains resolved paths
+for cleanup after inputs are removed. `mask_rasters` uses this for numbered polygon
+exports. Declare runtime return assignments explicitly when downstream steps need
+the resulting list.
+
 ## Removing scenes during execution
 
 A processing adapter can opt into runtime scene removal:

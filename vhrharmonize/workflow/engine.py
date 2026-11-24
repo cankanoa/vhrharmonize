@@ -203,13 +203,19 @@ class Node:
     runtime_directory_context: dict | None = None
     requirements_pending: bool = False
     attempt: int = 0
+    output_file_overrides: dict = field(default_factory=dict)
+    output_file_resolver: object = field(default=None, repr=False, compare=False)
 
     def file_arguments(self, *features):
         return _selected(self.params, set().union(*(self.file_features[f] for f in features)))
 
     def paths(self, *features):
         names = set().union(*(self.file_features[feature] for feature in features))
-        return [filename for name, value in self.params.items() if name in names for filename in _paths(value)]
+        outputs = names & file_parameter_names(self.file_features, "output")
+        files = self.output_file_resolver(params=self.params) if outputs and self.output_file_resolver else {}
+        self.output_file_overrides.update(files)
+        return [filename for name, value in self.params.items() if name in names
+                for filename in _paths(self.output_file_overrides.get(name, value) if name in outputs else value)]
 
     @property
     def directories(self):
@@ -919,7 +925,9 @@ class Workflow:
                     )
                 except Deferred:
                     requirements, requirements_pending = [], True
+                output_files = plugin.output_files(params=params)
                 for name, value in _selected(params, output_names).items():
+                    value = output_files.get(name, value)
                     filenames = value if isinstance(value, list) else [value]
                     if any(not isinstance(filename, str) or not filename for filename in filenames):
                         raise ValueError(
@@ -1005,6 +1013,8 @@ class Workflow:
                     value_dependencies=value_dependencies,
                     requirements_pending=requirements_pending,
                     attempt=self._aggregate_attempts.get(step_index, 0),
+                    output_file_resolver=plugin.output_files,
+                    output_file_overrides=output_files,
                 )
                 node.collection_snapshot = deepcopy(step_records)
                 self.nodes.append(node)
@@ -1395,6 +1405,16 @@ class Workflow:
             path_resolver=self.path_resolver,
         )
         node.params = params
+        # Naming bases can expand only after an upstream raster/mask exists.
+        # Check those newly resolved destinations before any writer runs.
+        for name, filenames in load_plugin(node.step["plugin"]).output_files(params=params).items():
+            for other in self.nodes:
+                if other is node:
+                    continue
+                collisions = set(_paths(filenames)) & set(other.paths(*OUTPUT_PATH_FEATURES))
+                if collisions and (name in node.file_features["output_collision_check_paths"]
+                                   or collisions & set(other.paths("output_collision_check_paths"))):
+                    raise ValueError(f"Output path collision: {sorted(collisions)[0]}")
         owned = node.paths(*OUTPUT_PATH_FEATURES)
         for filename in owned:
             if self._is_protected(filename):

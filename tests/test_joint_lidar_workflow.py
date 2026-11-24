@@ -12,6 +12,15 @@ from vhrharmonize.workflow.engine import Workflow
 from workflow_helpers import import_settings
 
 
+def lidar_example_step():
+    # The independent LiDAR route is an optional commented alternative.
+    text=(Path(__file__).parents[1]/'configs/example.worldview.yml').read_text()
+    block=text.split('# lidar_joint_coregistration:\n',1)[1].split('\n\n',1)[0]
+    return yaml.safe_load('lidar_joint_coregistration:\n'+'\n'.join(
+        line[2:] if line.startswith('# ') else line for line in block.splitlines()
+    ))['lidar_joint_coregistration']
+
+
 def test_native_matching_and_fixed_parameters_exposed():
     parameters = function_parameters(joint_coregistration)
     assert 'fixed_images' in parameters
@@ -26,8 +35,7 @@ def test_native_matching_and_fixed_parameters_exposed():
 
 
 def test_lidar_recipe_uses_separate_reference_paths_and_only_moving_outputs(tmp_path, make_test_raster):
-    recipe = yaml.safe_load((Path(__file__).parents[1] / 'configs/example.worldview.yml').read_text())
-    step = recipe['lidar_joint_coregistration']
+    step = lidar_example_step()
     assert step['param:input_images'] == 'var:current_image_paths'
     assert step['param:output_images'] == 'var:current_image_paths'
     assert step['param:fixed_images'] == 'expr:[const.lidar_reference]'
@@ -69,8 +77,7 @@ def test_recipe_pairs_each_scene_with_fixed_lidar(tmp_path, explicit_lists):
     for name in ('a','b'):
         write(source_dir/f'{name}.tif',2)
         _save_ties(str(tmp_path/f'{name}.json'),{(name,'lidar_intensity'):np.array([[10,10,10,10]])})
-    recipe = yaml.safe_load((Path(__file__).parents[1]/'configs/example.worldview.yml').read_text())
-    step = dict(recipe['lidar_joint_coregistration'])
+    step = lidar_example_step()
     step.update({'core:run':True, 'core:require_outputs':'param:output_images', 'param:skip_single_image':True,
                  'param:local_model':'none',
                  'param:tie_load_path':"expr:'"+str(tmp_path)+"/' & var.basename & '.json'"})

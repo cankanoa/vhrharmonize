@@ -84,7 +84,7 @@ def test_individual_functions_run_real_tiled_merge(tmp_path, make_test_raster, a
     assert len(list(output.glob("*.tif"))) == 4
     assert (output / "MergedImage.vrt").exists()
     assert (output / "tiles.csv").exists()
-    assert (output / "1" / "MergedImage.vrt").exists()
     with rasterio.open(output / "MergedImage.vrt") as mosaic:
+        assert mosaic.overviews(1) == [2]
         assert mosaic.read(1).shape == (32, 32)
         assert (mosaic.read(1) == 1).all()

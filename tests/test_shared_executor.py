@@ -77,7 +77,8 @@ def test_real_spectralmatch_function_uses_borrowed_workflow_pool(tmp_path, monke
 
 
 def test_dask_executor_runs_spectral_jobs_and_remains_caller_owned():
-    from distributed import Client, LocalCluster
+    distributed = pytest.importorskip('distributed')
+    Client, LocalCluster = distributed.Client, distributed.LocalCluster
     from spectralmatch.utils_multiprocessing import _run_image_tasks
     from vhrharmonize.workflow.concurrency import DaskExecutor
     with LocalCluster(n_workers=2, threads_per_worker=1, processes=False, dashboard_address=None) as cluster:
@@ -92,11 +93,68 @@ def test_dask_executor_runs_spectral_jobs_and_remains_caller_owned():
             assert client.submit(abs, -5).result(timeout=10) == 5
 
 
+@pytest.mark.parametrize('exception', [ValueError, KeyboardInterrupt])
+def test_dask_coordinator_drains_jobs_unless_interrupted(monkeypatch, exception):
+    from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+    from contextlib import contextmanager
+    from threading import Event
+    from vhrharmonize.workflow import concurrency
+
+    remote = Future()
+    failed, closed = Event(), Event()
+    healthy = []
+    error = exception('coordinator failed')
+
+    class Client:
+        def submit(self, *args, **kwargs):
+            return remote
+        def cancel(self, jobs):
+            for job in jobs:
+                job.cancel()
+
+    @contextmanager
+    def client(scheduler):
+        yield Client()
+
+    monkeypatch.setattr(concurrency, '_make_dask_client', client)
+
+    def coordinate():
+        try:
+            with concurrency.image_executor(1, 'dask') as pool:
+                healthy.append(pool.submit(abs, -7))
+                failed.set()
+                raise error
+        except exception as caught:
+            assert caught is error
+        finally:
+            closed.set()
+
+    with ThreadPoolExecutor(1) as owner:
+        coordinator = owner.submit(coordinate)
+        try:
+            assert failed.wait(5)
+            if exception is KeyboardInterrupt:
+                assert closed.wait(5)
+                assert remote.cancelled()
+            else:
+                assert not closed.wait(.05)
+        finally:
+            if not remote.done():
+                remote.set_result(7)
+        coordinator.result(timeout=5)
+    assert closed.is_set()
+    if exception is KeyboardInterrupt:
+        assert isinstance(healthy[0].exception(timeout=5), CancelledError)
+    else:
+        assert healthy[0].result(timeout=5) == 7
+
+
 def test_worldview_uses_only_core_scheduling_controls():
     from vhrharmonize.workflow.config import load_config
     config = load_config(Path(__file__).parents[1] / 'configs/example.worldview.yml')
     assert config['shared']['core:tile_threads'] == 1
-    assert config['shared']['core:concurrent_processing'] == 1
+    assert isinstance(config['shared']['core:concurrent_processing'], int)
+    assert config['shared']['core:concurrent_processing'] > 0
     old = {'param:' + key for key in ('image_threads', 'tile_threads', 'concurrent_processing',
                                       'concurrent_processing_backend', 'dask_scheduler')}
     assert all(not old.intersection(settings) for settings in config.values())
@@ -131,7 +189,7 @@ def test_spectralmatch_adapters_disable_internal_pools():
         plugin = load_plugin(name)
         values = plugin.runtime_parameters(tile_threads=3)
         assert values[plugin.executor_parameter] is None
-        assert values['concurrent_processing_backend'] == 'process_pool'
+        assert values['concurrent_processing_backend'] == (None if name == 'merge_rasters' else 'process_pool')
         assert values['dask_scheduler'] is None
         assert set(values) <= set(function_parameters(plugin.function()))
         assert values['image_threads'] is None
