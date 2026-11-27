@@ -118,6 +118,7 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
     config = {
         "shared": {"plugin": "shared", "core:run": True, "core:log_to_console": False,
                    "core:delete_temp_steps_proactively": False, "param:epsg": 3857,
+                   "core:swap_temp_dir": "const:temp_dir",
                    "param:custom_nodata_value": -9999,
                    **{k: v for k, v in recipe["shared"].items() if k.startswith("const:spectralmatch.")}},
         "input": {"plugin": "coverage_inputs", "core:run": True, "const:temp_dir": str(tmp_path / "temp")},
@@ -130,8 +131,9 @@ def test_coverage_does_not_execute_or_filter_scenes_during_planning(tmp_path, mo
         }} if prepare_images else {}),
         "polygonize": recipe["polygonize_images"],
         "coverage": {**recipe["standardize_mosaic_coverage"], "param:outline_path": outline,
+                     "param:outline_layer": None,
                      "param:image_rank_function": "{quality}", "param:extrude_distance": 1},
-        "mask": recipe["mask_mosaic_coverage"],
+        "mask": {**recipe["mask_mosaic_coverage"], "param:seperate_multipolygons": False},
         "footprints": recipe["create_aligned_footprints"],
         "inspect": {"plugin": "inspect_coverage", "core:run": True, "core:require_outputs": True,
                     "core:requires": "const:footprints",
@@ -168,6 +170,23 @@ def test_vhr_passes_min_polygon_area_to_spectralmatch(tmp_path, minimum, expecte
         min_polygon_area=minimum,
     )
     assert len(gpd.read_file(output)) == expected
+
+
+def test_vhr_forwards_ranked_coverage_postprocessing(tmp_path):
+    output = str(tmp_path / "postprocessed.gpkg")
+    load_plugin("create_footprints").run(params={
+        "input_images": ["small.tif", "large.tif"], "output_polygons": output,
+        "footprint_source": "metadata", "metadata_crs": "EPSG:3857", "epsg": 3857,
+        "metadata_records": [
+            {"quality": 1000, "geometry": mapping(box(900, 900, 1100, 1100))},
+            {"quality": 0, "geometry": mapping(box(0, 0, 2000, 2000))},
+        ],
+        "image_rank_function": "{var:quality} + 200 * {stat:gap_coverage_fraction}",
+        "do_postprocess_footprints": True, "postprocess_footprints_params": {},
+    }, shared={})
+    frame = gpd.read_file(output)
+    assert frame.image.tolist() == ["large"]
+    assert frame.geometry.iloc[0].covers(box(900, 900, 1100, 1100))
 
 
 def test_worldview_gap_score_prefers_one_whole_hole_filler_from_saved_vectors(tmp_path):

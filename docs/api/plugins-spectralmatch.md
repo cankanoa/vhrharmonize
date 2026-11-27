@@ -42,6 +42,8 @@ Set `outline_path` (and optionally `outline_layer`) to define the goal area.
 `image_rank_function` and `image_rank_descending` assign overlapping area to the
 preferred image. `extrude_distance` buffers each owned area in projected CRS units,
 clipped to its source footprint, preserving overlap for matching and movement.
+Only connected components containing original owned area are retained: growth
+cannot pick up detached source islands, but may join existing owned components.
 Buffering also extends beyond the outline. Empty owners are omitted, and VHR
 retains only the corresponding workflow scenes in their original order.
 
@@ -104,6 +106,17 @@ seamlines and Markov image-quality ranking, which lack this coverage context.
 
 Raw defaults preserve overlaps; outline/ranking/buffering recomputes coverage as
 a group and replaces the polygon file only after success.
+
+Set `param:do_postprocess_footprints: true` to call `postprocess_footprints` on
+each owned piece before claiming its area. Optional
+`param:postprocess_footprints_params: {}` forwards keyword arguments to that
+function; omitted options inherit its current defaults. Input/output paths are
+managed internally. Removed areas remain available to later candidates, and gap
+ranking uses the cleaned ownership. With `stat:area_crs`, each ranked component
+is processed separately. A candidate removed entirely is skipped. The overlap
+buffer and source clipping still happen afterward, retaining only components
+containing owned area. This prevents new detached islands, but does not guarantee
+that every retained component contains a raster pixel.
 
 ::: vhrharmonize.plugins.create_footprints
 
