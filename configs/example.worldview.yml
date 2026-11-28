@@ -617,12 +617,12 @@ standardize_mosaic_coverage:
   # param:outline_path: null # path | null; default: null. Goal-area polygon file; null uses all image coverage. Example: path:/path/to/outline.gpkg.
   # param:outline_layer: null # layer name | null; default: null. First layer when null; requires outline_path.
   # Score each connected polygon separately: doubling its area offsets five degrees
-  # of combined view/solar zenith. stat:area_crs is calculated after outline clipping.
+  # of combined view/solar zenith. stat:polygon_area is calculated after outline clipping.
   # The example uses a metre-based projected CRS, so /1000000 expresses km².
   # After the first owner, rerank against the largest remaining connected gap.
   # Covering 20 percentage points more of the gap offsets 40 degrees of combined zenith.
   param:image_rank_function: >-
-    5 * log(max({stat:area_crs}, 1) / 1000000) / log(2)
+    5 * log(max({stat:polygon_area}, 1) / 1000000) / log(2)
     + 200 * {stat:gap_coverage_fraction}
     - ({var:view_zenith} + {var:solar_zenith})
   param:image_rank_descending: true # true | false; default: true. Larger expression scores own overlaps.
